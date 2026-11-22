@@ -1,0 +1,412 @@
+{
+  "tnt_equivalence": [
+    {
+      "explosive": "ANFO",
+      "f_pressure": 0.82,
+      "f_impulse": 0.82,
+      "pressure_range_mpa": "0.007-0.700",
+      "source_id": "S01;S11",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Composition B",
+      "f_pressure": 1.11,
+      "f_impulse": 0.98,
+      "pressure_range_mpa": "0.035-0.350",
+      "source_id": "S01;S11",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Composition C4",
+      "f_pressure": 1.37,
+      "f_impulse": 1.19,
+      "pressure_range_mpa": "0.070-0.700",
+      "source_id": "S01;S11",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "H-6",
+      "f_pressure": 1.38,
+      "f_impulse": 1.15,
+      "pressure_range_mpa": "0.035-0.700",
+      "source_id": "S01;S11",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Octol 75/25",
+      "f_pressure": 1.06,
+      "f_impulse": 1.06,
+      "pressure_range_mpa": "Estimate",
+      "source_id": "S01;S11",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Pentolite",
+      "f_pressure": 1.42,
+      "f_impulse": 1.0,
+      "pressure_range_mpa": "0.035-0.700",
+      "source_id": "S01;S11",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "PETN",
+      "f_pressure": 1.27,
+      "f_impulse": 1.11,
+      "pressure_range_mpa": "0.035-0.700",
+      "source_id": "S01;S11",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "RDX",
+      "f_pressure": 1.14,
+      "f_impulse": 1.09,
+      "pressure_range_mpa": "--",
+      "source_id": "S01;S11",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "RDX/TNT 60/40 (Cyclotol)",
+      "f_pressure": 1.14,
+      "f_impulse": 1.09,
+      "pressure_range_mpa": "0.035-0.350",
+      "source_id": "S01;S11",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Tetryl",
+      "f_pressure": 1.07,
+      "f_impulse": 1.07,
+      "pressure_range_mpa": "0.021-0.140",
+      "source_id": "S01;S11",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "TNT",
+      "f_pressure": 1.0,
+      "f_impulse": 1.0,
+      "pressure_range_mpa": "Standard",
+      "source_id": "S01;S11",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Torpex II",
+      "f_pressure": 1.23,
+      "f_impulse": 1.28,
+      "pressure_range_mpa": "--",
+      "source_id": "S01;S11",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Tritonal 80/20",
+      "f_pressure": 1.07,
+      "f_impulse": 0.96,
+      "pressure_range_mpa": "0.035-0.700",
+      "source_id": "S01;S11",
+      "verification_status": "VERIFIED-SRC"
+    }
+  ],
+  "gurney_iatg": [
+    {
+      "explosive": "Composition B",
+      "density_g_cm3": 1.61,
+      "detonation_velocity_mps": 7620.0,
+      "gurney_mps": 2774.0,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Composition C4",
+      "density_g_cm3": 1.71,
+      "detonation_velocity_mps": 8200.0,
+      "gurney_mps": 2530.0,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Octol 75/25",
+      "density_g_cm3": 1.81,
+      "detonation_velocity_mps": 8640.0,
+      "gurney_mps": 2896.0,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "PETN",
+      "density_g_cm3": 1.78,
+      "detonation_velocity_mps": 8260.0,
+      "gurney_mps": 2926.0,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "RDX",
+      "density_g_cm3": 1.81,
+      "detonation_velocity_mps": 8700.0,
+      "gurney_mps": 2926.0,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "RDX/TNT 60/40 (Cyclotol)",
+      "density_g_cm3": 1.68,
+      "detonation_velocity_mps": 7800.0,
+      "gurney_mps": 2402.0,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Tetryl",
+      "density_g_cm3": 1.71,
+      "detonation_velocity_mps": 7570.0,
+      "gurney_mps": 2499.0,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "TNT",
+      "density_g_cm3": 1.61,
+      "detonation_velocity_mps": 6900.0,
+      "gurney_mps": 2438.0,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Tritonal 80/20",
+      "density_g_cm3": 1.7,
+      "detonation_velocity_mps": 5480.0,
+      "gurney_mps": 2316.0,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    }
+  ],
+  "gurney_alt_s05": [
+    {
+      "explosive": "Composition B",
+      "density_g_cm3": 1.72,
+      "detonation_velocity_mps": 7920.0,
+      "gurney_mps": 2700.0,
+      "source_id": "S05",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Composition C-3",
+      "density_g_cm3": 1.6,
+      "detonation_velocity_mps": 7630.0,
+      "gurney_mps": 2680.0,
+      "source_id": "S05",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Cyclotol 75/25",
+      "density_g_cm3": 1.754,
+      "detonation_velocity_mps": 8250.0,
+      "gurney_mps": 2790.0,
+      "source_id": "S05",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "HMX",
+      "density_g_cm3": 1.89,
+      "detonation_velocity_mps": 9110.0,
+      "gurney_mps": 2970.0,
+      "source_id": "S05",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "LX-14",
+      "density_g_cm3": 1.835,
+      "detonation_velocity_mps": 8650.0,
+      "gurney_mps": 2800.0,
+      "source_id": "S05",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Octol 75/25",
+      "density_g_cm3": 1.81,
+      "detonation_velocity_mps": 8480.0,
+      "gurney_mps": 2800.0,
+      "source_id": "S05",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "PBX 9404",
+      "density_g_cm3": 1.84,
+      "detonation_velocity_mps": 8800.0,
+      "gurney_mps": 2900.0,
+      "source_id": "S05",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "PBX 9502",
+      "density_g_cm3": 1.885,
+      "detonation_velocity_mps": 7670.0,
+      "gurney_mps": 2377.0,
+      "source_id": "S05",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "PETN",
+      "density_g_cm3": 1.76,
+      "detonation_velocity_mps": 8260.0,
+      "gurney_mps": 2930.0,
+      "source_id": "S05",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "RDX",
+      "density_g_cm3": 1.77,
+      "detonation_velocity_mps": 8700.0,
+      "gurney_mps": 2830.0,
+      "source_id": "S05",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Tetryl",
+      "density_g_cm3": 1.62,
+      "detonation_velocity_mps": 7570.0,
+      "gurney_mps": 2500.0,
+      "source_id": "S05",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "TNT",
+      "density_g_cm3": 1.63,
+      "detonation_velocity_mps": 6860.0,
+      "gurney_mps": 2440.0,
+      "source_id": "S05",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Tritonal",
+      "density_g_cm3": 1.72,
+      "detonation_velocity_mps": 6700.0,
+      "gurney_mps": 2320.0,
+      "source_id": "S05",
+      "verification_status": "VERIFIED-SRC"
+    }
+  ],
+  "mott_constants": [
+    {
+      "explosive": "Composition B",
+      "mott_b": 0.0554,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "H-6",
+      "mott_b": 0.069,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Pentolite",
+      "mott_b": 0.062,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "RDX",
+      "mott_b": 0.0531,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Tetryl",
+      "mott_b": 0.0682,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "TNT",
+      "mott_b": 0.0779,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    }
+  ],
+  "ufc_heat_of_detonation": [
+    {
+      "explosive": "Baratol",
+      "printed_value_mj_kg": 1.04,
+      "hd_tnt_equiv": 0.53,
+      "source_id": "S01;S11",
+      "verification_status": "FLAG - column header ambiguity in IATG Table E (see Explosives R57)"
+    },
+    {
+      "explosive": "Composition B",
+      "printed_value_mj_kg": 2.15,
+      "hd_tnt_equiv": 1.09,
+      "source_id": "S01;S11",
+      "verification_status": "FLAG - column header ambiguity in IATG Table E (see Explosives R57)"
+    },
+    {
+      "explosive": "Composition C4",
+      "printed_value_mj_kg": 2.22,
+      "hd_tnt_equiv": 1.13,
+      "source_id": "S01;S11",
+      "verification_status": "FLAG - column header ambiguity in IATG Table E (see Explosives R57)"
+    },
+    {
+      "explosive": "HMX",
+      "printed_value_mj_kg": 2.27,
+      "hd_tnt_equiv": 1.15,
+      "source_id": "S01;S11",
+      "verification_status": "FLAG - column header ambiguity in IATG Table E (see Explosives R57)"
+    },
+    {
+      "explosive": "Pentolite 50/50",
+      "printed_value_mj_kg": 2.14,
+      "hd_tnt_equiv": 1.09,
+      "source_id": "S01;S11",
+      "verification_status": "FLAG - column header ambiguity in IATG Table E (see Explosives R57)"
+    },
+    {
+      "explosive": "PBX 9407",
+      "printed_value_mj_kg": 2.24,
+      "hd_tnt_equiv": 1.14,
+      "source_id": "S01;S11",
+      "verification_status": "FLAG - column header ambiguity in IATG Table E (see Explosives R57)"
+    },
+    {
+      "explosive": "PETN",
+      "printed_value_mj_kg": 2.31,
+      "hd_tnt_equiv": 1.17,
+      "source_id": "S01;S11",
+      "verification_status": "FLAG - column header ambiguity in IATG Table E (see Explosives R57)"
+    },
+    {
+      "explosive": "RDX",
+      "printed_value_mj_kg": 2.27,
+      "hd_tnt_equiv": 1.15,
+      "source_id": "S01;S11",
+      "verification_status": "FLAG - column header ambiguity in IATG Table E (see Explosives R57)"
+    },
+    {
+      "explosive": "Tetryl",
+      "printed_value_mj_kg": 2.11,
+      "hd_tnt_equiv": 1.07,
+      "source_id": "S01;S11",
+      "verification_status": "FLAG - column header ambiguity in IATG Table E (see Explosives R57)"
+    },
+    {
+      "explosive": "TNT",
+      "printed_value_mj_kg": 1.97,
+      "hd_tnt_equiv": 1.0,
+      "source_id": "S01;S11",
+      "verification_status": "FLAG - column header ambiguity in IATG Table E (see Explosives R57)"
+    },
+    {
+      "explosive": "NQ",
+      "printed_value_mj_kg": 1.49,
+      "hd_tnt_equiv": 0.76,
+      "source_id": "S01;S11",
+      "verification_status": "FLAG - column header ambiguity in IATG Table E (see Explosives R57)"
+    },
+    {
+      "explosive": "NG",
+      "printed_value_mj_kg": 2.22,
+      "hd_tnt_equiv": 1.13,
+      "source_id": "S01;S11",
+      "verification_status": "FLAG - column header ambiguity in IATG Table E (see Explosives R57)"
+    }
+  ]
+}

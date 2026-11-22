@@ -1,0 +1,78 @@
+{
+  "lanz_odermatt": [
+    {
+      "rod_material": "Tungsten alloy",
+      "mode": "Semi-infinite penetration",
+      "a": 0.921,
+      "c0": 138.0,
+      "c1": -0.1,
+      "k_alpha": null,
+      "n_beta": null,
+      "b0": 0.283,
+      "b1": 0.0656,
+      "m": -0.224,
+      "source_id": "S18;S39",
+      "verification_status": "FLAG - s^2 unit convention inferred; UHSS b0 9874 vs 9876"
+    },
+    {
+      "rod_material": "Tungsten alloy",
+      "mode": "Perforation (finite)",
+      "a": 0.994,
+      "c0": 134.5,
+      "c1": -0.148,
+      "k_alpha": null,
+      "n_beta": null,
+      "b0": 0.283,
+      "b1": 0.0656,
+      "m": -0.224,
+      "source_id": "S18;S39",
+      "verification_status": "FLAG - s^2 unit convention inferred; UHSS b0 9874 vs 9876"
+    },
+    {
+      "rod_material": "Depleted uranium",
+      "mode": "Perforation (finite)",
+      "a": 0.825,
+      "c0": 90.0,
+      "c1": -0.0849,
+      "k_alpha": null,
+      "n_beta": null,
+      "b0": 0.283,
+      "b1": 0.0656,
+      "m": -0.224,
+      "source_id": "S18;S39",
+      "verification_status": "FLAG - s^2 unit convention inferred; UHSS b0 9874 vs 9876"
+    },
+    {
+      "rod_material": "Steel (UHSS)",
+      "mode": "Perforation (finite)",
+      "a": 1.104,
+      "c0": 9874.0,
+      "c1": null,
+      "k_alpha": 0.3598,
+      "n_beta": -0.2342,
+      "b0": 0.283,
+      "b1": 0.0656,
+      "m": -0.224,
+      "source_id": "S18;S39",
+      "verification_status": "FLAG - s^2 unit convention inferred; UHSS b0 9874 vs 9876"
+    }
+  ],
+  "de_marre": [
+    {
+      "variant": "Wrought iron (1870s)",
+      "equation": "T/D = 0.00002778*D^0.1542*[(W/D^3)*V^2]^0.7695",
+      "units": "V ft/s; T, D in; W lb",
+      "constant": 2.778e-05,
+      "source_id": "S19",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "variant": "Nickel-steel (c.1890)",
+      "equation": "T/D = 0.00005021*D^0.07144*[(W/D^3)*(V/C)^2*cos^3(Ob)]^0.71429",
+      "units": "V ft/s; T, D in; W lb; C De Marre coefficient",
+      "constant": 5.021e-05,
+      "source_id": "S19",
+      "verification_status": "VERIFIED-SRC"
+    }
+  ]
+}

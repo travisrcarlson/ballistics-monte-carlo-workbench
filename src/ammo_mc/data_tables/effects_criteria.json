@@ -1,0 +1,276 @@
+{
+  "scalars": [
+    {
+      "criterion": "Hazardous fragment kinetic energy",
+      "value": 79.0,
+      "unit": "J",
+      "source_clause": "S01 (AASTP-1, NATO criterion)",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "criterion": "Critical hazardous fragment density",
+      "value": 0.0178571428571429,
+      "unit": "fragments per m2 (1 per 56 m2)",
+      "source_clause": "S01",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "criterion": "Person presented area (frontal)",
+      "value": 0.56,
+      "unit": "m2",
+      "source_clause": "S01 Table 55",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "criterion": "Standard propellant temperature",
+      "value": 21.1,
+      "unit": "degC (70 F)",
+      "source_clause": "S31, S32",
+      "source_id": "S31;S32",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "criterion": "Ambient pressure for dynamic pressure (front-face example)",
+      "value": 102.3,
+      "unit": "kPa (1.023 bar as printed)",
+      "source_clause": "S01 5.3.1",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "criterion": "Ambient pressure P0 (Sachs)",
+      "value": 101.33,
+      "unit": "kPa",
+      "source_clause": "S01 5.1.3",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "criterion": "Ambient temperature T0 (Sachs)",
+      "value": 288.16,
+      "unit": "K",
+      "source_clause": "S01 5.1.3",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "criterion": "Kingery-Bulmash validity",
+      "value": 40.0,
+      "unit": "Z max (m/kg^1/3); Kinney-Graham to Z=500",
+      "source_clause": "S01 5.1.2",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    }
+  ],
+  "qd_z_constants": [
+    {
+      "z_m_kg13": 8.0,
+      "purpose": "Between ammunition process buildings in an ESA",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "z_m_kg13": 14.8,
+      "purpose": "Explosive storehouse to public traffic route",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "z_m_kg13": 22.2,
+      "purpose": "Explosive storehouse to inhabited building",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "z_m_kg13": 44.4,
+      "purpose": "Explosive storehouse to vulnerable building (e.g. school)",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    }
+  ],
+  "brick_house_damage": [
+    {
+      "category": "A",
+      "definition": "Houses completely demolished",
+      "k_jarrett": 3.8,
+      "k_gilbert_lees_scilly": 4.8,
+      "p_fatality": 0.62,
+      "p_fatal_or_serious": 0.71,
+      "p_any_injury": 0.84,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "category": "B",
+      "definition": "Beyond repair, require demolition",
+      "k_jarrett": 5.6,
+      "k_gilbert_lees_scilly": 7.1,
+      "p_fatality": 0.096,
+      "p_fatal_or_serious": 0.15,
+      "p_any_injury": 0.38,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "category": "CB",
+      "definition": "Uninhabitable, extensive repair",
+      "k_jarrett": 9.6,
+      "k_gilbert_lees_scilly": 12.4,
+      "p_fatality": 0.009,
+      "p_fatal_or_serious": 0.043,
+      "p_any_injury": 0.13,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "category": "CA",
+      "definition": "Uninhabitable, repaired quickly",
+      "k_jarrett": 28.0,
+      "k_gilbert_lees_scilly": 21.3,
+      "p_fatality": 0.0,
+      "p_fatal_or_serious": 0.002,
+      "p_any_injury": 0.006,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "category": "D",
+      "definition": "Repairs needed, remain habitable",
+      "k_jarrett": 56.0,
+      "k_gilbert_lees_scilly": 42.6,
+      "p_fatality": 0.0,
+      "p_fatal_or_serious": 0.0,
+      "p_any_injury": 0.0,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    }
+  ],
+  "glass_breakage": [
+    {
+      "window_size": "Small (<1 m2)",
+      "key": "small",
+      "c_a": -1.013,
+      "slope_a": 3.356,
+      "c_b": -2.558,
+      "slope_b": 1.932,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "window_size": "Medium (1-3 m2)",
+      "key": "medium",
+      "c_a": 0.796,
+      "slope_a": 3.356,
+      "c_b": -0.788,
+      "slope_b": 1.932,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "window_size": "Large (>3 m2)",
+      "key": "large",
+      "c_a": 2.674,
+      "slope_a": 3.356,
+      "c_b": 0.983,
+      "slope_b": 1.932,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    }
+  ],
+  "axelsson_injury_levels": [
+    {
+      "injury_level": "No injury",
+      "asii_range": "0.0-0.2",
+      "v_mps_range": "0.0-3.6",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "injury_level": "Trace to slight",
+      "asii_range": "0.2-1.0",
+      "v_mps_range": "3.6-7.5",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "injury_level": "Slight to moderate",
+      "asii_range": "0.3-1.9",
+      "v_mps_range": "4.3-9.8",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "injury_level": "Moderate to extensive",
+      "asii_range": "1.0-7.1",
+      "v_mps_range": "7.5-16.9",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "injury_level": ">50% lethality",
+      "asii_range": ">3.6",
+      "v_mps_range": ">12.8",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    }
+  ],
+  "thermal_dose": [
+    {
+      "effect": "Pain",
+      "mean_dose": 92.0,
+      "range_dose": "86-103",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "effect": "Threshold first-degree burn",
+      "mean_dose": 105.0,
+      "range_dose": "80-130",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "effect": "Threshold second-degree burn",
+      "mean_dose": 290.0,
+      "range_dose": "240-350",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "effect": "Threshold third-degree burn",
+      "mean_dose": 1000.0,
+      "range_dose": "870-2600",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    }
+  ],
+  "ground_shock": [
+    {
+      "damage_degree": "None",
+      "ppv_mps": "<0.05",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "damage_degree": "Minor / medium",
+      "ppv_mps": "0.05-0.14",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "damage_degree": "Heavy",
+      "ppv_mps": "0.14-0.19",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "damage_degree": "Complete",
+      "ppv_mps": ">0.19",
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    }
+  ]
+}

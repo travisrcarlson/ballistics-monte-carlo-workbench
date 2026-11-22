@@ -1,0 +1,1070 @@
+{
+  "G1": [
+    {
+      "mach": 0.0,
+      "cd": 0.2629,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.05,
+      "cd": 0.2558,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.1,
+      "cd": 0.2487,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.15,
+      "cd": 0.2413,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.2,
+      "cd": 0.2344,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.25,
+      "cd": 0.2278,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.3,
+      "cd": 0.2214,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.35,
+      "cd": 0.2155,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.4,
+      "cd": 0.2104,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.45,
+      "cd": 0.2061,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.5,
+      "cd": 0.2032,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.55,
+      "cd": 0.202,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.6,
+      "cd": 0.2034,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.7,
+      "cd": 0.2165,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.725,
+      "cd": 0.223,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.75,
+      "cd": 0.2313,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.775,
+      "cd": 0.2417,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.8,
+      "cd": 0.2546,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.825,
+      "cd": 0.2706,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.85,
+      "cd": 0.2901,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.875,
+      "cd": 0.3136,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.9,
+      "cd": 0.3415,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.925,
+      "cd": 0.3734,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.95,
+      "cd": 0.4084,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.975,
+      "cd": 0.4448,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.0,
+      "cd": 0.4805,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.025,
+      "cd": 0.5136,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.05,
+      "cd": 0.5427,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.075,
+      "cd": 0.5677,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.1,
+      "cd": 0.5883,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.125,
+      "cd": 0.6053,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.15,
+      "cd": 0.6191,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.2,
+      "cd": 0.6393,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.25,
+      "cd": 0.6518,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.3,
+      "cd": 0.6589,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.35,
+      "cd": 0.6621,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.4,
+      "cd": 0.6625,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.45,
+      "cd": 0.6607,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.5,
+      "cd": 0.6573,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.55,
+      "cd": 0.6528,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.6,
+      "cd": 0.6474,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.65,
+      "cd": 0.6413,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.7,
+      "cd": 0.6347,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.75,
+      "cd": 0.628,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.8,
+      "cd": 0.621,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.85,
+      "cd": 0.6141,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.9,
+      "cd": 0.6072,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.95,
+      "cd": 0.6003,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.0,
+      "cd": 0.5934,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.05,
+      "cd": 0.5867,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.1,
+      "cd": 0.5804,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.15,
+      "cd": 0.5743,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.2,
+      "cd": 0.5685,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.25,
+      "cd": 0.563,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.3,
+      "cd": 0.5577,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.35,
+      "cd": 0.5527,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.4,
+      "cd": 0.5481,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.45,
+      "cd": 0.5438,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.5,
+      "cd": 0.5397,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.6,
+      "cd": 0.5325,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.7,
+      "cd": 0.5264,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.8,
+      "cd": 0.5211,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.9,
+      "cd": 0.5168,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 3.0,
+      "cd": 0.5133,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 3.1,
+      "cd": 0.5105,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 3.2,
+      "cd": 0.5084,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 3.3,
+      "cd": 0.5067,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 3.4,
+      "cd": 0.5054,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 3.5,
+      "cd": 0.504,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 3.6,
+      "cd": 0.503,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 3.7,
+      "cd": 0.5022,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 3.8,
+      "cd": 0.5016,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 3.9,
+      "cd": 0.501,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 4.0,
+      "cd": 0.5006,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 4.2,
+      "cd": 0.4998,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 4.4,
+      "cd": 0.4995,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 4.6,
+      "cd": 0.4992,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 4.8,
+      "cd": 0.499,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 5.0,
+      "cd": 0.4988,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    }
+  ],
+  "G7": [
+    {
+      "mach": 0.0,
+      "cd": 0.1198,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.05,
+      "cd": 0.1197,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.1,
+      "cd": 0.1196,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.15,
+      "cd": 0.1194,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.2,
+      "cd": 0.1193,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.25,
+      "cd": 0.1194,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.3,
+      "cd": 0.1194,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.35,
+      "cd": 0.1194,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.4,
+      "cd": 0.1193,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.45,
+      "cd": 0.1193,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.5,
+      "cd": 0.1194,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.55,
+      "cd": 0.1193,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.6,
+      "cd": 0.1194,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.65,
+      "cd": 0.1197,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.7,
+      "cd": 0.1202,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.725,
+      "cd": 0.1207,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.75,
+      "cd": 0.1215,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.775,
+      "cd": 0.1226,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.8,
+      "cd": 0.1242,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.825,
+      "cd": 0.1266,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.85,
+      "cd": 0.1306,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.875,
+      "cd": 0.1368,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.9,
+      "cd": 0.1464,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.925,
+      "cd": 0.166,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.95,
+      "cd": 0.2054,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 0.975,
+      "cd": 0.2993,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.0,
+      "cd": 0.3803,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.025,
+      "cd": 0.4015,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.05,
+      "cd": 0.4043,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.075,
+      "cd": 0.4034,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.1,
+      "cd": 0.4014,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.125,
+      "cd": 0.3987,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.15,
+      "cd": 0.3955,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.2,
+      "cd": 0.3884,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.25,
+      "cd": 0.381,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.3,
+      "cd": 0.3732,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.35,
+      "cd": 0.3657,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.4,
+      "cd": 0.358,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.5,
+      "cd": 0.344,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.55,
+      "cd": 0.3376,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.6,
+      "cd": 0.3315,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.65,
+      "cd": 0.326,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.7,
+      "cd": 0.3209,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.75,
+      "cd": 0.316,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.8,
+      "cd": 0.3117,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.85,
+      "cd": 0.3078,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.9,
+      "cd": 0.3042,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 1.95,
+      "cd": 0.301,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.0,
+      "cd": 0.298,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.05,
+      "cd": 0.2951,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.1,
+      "cd": 0.2922,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.15,
+      "cd": 0.2892,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.2,
+      "cd": 0.2864,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.25,
+      "cd": 0.2835,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.3,
+      "cd": 0.2807,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.35,
+      "cd": 0.2779,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.4,
+      "cd": 0.2752,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.45,
+      "cd": 0.2725,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.5,
+      "cd": 0.2697,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.55,
+      "cd": 0.267,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.6,
+      "cd": 0.2643,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.65,
+      "cd": 0.2615,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.7,
+      "cd": 0.2588,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.75,
+      "cd": 0.2561,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.8,
+      "cd": 0.2533,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.85,
+      "cd": 0.2506,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.9,
+      "cd": 0.2479,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 2.95,
+      "cd": 0.2451,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 3.0,
+      "cd": 0.2424,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 3.1,
+      "cd": 0.2368,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 3.2,
+      "cd": 0.2313,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 3.3,
+      "cd": 0.2258,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 3.4,
+      "cd": 0.2205,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 3.5,
+      "cd": 0.2154,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 3.6,
+      "cd": 0.2106,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 3.7,
+      "cd": 0.206,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 3.8,
+      "cd": 0.2017,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 3.9,
+      "cd": 0.1975,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 4.0,
+      "cd": 0.1935,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 4.2,
+      "cd": 0.1861,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 4.4,
+      "cd": 0.1793,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 4.6,
+      "cd": 0.173,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 4.8,
+      "cd": 0.1672,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach": 5.0,
+      "cd": 0.1618,
+      "source_id": "S15",
+      "verification_status": "VERIFIED-SRC"
+    }
+  ],
+  "natural_fragment": [
+    {
+      "mach_from": 0.1,
+      "mach_to": 0.2,
+      "cd": 0.85,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach_from": 0.2,
+      "mach_to": 0.4,
+      "cd": 0.86,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach_from": 0.4,
+      "mach_to": 0.6,
+      "cd": 0.9,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach_from": 0.6,
+      "mach_to": 0.8,
+      "cd": 1.1,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach_from": 0.8,
+      "mach_to": 1.0,
+      "cd": 1.25,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach_from": 1.0,
+      "mach_to": 1.1,
+      "cd": 1.33,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach_from": 1.1,
+      "mach_to": 1.2,
+      "cd": 1.415,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach_from": 1.2,
+      "mach_to": 1.3,
+      "cd": 1.42,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach_from": 1.3,
+      "mach_to": 1.4,
+      "cd": 1.4,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach_from": 1.4,
+      "mach_to": 2.8,
+      "cd": 1.29,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach_from": 2.8,
+      "mach_to": 5.6,
+      "cd": 1.15,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "mach_from": 5.6,
+      "mach_to": 11.2,
+      "cd": 1.115,
+      "source_id": "S01",
+      "verification_status": "VERIFIED-SRC (band 5.6-11.2 interpreted as contiguous from printed '5. - 11.2')"
+    }
+  ]
+}

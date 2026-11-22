@@ -1,0 +1,322 @@
+[
+  {
+    "source_id": "S01",
+    "title": "IATG 01.80:2021 Formulae for ammunition management (3rd ed., UNODA)",
+    "type": "International standard / guideline",
+    "url": "https://data.unsaferguard.org/iatg/en/V3_IATG-01.80_en.pdf",
+    "used_for": "Hopkinson-Cranz, Kingery-Bulmash form, Sachs, TNT equivalence, Gurney, Mott, fragment trajectory & Cd, AASTP-1 fragment density, range safety distances, injury & damage criteria",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S02",
+    "title": "UN SaferGuard Kingery-Bulmash Blast Parameter Calculator (page source, NATO AASTP coefficients)",
+    "type": "Official calculator",
+    "url": "https://unsaferguard.org/un-saferguard/kingery-bulmash",
+    "used_for": "Full Kingery-Bulmash polynomial coefficients (hemispherical surface burst, metric)",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S03",
+    "title": "Kingery & Bulmash, ARBRL-TR-02555 (1984) as implemented in CONWEP (ARL report)",
+    "type": "Primary empirical dataset (US Army BRL)",
+    "url": "https://apps.dtic.mil/sti/pdfs/ADA322344.pdf",
+    "used_for": "Origin of KB airblast fits",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S04",
+    "title": "Swisdak, Simplified Kingery Airblast Calculations (NSWC IHD, 1994, ADA526744)",
+    "type": "Technical report",
+    "url": "https://ntrl.ntis.gov/NTRL/dashboard/searchResults/titleDetail/ADA526744.xhtml",
+    "used_for": "Alternative ln(Z) polynomial fits, accurate within ~1% of KB",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S05",
+    "title": "Gurney equations (geometry set and Gurney constant table)",
+    "type": "Secondary reference",
+    "url": "https://en.wikipedia.org/wiki/Gurney_equations",
+    "used_for": "Cylinder, sphere, symmetric/asymmetric/open-faced/tamped sandwich forms",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S06",
+    "title": "UN SaferGuard Gurney Equations calculator",
+    "type": "Official calculator",
+    "url": "https://unsaferguard.org/un-saferguard/gurney",
+    "used_for": "Gurney fragment velocity",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S07",
+    "title": "DTIC ADA509688 Warhead Performance Calculations for Threat Hazard Assessment",
+    "type": "Technical report (DDESB context)",
+    "url": "https://archive.org/stream/DTIC_ADA509688/DTIC_ADA509688_djvu.txt",
+    "used_for": "Mott/Held distributions, Gurney corrections (end effects, initiation), THOR form, shape factors",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S08",
+    "title": "Improvement and Simulation of THOR Formula with Yaw (JESTR 7(2)) - THOR coefficient table",
+    "type": "Peer-reviewed paper",
+    "url": "https://www.jestr.org/downloads/Volume7Issue2/fulltext167214.pdf",
+    "used_for": "THOR c, alpha, beta, gamma, lambda for 17 target materials",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S09",
+    "title": "DDESB Technical Paper 16 - Primary Fragment Characterization Tools (Hamilton, NDIA)",
+    "type": "Technical paper",
+    "url": "https://ndia.dtic.mil/wp-content/uploads/2018/intexpsafety/HamiltonSPaper.pdf",
+    "used_for": "Methodology for primary fragment characteristics",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S10",
+    "title": "DoD DESR 6055.09 Defense Explosives Safety Regulation",
+    "type": "Regulation",
+    "url": "https://www.wbdg.org/api/documents/media/499f8767-20ed-43e0-a075-21d939365987/file",
+    "used_for": "QD, fragment hazard concepts",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S11",
+    "title": "UFC 3-340-02 Structures to Resist the Effects of Accidental Explosions",
+    "type": "Design criteria",
+    "url": "https://www.wbdg.org/ffc/dod/unified-facilities-criteria-ufc/ufc-3-340-02",
+    "used_for": "Blast loading, reflection, 1.8 surface-burst factor, TNT equivalence",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S12",
+    "title": "Kinney & Graham overpressure formula (Dlubal technical formula page)",
+    "type": "Secondary reference",
+    "url": "https://www.dlubal.com/en/support-and-learning/support/formulas/000875",
+    "used_for": "Free-air scaled overpressure, valid to Z~500",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S13",
+    "title": "STANAG 4355 / AOP-4355 Modified Point Mass and 5-DOF Trajectory Models",
+    "type": "NATO standard",
+    "url": "https://quicksearch.dla.mil/qsDocDetails.aspx?ident_number=107513",
+    "used_for": "Normative MPM trajectory model (obtain full text via national channels)",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S14",
+    "title": "DTIC ADA499519 - Modified point-mass state model (drag, lift, Coriolis, NUE frame)",
+    "type": "Technical report",
+    "url": "https://apps.dtic.mil/sti/tr/pdf/ADA499519.pdf",
+    "used_for": "MPM state equations, Earth rate 7.2921e-5 rad/s",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S15",
+    "title": "JBM Ballistics downloads: G1/G7 drag tables and McCoy MCDRAG source",
+    "type": "Data / code",
+    "url": "https://jbmballistics.com/downloads.html",
+    "used_for": "Standard drag functions Cd vs Mach; MCDRAG (McCoy 1974) drag estimator",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S16",
+    "title": "U.S. Standard Atmosphere, 1976 (NASA NTRS)",
+    "type": "Standard",
+    "url": "https://ntrs.nasa.gov/citations/19770009539",
+    "used_for": "Atmosphere model T, p, rho, speed of sound",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S17",
+    "title": "Miller twist rule",
+    "type": "Secondary reference",
+    "url": "https://en.wikipedia.org/wiki/Miller_twist_rule",
+    "used_for": "Gyroscopic stability estimate with velocity and altitude corrections",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S18",
+    "title": "Lanz-Odermatt long-rod penetration (Xplicit implementation) and paper",
+    "type": "Implementation + paper",
+    "url": "https://xplicitmaterials.com/simulation-tools/lanz-odermatt/",
+    "used_for": "Coefficients for W, DU, steel rods",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S19",
+    "title": "NavWeaps - De Marre penetration formulae",
+    "type": "Secondary reference",
+    "url": "https://www.navweaps.com/index_nathan/Hstfrmla.php",
+    "used_for": "De Marre wrought iron / nickel-steel forms",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S20",
+    "title": "Shaped charge hydrodynamic limit penetration formula",
+    "type": "Secondary reference",
+    "url": "https://www.generalstaff.org/BBOW/BalTerm/Pen_SC_HydroLimit.htm",
+    "used_for": "P = L*sqrt(rho_j/rho_t) (Birkhoff)",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S21",
+    "title": "Circular error probable",
+    "type": "Secondary reference",
+    "url": "https://en.wikipedia.org/wiki/Circular_error_probable",
+    "used_for": "CEP definitions and approximations",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S22",
+    "title": "DTIC ADA424672 Generalized Weapon Effectiveness Modeling (Carleton damage function)",
+    "type": "Thesis / report",
+    "url": "https://apps.dtic.mil/sti/tr/pdf/ADA424672.pdf",
+    "used_for": "Carleton damage function, lethal area",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S23",
+    "title": "The Application of Mott's Distribution in the Fragmentation of Steel Coaxial Cylinders (Materials, 2023)",
+    "type": "Peer-reviewed paper",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10488506/",
+    "used_for": "Mott distribution theory and validation",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S24",
+    "title": "DoD Report on Unexploded Ordnance (DENIX) - fuze dud rates",
+    "type": "Government report",
+    "url": "https://www.denix.osd.mil/mmrp/denix-files/sites/46/2016/03/03_UXO_REPORT.pdf",
+    "used_for": "Typical fuze dud-rate information",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S25",
+    "title": "NAWCWD TP 8431 Fuze and S&A design / reliability",
+    "type": "Technical publication",
+    "url": "https://apps.dtic.mil/sti/pdfs/ADA363924.pdf",
+    "used_for": "Fuze reliability and safety approach",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S26",
+    "title": "Carlucci & Jacobson, Ballistics: Theory and Design of Guns and Ammunition",
+    "type": "Textbook",
+    "url": "https://www.routledge.com/Ballistics-Theory-and-Design-of-Guns-and-Ammunition-Third-Edition/Carlucci-Jacobson/p/book/9781138055315",
+    "used_for": "Interior ballistics (Noble-Abel, Resal, Lagrange), exterior, terminal",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S27",
+    "title": "McCoy, Modern Exterior Ballistics",
+    "type": "Textbook",
+    "url": "https://books.google.com/books/about/Modern_Exterior_Ballistics.html?id=sUUxuQAACAAJ",
+    "used_for": "Point mass, MPM, 6-DOF, stability",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S28",
+    "title": "STANAG 4367 Thermodynamic Interior Ballistic Model with Global Parameters",
+    "type": "NATO standard",
+    "url": "https://quicksearch.dla.mil/qsDocDetails.aspx?ident_number=107514",
+    "used_for": "Normative lumped-parameter interior ballistics model",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S29",
+    "title": "IBHVG2 Interior Ballistics of High Velocity Guns v2 - User's Guide (DTIC ADB117104)",
+    "type": "Code manual",
+    "url": "https://archive.org/stream/DTIC_ADB117104/DTIC_ADB117104_djvu.txt",
+    "used_for": "Lumped-parameter IB code structure, pressure gradient options",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S30",
+    "title": "Determining the Burning Rate of Fine-Grained Propellants in Closed Vessel Tests (Energies 2022)",
+    "type": "Peer-reviewed paper",
+    "url": "https://www.mdpi.com/1996-1073/15/7/2680",
+    "used_for": "Vieille / Saint Robert burning law r = beta*p^alpha",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S31",
+    "title": "FM 6-40 Chapter 3 Ballistics (FAS mirror)",
+    "type": "Field manual",
+    "url": "https://man.fas.org/dod-101/sys/land/docs/fm6-40-ch3.htm",
+    "used_for": "Nonstandard conditions; propellant temperature effect; standard 70 F",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S32",
+    "title": "TC 3-09.81 Field Artillery Manual Cannon Gunnery",
+    "type": "Training circular",
+    "url": "https://armypubs.army.mil/epubs/DR_pubs/DR_a/pdf/web/tc3_09x81.pdf",
+    "used_for": "Firing-table Table E MV corrections; MV calibration example",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S33",
+    "title": "McKay, Beckman & Conover (1979) Latin Hypercube Sampling, Technometrics 21(2)",
+    "type": "Peer-reviewed paper",
+    "url": "https://afpc.tamu.edu/courses/643/2018/reading/McKay-Beckman-Conover-1979-Latin-Hypercube.pdf",
+    "used_for": "LHS variance reduction",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S34",
+    "title": "Box-Muller transform",
+    "type": "Secondary reference",
+    "url": "https://en.wikipedia.org/wiki/Box%E2%80%93Muller_transform",
+    "used_for": "Normal deviate generation",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S35",
+    "title": "Rayleigh distribution",
+    "type": "Secondary reference",
+    "url": "https://en.wikipedia.org/wiki/Rayleigh_distribution",
+    "used_for": "Radial miss distribution for circular normal error",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S36",
+    "title": "NATO SG/2 Shareable Software Suite (S4) overview",
+    "type": "NATO software overview",
+    "url": "https://www.aop-37.org/img/S4-Overview-25Sep2024.pdf",
+    "used_for": "Reference ballistic kernels (NABK) and FCI generator; STANAG 4144/4355 linkage",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S37",
+    "title": "Hornady 4DOF technical paper",
+    "type": "Industry technical paper",
+    "url": "https://static.hornady.media/site/hornady/files/ballistic/hornady-4dof-technical-paper-v2.pdf",
+    "used_for": "Small-arms trajectory with yaw of repose, spin drift, Sg",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S38",
+    "title": "Lambert-Jonas / penetration mechanics review (Backman & Goldsmith context)",
+    "type": "Peer-reviewed review",
+    "url": "https://www.sciencedirect.com/science/article/pii/0020722578900733",
+    "used_for": "Ballistic-limit residual-velocity relation",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S39",
+    "title": "Lanz-Odermatt penetration paper (semantic scholar PDF)",
+    "type": "Paper",
+    "url": "https://pdfs.semanticscholar.org/c1d1/eaa46f123b748d411a7f99b54e7cacc7ba97.pdf",
+    "used_for": "Coefficient table k, b0, b1, a0, a1, a2",
+    "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S40",
+    "title": "bombcad reference-calculations (independent check of KB coefficients incl. duration-sign correction)",
+    "type": "Open-source verification note",
+    "url": "https://github.com/emmettl/bombcad/blob/main/docs/reference-calculations.md",
+    "used_for": "Flags K0 sign of middle positive-duration piece (-2.12492525216)",
+    "verification_status": "VERIFIED-SRC"
+  }
+]
