@@ -4797,3 +4797,9 @@ from ammo_mc.vis_cuas_mission import (  # noqa: E402,F401
     create_logistics_thermal_and_cost_figure,
     create_multiturret_site_map_figure,
 )
+from ammo_mc.vis_cuas_analytics import (  # noqa: E402,F401
+    create_ab_comparator_radar_and_bars_figure,
+    create_layered_defense_figure,
+    create_real_map_site_defense_figure,
+    create_sensitivity_tornado_figure,
+)

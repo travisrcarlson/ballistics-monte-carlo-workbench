@@ -26,7 +26,7 @@ jobs:
 
       - name: Syntax check entrypoints
         run: |
-          python -m py_compile streamlit_app.py src/ammo_mc/streamlit_app.py src/ammo_mc/cuas_mission.py src/ammo_mc/vis_cuas_mission.py
+          python -m py_compile streamlit_app.py src/ammo_mc/streamlit_app.py src/ammo_mc/cuas_mission.py src/ammo_mc/cuas_analytics.py src/ammo_mc/vis_cuas_mission.py src/ammo_mc/vis_cuas_analytics.py src/ammo_mc/api.py src/ammo_mc/cli.py src/ammo_mc/ui/*.py
 
       - name: Run pytest suite
         run: pytest

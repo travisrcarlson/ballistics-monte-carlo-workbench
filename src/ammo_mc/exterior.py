@@ -620,6 +620,17 @@ def integrate_trajectories_batch(
         ],
         dtype=np.float64,
     )
+    ox, oy, oz = float(om_vec[0]), float(om_vec[1]), float(om_vec[2])
+    has_wind_bands = bool(env.wind_bands)
+    const_wind = np.array(env.constant_wind_mps, dtype=np.float64)[None, :]
+    has_rocket = cfg.rocket_burn_time_s > 0.0 and cfg.rocket_mdot_kg_s > 0.0
+
+    def _cross3(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        out = np.empty_like(a)
+        out[:, 0] = a[:, 1] * b[:, 2] - a[:, 2] * b[:, 1]
+        out[:, 1] = a[:, 2] * b[:, 0] - a[:, 0] * b[:, 2]
+        out[:, 2] = a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0]
+        return out
 
     def ground_z(x_r: np.ndarray, y_l: np.ndarray) -> np.ndarray:
         if terrain_fn is None:
@@ -637,20 +648,23 @@ def integrate_trajectories_batch(
         """Compute state derivative `[M, 6 or 7]` and instantaneous Sg `[M]`."""
         pos = y_vec[:, 0:3]
         vel = y_vec[:, 3:6]
+        m_rows = vel.shape[0]
         m_sub_eff = (
             np.maximum(m_sub - cfg.rocket_mdot_kg_s * np.minimum(t_cur, cfg.rocket_burn_time_s), 0.1 * m_sub)
-            if (cfg.rocket_burn_time_s > 0.0 and cfg.rocket_mdot_kg_s > 0.0)
+            if has_rocket
             else m_sub
         )
 
         if cfg.vacuum:
-            acc = np.zeros_like(vel)
-            acc[:, 2] = -G0
+            dy = np.zeros_like(y_vec)
+            dy[:, 0:3] = vel
+            dy[:, 5] = -G0
             if cfg.include_coriolis:
-                acc = acc - 2.0 * np.cross(om_vec, vel)
-            if is_mpm:
-                return np.hstack([vel, acc, np.zeros((vel.shape[0], 1))]), np.full(vel.shape[0], 2.0)
-            return np.hstack([vel, acc]), np.full(vel.shape[0], 2.0)
+                vx_v, vy_v, vz_v = vel[:, 0], vel[:, 1], vel[:, 2]
+                dy[:, 3] -= 2.0 * (oy * vz_v - oz * vy_v)
+                dy[:, 4] -= 2.0 * (oz * vx_v - ox * vz_v)
+                dy[:, 5] -= 2.0 * (ox * vy_v - oy * vx_v)
+            return dy, np.full(m_rows, 2.0)
 
         alt = pos[:, 2]
         t_std = np.where(alt <= 11000.0, 288.15 - 0.0065 * alt, 216.65)
@@ -663,9 +677,10 @@ def integrate_trajectories_batch(
         rho = p_pa / (287.05287 * t_k)
         a_snd = np.sqrt(1.4 * 287.05287 * t_k)
 
-        wind = env.wind_at_altitude(alt) + w_off_sub
+        wind = (env.wind_at_altitude(alt) + w_off_sub) if has_wind_bands else (const_wind + w_off_sub)
         vr = vel - wind
-        v_rel_mag = np.maximum(np.linalg.norm(vr, axis=1), 1e-6)
+        vr0, vr1, vr2 = vr[:, 0], vr[:, 1], vr[:, 2]
+        v_rel_mag = np.maximum(np.sqrt(vr0 * vr0 + vr1 * vr1 + vr2 * vr2), 1e-6)
         mach = v_rel_mag / a_snd
 
         cd_ref = kb.interp_cd(mach, drag_ref=cfg.drag_ref, custom_table=cfg.custom_cd_table)
@@ -674,11 +689,21 @@ def integrate_trajectories_batch(
             mach_fac = np.where(mach >= 0.9, np.exp(-0.35 * np.maximum(mach - 1.1, 0.0)), 0.3)
             cd_ref = np.maximum(0.02, cd_ref - np.where(burning, cfg.base_bleed_dcd * mach_fac, 0.0))
 
-        g_vec = np.zeros_like(vel)
-        g_vec[:, 2] = -G0
-        a_cor = -2.0 * np.cross(om_vec, vel) if cfg.include_coriolis else np.zeros_like(vel)
+        dy = np.empty_like(y_vec)
+        dy[:, 0:3] = vel
 
         if is_mpm:
+            g_vec = np.zeros_like(vel)
+            g_vec[:, 2] = -G0
+            if cfg.include_coriolis:
+                vx_c, vy_c, vz_c = vel[:, 0], vel[:, 1], vel[:, 2]
+                a_cor = np.empty_like(vel)
+                a_cor[:, 0] = -2.0 * (oy * vz_c - oz * vy_c)
+                a_cor[:, 1] = -2.0 * (oz * vx_c - ox * vz_c)
+                a_cor[:, 2] = -2.0 * (ox * vy_c - oy * vx_c)
+            else:
+                a_cor = np.zeros_like(vel)
+
             p_sp = y_vec[:, 6]
             sg = (
                 2.0
@@ -688,45 +713,54 @@ def integrate_trajectories_batch(
             )
             cd0_eff = np.where(sg < 1.0, np.maximum(cd_ref, 1.25), cd_ref)
             dv_approx = g_vec + a_cor
-            cross_v_dv = np.cross(vr, dv_approx)
+            cross_v_dv = _cross3(vr, dv_approx)
             denom_a = np.maximum(np.pi * rho * (cfg.calibre_m**3) * cfg.c_ma * (v_rel_mag**4), 1e-12)[:, None]
             alpha_e = -8.0 * cfg.ix_kg_m2 * p_sp[:, None] * cross_v_dv / denom_a
-            a_mag = np.linalg.norm(alpha_e, axis=1, keepdims=True)
+            a_mag = np.sqrt(
+                alpha_e[:, 0] * alpha_e[:, 0] + alpha_e[:, 1] * alpha_e[:, 1] + alpha_e[:, 2] * alpha_e[:, 2]
+            )[:, None]
             alpha_e = np.where(a_mag > 0.25, alpha_e * (0.25 / np.maximum(a_mag, 1e-12)), alpha_e)
-            alpha_sq = np.sum(alpha_e**2, axis=1, keepdims=True)
+            alpha_sq = (
+                alpha_e[:, 0] * alpha_e[:, 0] + alpha_e[:, 1] * alpha_e[:, 1] + alpha_e[:, 2] * alpha_e[:, 2]
+            )[:, None]
 
             k_b = (np.pi * rho * (cfg.calibre_m**2) / (8.0 * m_sub_eff))[:, None]
             df = -k_b * i_sub[:, None] * (cd0_eff[:, None] + cfg.c_da2 * alpha_sq) * v_rel_mag[:, None] * vr
             lf = k_b * cfg.c_la * (v_rel_mag[:, None] ** 2) * alpha_e
             mf = -(
                 (np.pi * rho * (cfg.calibre_m**3) * p_sp * cfg.c_mag / (8.0 * m_sub_eff))[:, None]
-                * np.cross(alpha_e, vr)
+                * _cross3(alpha_e, vr)
             )
-            acc = df + lf + mf + g_vec + a_cor
+            dy[:, 3:6] = df + lf + mf + g_vec + a_cor
             c_sp_neg = -abs(cfg.c_spin) if cfg.c_spin > 0 else cfg.c_spin
-            dp_dt = (np.pi * rho * (cfg.calibre_m**4) * v_rel_mag * c_sp_neg / (8.0 * cfg.ix_kg_m2)) * p_sp
+            dy[:, 6] = (np.pi * rho * (cfg.calibre_m**4) * v_rel_mag * c_sp_neg / (8.0 * cfg.ix_kg_m2)) * p_sp
         else:
-            sg = np.full(vel.shape[0], 2.0)
-            cd_tot = i_sub * cd_ref
-            k_drag = (0.5 * rho * area_ref * cd_tot / m_sub_eff)[:, None]
-            acc = -k_drag * v_rel_mag[:, None] * vr + g_vec + a_cor
+            sg = np.full(m_rows, 2.0)
+            k_drag_v = (0.5 * area_ref) * (rho * i_sub * cd_ref / m_sub_eff) * v_rel_mag
+            dy[:, 3] = -k_drag_v * vr0
+            dy[:, 4] = -k_drag_v * vr1
+            dy[:, 5] = -k_drag_v * vr2 - G0
+            if cfg.include_coriolis:
+                vx_c, vy_c, vz_c = vel[:, 0], vel[:, 1], vel[:, 2]
+                dy[:, 3] -= 2.0 * (oy * vz_c - oz * vy_c)
+                dy[:, 4] -= 2.0 * (oz * vx_c - ox * vz_c)
+                dy[:, 5] -= 2.0 * (ox * vy_c - oy * vx_c)
 
         # Optional rocket thrust along velocity unit vector
-        if cfg.rocket_burn_time_s > 0.0 and cfg.rocket_mdot_kg_s > 0.0:
+        if has_rocket:
             thrust_on = t_cur <= cfg.rocket_burn_time_s
             if np.any(thrust_on):
-                v_mag_abs = np.maximum(np.linalg.norm(vel, axis=1, keepdims=True), 1e-6)
+                vx_t, vy_t, vz_t = vel[:, 0], vel[:, 1], vel[:, 2]
+                v_mag_abs = np.maximum(np.sqrt(vx_t * vx_t + vy_t * vy_t + vz_t * vz_t), 1e-6)[:, None]
                 u_hat = vel / v_mag_abs
                 thrust_acc = np.where(
                     np.asarray(thrust_on)[..., None] if np.ndim(thrust_on) > 0 else thrust_on,
                     (cfg.rocket_mdot_kg_s * cfg.rocket_ve_mps / m_sub_eff)[:, None] * u_hat,
                     0.0,
                 )
-                acc = acc + thrust_acc
+                dy[:, 3:6] += thrust_acc
 
-        if is_mpm:
-            return np.hstack([vel, acc, dp_dt[:, None]]), sg
-        return np.hstack([vel, acc]), sg
+        return dy, sg
 
     # Adaptive RK45 option per App_Spec R13
     if cfg.integrator.upper() == "RK45":

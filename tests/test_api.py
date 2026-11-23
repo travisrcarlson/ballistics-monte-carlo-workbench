@@ -100,3 +100,60 @@ def test_api_simulate_preset_and_geojson(client: TestClient) -> None:
     geo_data = res_geo.json()
     assert geo_data["type"] == "FeatureCollection"
     assert len(geo_data["features"]) >= 1
+
+
+def test_api_cuas_endpoints_and_optional_auth(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Catalogs
+    r_cat = client.get("/cuas/catalogs")
+    assert r_cat.status_code == 200
+    cat = r_cat.json()
+    assert "shotgun_presets" in cat and "outer_layers" in cat and "comparator_presets" in cat
+
+    # Array MC
+    r_arr = client.post("/cuas/array", json={"n_barrels": 4, "n_volleys": 6})
+    assert r_arr.status_code == 200
+    assert "kill_probability_pct" in r_arr.json()["summary"]
+
+    # Kill Chain
+    r_kc = client.post("/cuas/kill-chain", json={"n_trials": 30, "fiber_optic_autonomous": True})
+    assert r_kc.status_code == 200
+    assert "cumulative_pk_pct" in r_kc.json()["summary"]
+
+    # Site Defense with GeoJSON
+    r_site = client.post("/cuas/site-defense", json={"n_raid_trials": 15, "include_geojson": True})
+    assert r_site.status_code == 200
+    site_d = r_site.json()
+    assert "geojson" in site_d and site_d["geojson"]["type"] == "FeatureCollection"
+
+    # Logistics
+    r_log = client.post("/cuas/logistics", json={"n_waves": 3, "n_trials": 15})
+    assert r_log.status_code == 200
+    assert "peak_barrel_temp_c" in r_log.json()["summary"]
+
+    # Compare A/B
+    r_ab = client.post("/cuas/compare-ab", json={"n_waves": 2, "drones_per_wave": 2})
+    assert r_ab.status_code == 200
+    assert len(r_ab.json()["scorecard"]) >= 2
+
+    # Layered Defense
+    r_lay = client.post("/cuas/layered-defense", json={"outer_layer_id": "interceptor_drone_fpv", "n_waves": 3, "n_trials": 20})
+    assert r_lay.status_code == 200
+    assert "layered_survival_pct" in r_lay.json()["summary"]
+
+    # Sensitivity Tornado
+    r_sen = client.post("/cuas/sensitivity", json={"perturbation_pct": 15.0, "n_trials": 30})
+    assert r_sen.status_code == 200
+    assert len(r_sen.json()["rows"]) >= 6
+
+    # Report HTML
+    r_rep = client.post("/cuas/report", json={"scenario_name": "API CI Study", "format": "html"})
+    assert r_rep.status_code == 200
+    assert "<html" in r_rep.text.lower()
+
+    # Optional Bearer / X-API-Key authentication enforcement
+    monkeypatch.setenv("AMMO_MC_API_REQUIRE_AUTH", "true")
+    monkeypatch.setenv("AMMO_MC_PASSWORD", "ci-api-secret")
+    assert client.get("/cuas/catalogs").status_code == 401
+    assert client.get("/cuas/catalogs", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    assert client.get("/cuas/catalogs", headers={"Authorization": "Bearer ci-api-secret"}).status_code == 200
+    assert client.get("/cuas/catalogs", headers={"X-API-Key": "ci-api-secret"}).status_code == 200

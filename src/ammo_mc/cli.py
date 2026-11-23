@@ -258,5 +258,204 @@ def cmd_ui(
     subprocess.run([sys.executable, "-m", "streamlit", "run", str(app_path), "--server.port", str(port)])
 
 
+# -------------------------------------------------------------------------
+# COUNTER-UAS ENGINEERING SUB-CLI (ammo-mc cuas ...)
+# -------------------------------------------------------------------------
+
+cuas_app = typer.Typer(help="Counter-UAS multi-shotgun, kill-chain, site defense, layered & tornado commands.")
+app.add_typer(cuas_app, name="cuas")
+
+
+@cuas_app.command("kill-chain")
+def cmd_cuas_kill_chain(
+    drone_model: str = typer.Option("fpv_quad_small", help="Target drone preset key."),
+    aspect_mode: str = typer.Option("head_on_frontal", help="Presentation aspect mode."),
+    speed_mps: float = typer.Option(28.0, help="Drone approach speed (m/s)."),
+    weather: str = typer.Option("clear_day", help="Weather regime (clear_day, overcast_dusk, night_clear, heavy_fog_rain)."),
+    fiber_optic: bool = typer.Option(False, "--fiber-optic", help="Simulate RF-silent fiber-optic threat."),
+    barrels: int = typer.Option(6, help="Number of turret barrels."),
+    ammo: str = typer.Option("12G_NO4_BUCK_C_UAS", help="Ammunition preset."),
+    trials: int = typer.Option(80, help="Monte Carlo trial count."),
+    as_json: bool = typer.Option(False, "--json", help="Output raw JSON."),
+) -> None:
+    """Evaluate multi-sensor C-UAS detection & kill-chain timeline."""
+    from ammo_mc.cuas_mission import simulate_cuas_kill_chain_mc
+
+    res = simulate_cuas_kill_chain_mc(
+        drone_model=drone_model,
+        aspect_mode=aspect_mode,
+        drone_speed_mps=speed_mps,
+        weather=weather,
+        fiber_optic_autonomous=fiber_optic,
+        n_barrels=barrels,
+        ammunition_preset=ammo,
+        n_trials=trials,
+    )
+    if as_json:
+        typer.echo(json.dumps(res, indent=2, default=str))
+        return
+    sm = res["summary"]
+    typer.echo(f"Drone: {sm['drone_name']} ({sm['aspect_mode']}) | Weather: {sm['weather']} | Fiber-Optic: {sm['fiber_optic_autonomous']}")
+    typer.echo(f"Fused Detection: {sm['fused_detection_range_m']:.1f} m | Open Fire: {sm['first_shot_range_m']:.1f} m | Overhead: {sm['t_overhead_s']:.2f} s")
+    typer.echo(f"Kill-Chain Pk:   {sm['cumulative_pk_pct']:.1f} % | Breach Rate: {sm['breach_rate_pct']:.1f} % | Bottleneck: {sm['limiting_bottleneck']}")
+
+
+@cuas_app.command("site-defense")
+def cmd_cuas_site_defense(
+    preset: str = typer.Option("fob_compound_4_turret", help="Site defense preset key."),
+    lat: float = typer.Option(32.9000, help="Origin WGS84 latitude (deg)."),
+    lon: float = typer.Option(-106.4000, help="Origin WGS84 longitude (deg)."),
+    heading_deg: float = typer.Option(0.0, help="Site clockwise map rotation (deg)."),
+    sdz_range_m: float = typer.Option(280.0, help="Extended fallout SDZ radius (m)."),
+    raids: int = typer.Option(50, help="Monte Carlo raid trials."),
+    out_geojson: Optional[Path] = typer.Option(None, "--out-geojson", help="Optional GeoJSON export path."),
+    out_kml: Optional[Path] = typer.Option(None, "--out-kml", help="Optional KML export path."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON summary."),
+) -> None:
+    """Evaluate multi-turret 360-deg site coverage, NFZ conflicts, and export GIS layers."""
+    from ammo_mc.cuas_analytics import build_cuas_site_geojson, export_cuas_site_kml
+    from ammo_mc.cuas_mission import simulate_multiturret_site_defense_mc
+
+    res = simulate_multiturret_site_defense_mc(
+        site_preset=preset,
+        elevation_sdz_range_m=sdz_range_m,
+        n_raid_trials=raids,
+    )
+    if out_geojson:
+        geo = build_cuas_site_geojson(res, origin_lat=lat, origin_lon=lon, sdz_radius_m=sdz_range_m, heading_deg=heading_deg)
+        out_geojson.parent.mkdir(parents=True, exist_ok=True)
+        out_geojson.write_text(json.dumps(geo, indent=2), encoding="utf-8")
+    if out_kml:
+        kml = export_cuas_site_kml(res, origin_lat=lat, origin_lon=lon, sdz_radius_m=sdz_range_m, heading_deg=heading_deg, name=preset)
+        out_kml.parent.mkdir(parents=True, exist_ok=True)
+        out_kml.write_text(kml, encoding="utf-8")
+
+    if as_json:
+        typer.echo(json.dumps(res["summary"], indent=2))
+        return
+    sm = res["summary"]
+    typer.echo(f"Site: {sm['site_name']} ({sm['n_turrets']} turrets)")
+    typer.echo(f"Coverage (>=1): {sm['perimeter_coverage_pct']:.1f}% | Overlap (>=2): {sm['overlapping_coverage_pct']:.1f}% | Blind Spots: {sm['blind_spot_pct']:.1f}%")
+    typer.echo(f"NFZ Conflict: {sm['nfz_fallout_conflict_pct']:.1f}% | Zero-Breach Raid Stop: {sm['site_zero_breach_pct']:.1f}%")
+
+
+@cuas_app.command("compare-ab")
+def cmd_cuas_compare_ab(
+    drone_model: str = typer.Option("fpv_quad_small", help="Benchmark drone class."),
+    speed_mps: float = typer.Option(25.0, help="Threat approach speed (m/s)."),
+    out_csv: Optional[Path] = typer.Option(None, "--out-csv", help="Optional scorecard CSV export path."),
+    as_json: bool = typer.Option(False, "--json", help="Output raw JSON."),
+) -> None:
+    """Run side-by-side A/B/C turret architecture scorecard."""
+    import pandas as pd
+    from ammo_mc.cuas_analytics import compare_cuas_architectures_ab
+
+    res = compare_cuas_architectures_ab(drone_model=drone_model, drone_speed_mps=speed_mps)
+    if out_csv:
+        out_csv.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(res["scorecard"]).to_csv(out_csv, index=False)
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    typer.echo(f"Winner: {res['summary']['winner_label']} (MEI={res['summary']['winner_mei']})")
+    typer.echo(f"{'Architecture':<48} {'MEI':<6} {'KC Pk%':<8} {'Swarm%':<8} {'Temp(C)':<9} {'$/Kill'}")
+    typer.echo("-" * 92)
+    for r in res["scorecard"]:
+        typer.echo(
+            f"{r['label']:<48} {r['mei_score']:<6.1f} {r['kill_chain_pk_pct']:<8.1f} {r['swarm_survival_pct']:<8.1f} {r['peak_barrel_temp_c']:<9.1f} ${r['cost_per_kill_usd']:.2f}"
+        )
+
+
+@cuas_app.command("layered")
+def cmd_cuas_layered(
+    outer: str = typer.Option("rf_gnss_jammer", help="Outer layer ID (rf_gnss_jammer, interceptor_drone_fpv, autocannon_30mm_airburst, directed_energy_hel)."),
+    fo_frac: float = typer.Option(0.25, help="Fraction of fiber-optic / RF-silent drones (0..1)."),
+    weather: str = typer.Option("clear_day", help="Weather (clear_day, heavy_fog_rain)."),
+    waves: int = typer.Option(5, help="Number of incoming attack waves."),
+    drones_per_wave: int = typer.Option(5, help="Drones per wave."),
+    as_json: bool = typer.Option(False, "--json", help="Output raw JSON."),
+) -> None:
+    """Evaluate Outer Soft/Hard-Kill + Inner Multi-Shotgun layered defense."""
+    from ammo_mc.cuas_analytics import simulate_layered_cuas_defense_mc
+
+    res = simulate_layered_cuas_defense_mc(
+        outer_layer_id=outer,
+        fiber_optic_fraction=fo_frac,
+        weather=weather,
+        n_waves=waves,
+        drones_per_wave=drones_per_wave,
+    )
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    sm = res["summary"]
+    typer.echo(f"Outer Tier: {sm['outer_layer_name']} | FO Mix: {sm['fiber_optic_fraction_pct']:.0f}% | Weather: {sm['weather']}")
+    typer.echo(f"Layered Survival: {sm['layered_survival_pct']:.1f}% (Inner-Only: {sm['inner_only_survival_pct']:.1f}%, Gain: {sm['survival_gain_pct']:+.1f}%)")
+    typer.echo(f"Inner Rounds Saved: {sm['inner_rounds_saved']:.1f} | Temp Drop: -{sm['peak_temp_reduction_c']:.1f} C | Blended $/Kill: ${sm['blended_cost_per_kill_usd']:.2f}")
+
+
+@cuas_app.command("sensitivity")
+def cmd_cuas_sensitivity(
+    perturb_pct: float = typer.Option(20.0, help="One-at-a-time +/- perturbation percentage."),
+    trials: int = typer.Option(60, help="Trials per perturbation point."),
+    as_json: bool = typer.Option(False, "--json", help="Output raw JSON."),
+) -> None:
+    """Run C-UAS Kill-Chain parameter sensitivity Tornado analysis."""
+    from ammo_mc.cuas_analytics import analyze_cuas_sensitivity_tornado
+
+    res = analyze_cuas_sensitivity_tornado(perturbation_pct=perturb_pct, n_trials=trials)
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    sm = res["summary"]
+    typer.echo(f"Baseline Kill-Chain Pk: {sm['baseline_value']:.1f}% | Top Driver: {sm['top_driver']} (swing {sm['top_swing']:.1f}%)")
+    for r in res["rows"]:
+        typer.echo(f"  {r['label']:<38} Low={r['val_at_low']:<5.1f}% Base={r['val_at_base']:<5.1f}% High={r['val_at_high']:<5.1f}% Swing={r['swing']:.1f}%")
+
+
+@cuas_app.command("sweep")
+def cmd_cuas_sweep(
+    param: str = typer.Option("range", help="Sweep axis: 'range' or 'speed'."),
+    start: float = typer.Option(25.0, help="Sweep start value."),
+    stop: float = typer.Option(65.0, help="Sweep stop value."),
+    steps: int = typer.Option(5, help="Number of sweep points."),
+    ammo: str = typer.Option("12G_NO4_BUCK_C_UAS", help="Ammunition preset."),
+    out_csv: Optional[Path] = typer.Option(None, "--out-csv", help="Optional CSV export path."),
+    as_json: bool = typer.Option(False, "--json", help="Output raw JSON."),
+) -> None:
+    """Sweep intercept range or threat speed across C-UAS Kill Chain."""
+    import numpy as np
+    import pandas as pd
+    from ammo_mc.cuas_mission import simulate_cuas_kill_chain_mc
+
+    vals = np.linspace(start, stop, max(2, steps))
+    rows = []
+    for v in vals:
+        kw: dict[str, object] = {"ammunition_preset": ammo, "n_trials": 50}
+        if param.lower() == "speed":
+            kw["drone_speed_mps"] = float(v)
+        else:
+            kw["max_weapon_range_m"] = float(v)
+        r = simulate_cuas_kill_chain_mc(**kw)  # type: ignore[arg-type]
+        sm = r["summary"]
+        rows.append(
+            {
+                "param_value": round(float(v), 2),
+                "kill_chain_pk_pct": sm["cumulative_pk_pct"],
+                "breach_rate_pct": sm["breach_rate_pct"],
+                "mean_salvos": sm["mean_salvos_fired"],
+            }
+        )
+    if out_csv:
+        out_csv.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(rows).to_csv(out_csv, index=False)
+    if as_json:
+        typer.echo(json.dumps(rows, indent=2))
+        return
+    typer.echo(f"Sweep Axis: {param} ({start} -> {stop} across {len(rows)} steps)")
+    for r in rows:
+        typer.echo(f"  {param}={r['param_value']:<7.1f} -> Kill-Chain Pk={r['kill_chain_pk_pct']:5.1f}% | Breach={r['breach_rate_pct']:5.1f}% | Salvos={r['mean_salvos']:.2f}")
+
+
 if __name__ == "__main__":
     app()

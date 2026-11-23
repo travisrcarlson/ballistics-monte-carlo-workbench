@@ -1,0 +1,751 @@
+"""Shared constants, cached computation wrappers, auth gate, styles & URL deep-linking."""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+import streamlit as st
+
+from ammo_mc.auth import verify_app_password
+from ammo_mc.cuas_analytics import (
+    analyze_artillery_sensitivity_tornado,
+    analyze_cuas_sensitivity_tornado,
+    compare_cuas_architectures_ab,
+    simulate_layered_cuas_defense_mc,
+)
+from ammo_mc.cuas_defense import (
+    compare_cuas_fallout_across_loads,
+    compare_cuas_payload_families,
+    optimize_antidrone_array_configuration,
+)
+from ammo_mc.cuas_mission import (
+    generate_3d_intercept_replay_data,
+    simulate_cuas_kill_chain_mc,
+    simulate_cuas_sustained_logistics_mc,
+    simulate_multiturret_site_defense_mc,
+)
+from ammo_mc.formulas_registry import USE_LIMITATION_NOTICE
+from ammo_mc.presets import get_preset
+from ammo_mc.small_arms import (
+    benchmark_drone_aspect_angles_mc,
+    benchmark_multibarrel_aspect_angles_mc,
+    compare_anti_drone_layouts,
+)
+
+# -------------------------------------------------------------------------
+# WORKBENCH & MODULE NAVIGATION CONSTANTS + URL SLUGS
+# -------------------------------------------------------------------------
+
+_WORKBENCH_OPTIONS = [
+    "🎯 Monte Carlo Simulator",
+    "🛸 C-UAS & Small Arms",
+    "🌐 3D Simulations",
+    "🚀 MCDRAG & 3D CAD",
+    "🔬 Physics & Ballistics Labs",
+    "🏛️ UNODA IATG Safety",
+    "📋 Firing Tables & Met",
+    "✅ Validation Suite",
+]
+
+_WORKBENCH_SLUGS: dict[str, str] = {
+    "🎯 Monte Carlo Simulator": "sim",
+    "🛸 C-UAS & Small Arms": "cuas",
+    "🌐 3D Simulations": "3d",
+    "🚀 MCDRAG & 3D CAD": "mcdrag",
+    "🔬 Physics & Ballistics Labs": "physics",
+    "🏛️ UNODA IATG Safety": "iatg",
+    "📋 Firing Tables & Met": "firing",
+    "✅ Validation Suite": "validation",
+}
+_SLUG_TO_WORKBENCH: dict[str, str] = {v: k for k, v in _WORKBENCH_SLUGS.items()}
+
+_CUAS_SUITES = [
+    "🛸 C-UAS Turret Suite (11 Modules)",
+    "🔫 Small Arms & Multi-Barrel Array (5 Modes)",
+]
+
+_CUAS18_MODULES = [
+    "📡 1. Closed-Loop FCS & Evasive Drones",
+    "🐝 2. Multi-Drone Swarm Saturation",
+    "💥 3. Advanced Payloads & Airburst",
+    "🔩 4. Recoil, Gimbal & Pareto Optimizer",
+    "⚠️ 5. Elevated Fallout & Safety Zone (SDZ)",
+    "🛰️ 6. Multi-Sensor Kill Chain & Timeline",
+    "🏰 7. Multi-Turret Site Defense, Custom Builder & GIS Map",
+    "🎬 8. 3D Animated Intercept Replay",
+    "🔥 9. Logistics, Barrel Heat, $/Kill & Report",
+    "⚔️ 10. A/B Turret Comparator & Layered Defense",
+    "📊 11. Sensitivity & Bottleneck Tornado",
+]
+
+_CUAS_MOD_SLUGS: dict[str, str] = {
+    _CUAS18_MODULES[0]: "fcs",
+    _CUAS18_MODULES[1]: "swarm",
+    _CUAS18_MODULES[2]: "payloads",
+    _CUAS18_MODULES[3]: "recoil",
+    _CUAS18_MODULES[4]: "sdz",
+    _CUAS18_MODULES[5]: "kill_chain",
+    _CUAS18_MODULES[6]: "site_defense",
+    _CUAS18_MODULES[7]: "replay",
+    _CUAS18_MODULES[8]: "logistics",
+    _CUAS18_MODULES[9]: "comparator",
+    _CUAS18_MODULES[10]: "sensitivity",
+}
+_SLUG_TO_CUAS_MOD: dict[str, str] = {v: k for k, v in _CUAS_MOD_SLUGS.items()}
+
+_SMALL_ARMS_MODES = [
+    "🎯 Single-Range Pattern Spread & Shot Stringing",
+    "📏 Multi-Distance Range Sweep & 3D Plume Slices",
+    "📐 Multiple Barrel Lengths Comparison",
+    "🔄 Multi-Barrel Systems, Rotary Minigun & Volley Dispersion",
+    "🛸 Anti-Drone Multi-Shotgun Defense Array (C-UAS)",
+]
+
+_PHYSICS_LABS = [
+    "🔥 1. Interior Ballistics & P-V Diagram",
+    "🌍 2. ISA Atmosphere, Stability & Coriolis",
+    "🌊 3. Shock Physics & Rankine-Hugoniot",
+    "💥 4. Gurney Energy, Taylor & Mott",
+    "🛡️ 5. Continuum Penetration & Project THOR",
+    "📐 6. Quasi-MC Discrepancy & KB Registry",
+    "🌀 7. STANAG 4355 MPM Yaw & Spin Drift",
+    "⚙️ 8. Bayesian Fuze Reliability & Graze Surface",
+    "🚀 9. Precision Guidance & Proportional Nav (PN/APN)",
+    "📦 10. Cluster Dispenser & UXO Hazard (CCM/IATG)",
+    "🌀 11. Full 6-DoF Rigid-Body & Epicyclic Yaw",
+    "🎯 12. Battery Sheafs & MRSI/TOT Salvo",
+    "🛡️ 13. Multi-Layer Armor & Tandem ERA",
+    "🛰️ 14. Counter-Battery Radar & POO/POI",
+    "🎯 15. Direct-Fire Tank Gunnery & APFSDS Sabot",
+    "📡 16. Electronic Warfare & Laser Homing",
+]
+
+_IATG_TOOLS = [
+    "🏗️ 1. Quantity-Distance (QD), Open-Detonation (TB-15) & 3D PES Map",
+    "🧱 2. Structural Damage (TB-10 Jarrett/GLS) & Swiss Glazing (TB-11)",
+    "📦 3. NATO AASTP-1 Stack Fragmentation (TF-10) & RC Debris (TF-14)",
+    "🫁 4. Axelsson Thoracic Biomechanics ODE (TB-13) & Thermal Dose (TB-16)",
+    "🗺️ 5. Multi-Facility 3D Site Planner & Sympathetic Matrix",
+    "🧪 6. Propellant Aging & In-Service Surveillance (IATG 07.10 / AOP-48)",
+    "🗺️ 7. Terrain Crest Clearance & KML/CZML Export",
+]
+
+
+# -------------------------------------------------------------------------
+# CACHED COMPUTATION WRAPPERS (HASHABLE ARGS FOR STREAMLIT CLOUD)
+# -------------------------------------------------------------------------
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_benchmark_multibarrel_aspect(
+    system_type: str,
+    n_barrels: int,
+    bore_spacing_y_mm: float,
+    bore_spacing_z_mm: float,
+    rotor_radius_mm: float,
+    crossover_range_m: float,
+    burst_rounds: int,
+    target_range_m: float,
+    cyclic_rate_rpm: float,
+    inherent_dispersion_mrad: float,
+    barrel_pointing_bias_mrad: float,
+    thermal_drift_mrad_per_100rd: float,
+    drone_model: str,
+    bullet_energy_j: float,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return benchmark_multibarrel_aspect_angles_mc(
+        system_type=system_type,
+        n_barrels=n_barrels,
+        bore_spacing_y_mm=bore_spacing_y_mm,
+        bore_spacing_z_mm=bore_spacing_z_mm,
+        rotor_radius_mm=rotor_radius_mm,
+        crossover_range_m=crossover_range_m,
+        burst_rounds=burst_rounds,
+        target_range_m=target_range_m,
+        cyclic_rate_rpm=cyclic_rate_rpm,
+        inherent_dispersion_mrad=inherent_dispersion_mrad,
+        barrel_pointing_bias_mrad=barrel_pointing_bias_mrad,
+        thermal_drift_mrad_per_100rd=thermal_drift_mrad_per_100rd,
+        drone_model=drone_model,
+        bullet_energy_j=bullet_energy_j,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_compare_anti_drone_layouts(
+    distance_stations_m: tuple[float, ...],
+    ammunition_preset: str,
+    drone_model: str,
+    drone_velocity_mps: float,
+    pointing_mode: str,
+    firing_mode: str,
+    n_volleys: int = 12,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return compare_anti_drone_layouts(
+        distance_stations_m=list(distance_stations_m),
+        ammunition_preset=ammunition_preset,
+        drone_model=drone_model,
+        drone_velocity_mps=drone_velocity_mps,
+        pointing_mode=pointing_mode,
+        firing_mode=firing_mode,
+        n_volleys=n_volleys,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_benchmark_drone_aspect(
+    layout_type: str,
+    n_barrels: int,
+    mount_radius_m: float,
+    spacing_y_m: float,
+    spacing_z_m: float,
+    n_cols: int,
+    n_rows: int,
+    pointing_mode: str,
+    splay_angle_mrad: float,
+    firing_mode: str,
+    ripple_delay_ms: float,
+    custom_barrel_specs_json: str,
+    ammunition_preset: str,
+    default_choke: str,
+    default_barrel_length_in: float,
+    target_distance_m: float,
+    drone_model: str,
+    drone_velocity_mps: float,
+    aim_error_mrad: float,
+    crosswind_mps: float,
+    n_volleys: int = 15,
+    seed: int = 42,
+) -> dict[str, Any]:
+    custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
+    return benchmark_drone_aspect_angles_mc(
+        layout_type=layout_type,
+        n_barrels=n_barrels,
+        mount_radius_m=mount_radius_m,
+        spacing_y_m=spacing_y_m,
+        spacing_z_m=spacing_z_m,
+        n_cols=n_cols,
+        n_rows=n_rows,
+        pointing_mode=pointing_mode,
+        splay_angle_mrad=splay_angle_mrad,
+        firing_mode=firing_mode,
+        ripple_delay_ms=ripple_delay_ms,
+        custom_barrel_specs=custom_specs,
+        ammunition_preset=ammunition_preset,
+        default_choke=default_choke,
+        default_barrel_length_in=default_barrel_length_in,
+        target_distance_m=target_distance_m,
+        drone_model=drone_model,
+        drone_velocity_mps=drone_velocity_mps,
+        aim_error_mrad=aim_error_mrad,
+        crosswind_mps=crosswind_mps,
+        n_volleys=n_volleys,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_compare_cuas_payloads(
+    distances_m: tuple[float, ...],
+    n_barrels: int,
+    drone_model: str,
+    aspect_mode: str,
+    fuze_time_jitter_ms: float,
+    n_volleys: int = 12,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return compare_cuas_payload_families(
+        distances_m=list(distances_m),
+        n_barrels=n_barrels,
+        drone_model=drone_model,
+        aspect_mode=aspect_mode,
+        fuze_time_jitter_ms=fuze_time_jitter_ms,
+        n_volleys=n_volleys,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_optimize_antidrone_array(
+    n_barrels: int,
+    mount_radius_m: float,
+    target_distance_m: float,
+    drone_model: str,
+    drone_velocity_mps: float,
+    ammunition_preset: str,
+    inner_ammunition_preset: str | None,
+    mount_mass_kg: float,
+    mount_stiffness_n_per_m: float,
+    mount_load_limit_kn: float,
+    gimbal_trunnion_offset_z_m: float,
+    n_volleys: int = 12,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return optimize_antidrone_array_configuration(
+        n_barrels=n_barrels,
+        mount_radius_m=mount_radius_m,
+        target_distance_m=target_distance_m,
+        drone_model=drone_model,
+        drone_velocity_mps=drone_velocity_mps,
+        ammunition_preset=ammunition_preset,
+        inner_ammunition_preset=inner_ammunition_preset,
+        mount_mass_kg=mount_mass_kg,
+        mount_stiffness_n_per_m=mount_stiffness_n_per_m,
+        mount_load_limit_kn=mount_load_limit_kn,
+        gimbal_trunnion_offset_z_m=gimbal_trunnion_offset_z_m,
+        n_volleys=n_volleys,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_compare_cuas_fallout(
+    firing_elevation_deg: float,
+    wind_downrange_mps: float,
+    wind_crossrange_mps: float,
+    default_choke: str,
+    n_sample_pellets: int = 140,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return compare_cuas_fallout_across_loads(
+        firing_elevation_deg=firing_elevation_deg,
+        wind_downrange_mps=wind_downrange_mps,
+        wind_crossrange_mps=wind_crossrange_mps,
+        default_choke=default_choke,
+        n_sample_pellets=n_sample_pellets,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_kill_chain(
+    drone_model: str,
+    aspect_mode: str,
+    drone_speed_mps: float,
+    approach_altitude_m: float,
+    weather: str,
+    ambient_wind_mps: float,
+    fiber_optic_autonomous: bool,
+    enabled_sensors: tuple[str, ...],
+    ai_classify_s: float,
+    human_in_the_loop: bool,
+    human_auth_s: float,
+    slew_angle_deg: float,
+    turret_slew_rate_deg_s: float,
+    max_weapon_range_m: float,
+    keepout_breach_radius_m: float,
+    n_barrels: int,
+    ammunition_preset: str,
+    choke: str,
+    salvo_cycle_time_s: float,
+    n_trials: int = 120,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return simulate_cuas_kill_chain_mc(
+        drone_model=drone_model,
+        aspect_mode=aspect_mode,
+        drone_speed_mps=drone_speed_mps,
+        approach_altitude_m=approach_altitude_m,
+        weather=weather,
+        ambient_wind_mps=ambient_wind_mps,
+        fiber_optic_autonomous=fiber_optic_autonomous,
+        enabled_sensors=enabled_sensors,
+        ai_classify_s=ai_classify_s,
+        human_in_the_loop=human_in_the_loop,
+        human_auth_s=human_auth_s,
+        slew_angle_deg=slew_angle_deg,
+        turret_slew_rate_deg_s=turret_slew_rate_deg_s,
+        max_weapon_range_m=max_weapon_range_m,
+        keepout_breach_radius_m=keepout_breach_radius_m,
+        n_barrels=n_barrels,
+        ammunition_preset=ammunition_preset,
+        choke=choke,
+        salvo_cycle_time_s=salvo_cycle_time_s,
+        n_trials=n_trials,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_site_defense(
+    site_preset: str,
+    threat_altitude_m: float,
+    threat_speed_mps: float,
+    drone_model: str,
+    weapon_max_range_m: float,
+    elevation_sdz_range_m: float,
+    custom_turrets_json: str = "",
+    custom_obstacles_json: str = "",
+    custom_nfz_json: str = "",
+    n_raid_trials: int = 80,
+    seed: int = 42,
+) -> dict[str, Any]:
+    c_tur = json.loads(custom_turrets_json) if custom_turrets_json else None
+    c_obs = json.loads(custom_obstacles_json) if custom_obstacles_json else None
+    c_nfz = json.loads(custom_nfz_json) if custom_nfz_json else None
+    return simulate_multiturret_site_defense_mc(
+        site_preset=site_preset,
+        custom_turrets=c_tur,
+        custom_obstacles=c_obs,
+        custom_nfz=c_nfz,
+        threat_altitude_m=threat_altitude_m,
+        threat_speed_mps=threat_speed_mps,
+        drone_model=drone_model,
+        weapon_max_range_m=weapon_max_range_m,
+        elevation_sdz_range_m=elevation_sdz_range_m,
+        n_raid_trials=n_raid_trials,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_intercept_replay(
+    mode: str,
+    layout_type: str,
+    n_barrels: int,
+    target_distance_m: float,
+    drone_model: str,
+    aspect_mode: str,
+    drone_speed_mps: float,
+    maneuver_profile: str,
+    maneuver_g: float,
+    ammunition_preset: str,
+    choke: str,
+    firing_mode: str,
+    ripple_delay_ms: float,
+    n_frames: int = 30,
+    max_visual_pellets: int = 84,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return generate_3d_intercept_replay_data(
+        mode=mode,
+        layout_type=layout_type,
+        n_barrels=n_barrels,
+        target_distance_m=target_distance_m,
+        drone_model=drone_model,
+        aspect_mode=aspect_mode,
+        drone_speed_mps=drone_speed_mps,
+        maneuver_profile=maneuver_profile,
+        maneuver_g=maneuver_g,
+        ammunition_preset=ammunition_preset,
+        choke=choke,
+        firing_mode=firing_mode,
+        ripple_delay_ms=ripple_delay_ms,
+        n_frames=n_frames,
+        max_visual_pellets=max_visual_pellets,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_sustained_logistics(
+    n_waves: int,
+    drones_per_wave: int,
+    wave_interval_s: float,
+    n_barrels: int,
+    ammo_family: str,
+    magazine_type: str,
+    barrel_mass_kg: float,
+    ambient_temp_c: float,
+    target_range_m: float,
+    drone_model: str,
+    aspect_mode: str,
+    n_trials: int = 60,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return simulate_cuas_sustained_logistics_mc(
+        n_waves=n_waves,
+        drones_per_wave=drones_per_wave,
+        wave_interval_s=wave_interval_s,
+        n_barrels=n_barrels,
+        ammo_family=ammo_family,
+        magazine_type=magazine_type,
+        barrel_mass_kg=barrel_mass_kg,
+        ambient_temp_c=ambient_temp_c,
+        target_range_m=target_range_m,
+        drone_model=drone_model,
+        aspect_mode=aspect_mode,
+        n_trials=n_trials,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_compare_ab(
+    configs_json: str,
+    drone_model: str,
+    aspect_mode: str,
+    target_distance_m: float,
+    drone_speed_mps: float,
+    weather: str,
+    fiber_optic_autonomous: bool,
+    n_swarm_drones: int,
+    n_waves: int,
+    drones_per_wave: int,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return compare_cuas_architectures_ab(
+        configs=json.loads(configs_json) if configs_json else None,
+        drone_model=drone_model,
+        aspect_mode=aspect_mode,
+        target_distance_m=target_distance_m,
+        drone_speed_mps=drone_speed_mps,
+        weather=weather,
+        fiber_optic_autonomous=fiber_optic_autonomous,
+        n_swarm_drones=n_swarm_drones,
+        n_waves=n_waves,
+        drones_per_wave=drones_per_wave,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_layered_defense(
+    outer_layer_id: str,
+    outer_magazine: int,
+    n_waves: int,
+    drones_per_wave: int,
+    wave_interval_s: float,
+    fiber_optic_fraction: float,
+    weather: str,
+    inner_n_barrels: int,
+    inner_ammo_family: str,
+    inner_magazine_type: str,
+    target_range_m: float,
+    drone_model: str,
+    n_trials: int = 60,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return simulate_layered_cuas_defense_mc(
+        outer_layer_id=outer_layer_id,
+        outer_magazine=outer_magazine,
+        n_waves=n_waves,
+        drones_per_wave=drones_per_wave,
+        wave_interval_s=wave_interval_s,
+        fiber_optic_fraction=fiber_optic_fraction,
+        weather=weather,
+        inner_n_barrels=inner_n_barrels,
+        inner_ammo_family=inner_ammo_family,
+        inner_magazine_type=inner_magazine_type,
+        target_range_m=target_range_m,
+        drone_model=drone_model,
+        n_trials=n_trials,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_cuas_tornado(
+    baseline_cfg_json: str,
+    perturbation_pct: float,
+    n_trials: int = 75,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return analyze_cuas_sensitivity_tornado(
+        baseline_cfg=json.loads(baseline_cfg_json) if baseline_cfg_json else None,
+        perturbation_pct=perturbation_pct,
+        n_trials=n_trials,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_artillery_tornado(
+    ammo_json: str,
+    scn_json: str,
+    perturbation_pct: float,
+    solved_qe_rad: float | None = None,
+    seed: int = 42,
+) -> dict[str, Any]:
+    from ammo_mc.schemas import AmmoDefinition, Scenario
+
+    ammo_obj = AmmoDefinition.model_validate_json(ammo_json)
+    scn_obj = Scenario.model_validate_json(scn_json)
+    return analyze_artillery_sensitivity_tornado(
+        ammo=ammo_obj,
+        scenario=scn_obj,
+        perturbation_pct=perturbation_pct,
+        solved_qe_rad=solved_qe_rad,
+        seed=seed,
+    )
+
+
+# -------------------------------------------------------------------------
+# NAVIGATION CALLBACKS & URL DEEP-LINKING
+# -------------------------------------------------------------------------
+
+def _set_active_workbench(wb_name: str) -> None:
+    st.session_state["active_workbench"] = wb_name
+
+
+def _set_cuas_module(mod_name: str) -> None:
+    st.session_state["cuas_wb_suite"] = _CUAS_SUITES[0]
+    st.session_state["cuas18_active_module"] = mod_name
+
+
+def init_from_query_params() -> None:
+    """Hydrate workbench & module selection from URL query params once before widgets render."""
+    if st.session_state.get("_qp_initialized"):
+        return
+    try:
+        qp = st.query_params
+        wb_slug = qp.get("wb")
+        if isinstance(wb_slug, list):
+            wb_slug = wb_slug[0] if wb_slug else None
+        if wb_slug and str(wb_slug).lower() in _SLUG_TO_WORKBENCH:
+            st.session_state["active_workbench"] = _SLUG_TO_WORKBENCH[str(wb_slug).lower()]
+
+        mod_slug = qp.get("mod")
+        if isinstance(mod_slug, list):
+            mod_slug = mod_slug[0] if mod_slug else None
+        if mod_slug:
+            m_low = str(mod_slug).lower()
+            if m_low in _SLUG_TO_CUAS_MOD:
+                st.session_state["cuas_wb_suite"] = _CUAS_SUITES[0]
+                st.session_state["cuas18_active_module"] = _SLUG_TO_CUAS_MOD[m_low]
+            elif m_low == "small_arms":
+                st.session_state["cuas_wb_suite"] = _CUAS_SUITES[1]
+    except Exception:
+        pass
+    st.session_state["_qp_initialized"] = True
+
+
+def sync_query_params() -> None:
+    """Persist active workbench and C-UAS sub-module to URL query params safely."""
+    try:
+        active_wb = st.session_state.get("active_workbench", _WORKBENCH_OPTIONS[0])
+        wb_slug = _WORKBENCH_SLUGS.get(active_wb, "sim")
+        st.query_params["wb"] = wb_slug
+        if wb_slug == "cuas":
+            suite = st.session_state.get("cuas_wb_suite", _CUAS_SUITES[0])
+            if suite == _CUAS_SUITES[0]:
+                mod = st.session_state.get("cuas18_active_module", _CUAS18_MODULES[0])
+                st.query_params["mod"] = _CUAS_MOD_SLUGS.get(mod, "fcs")
+            else:
+                st.query_params["mod"] = "small_arms"
+        elif "mod" in st.query_params:
+            del st.query_params["mod"]
+    except Exception:
+        pass
+
+
+def build_deeplink_query() -> str:
+    """Return relative shareable query string for current workbench/module."""
+    active_wb = st.session_state.get("active_workbench", _WORKBENCH_OPTIONS[0])
+    wb_slug = _WORKBENCH_SLUGS.get(active_wb, "sim")
+    if wb_slug == "cuas":
+        suite = st.session_state.get("cuas_wb_suite", _CUAS_SUITES[0])
+        if suite == _CUAS_SUITES[0]:
+            mod = st.session_state.get("cuas18_active_module", _CUAS18_MODULES[0])
+            return f"?wb=cuas&mod={_CUAS_MOD_SLUGS.get(mod, 'fcs')}"
+        return "?wb=cuas&mod=small_arms"
+    return f"?wb={wb_slug}"
+
+
+def _render_sidebar_header(title: str, subtitle: str) -> None:
+    st.markdown(
+        f"""
+        <div class="sb-wb-badge">
+            <div class="sb-wb-kicker">ACTIVE WORKBENCH</div>
+            <div class="sb-wb-title">{title}</div>
+            <div class="sb-wb-sub">{subtitle}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _configure_page_and_styles() -> None:
+    """Configure page metadata and inject theme-adaptive CSS styles on each run."""
+    st.set_page_config(
+        page_title="Ballistics & Dispersion Monte Carlo Workbench",
+        page_icon="🎯",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
+
+    st.markdown(
+        """
+        <style>
+        .main-title { font-size: 2.15rem; font-weight: 800; color: var(--text-color, #F8FAFC); margin-bottom: 0.15rem; }
+        .sub-title { font-size: 1.02rem; color: var(--text-color, #CBD5E1); opacity: 0.80; margin-bottom: 1.0rem; }
+        .gov-banner { background-color: rgba(245, 158, 11, 0.14); border: 1px solid rgba(245, 158, 11, 0.35); border-left: 5px solid #F59E0B; color: var(--text-color, #F8FAFC); padding: 0.75rem 1rem; border-radius: 4px; margin-bottom: 1.0rem; font-size: 0.86rem; }
+        .flag-banner { background-color: rgba(239, 68, 68, 0.14); border: 1px solid rgba(239, 68, 68, 0.35); border-left: 5px solid #EF4444; color: var(--text-color, #F8FAFC); padding: 0.75rem 1rem; border-radius: 4px; margin-bottom: 1.0rem; font-size: 0.86rem; }
+        .epistemic-banner { background-color: rgba(59, 130, 246, 0.14); border: 1px solid rgba(59, 130, 246, 0.35); border-left: 5px solid #3B82F6; color: var(--text-color, #F8FAFC); padding: 0.75rem 1rem; border-radius: 4px; margin-bottom: 1.0rem; font-size: 0.88rem; }
+        .auth-card { background-color: rgba(148, 163, 184, 0.08); border: 1px solid rgba(148, 163, 184, 0.25); border-radius: 10px; padding: 1.5rem 1.75rem; margin-top: 2.5rem; margin-bottom: 1rem; }
+        .sb-wb-badge { background-color: rgba(59, 130, 246, 0.12); border: 1px solid rgba(59, 130, 246, 0.30); border-radius: 8px; padding: 0.65rem 0.8rem; margin-bottom: 0.75rem; color: var(--text-color, #F8FAFC); }
+        .sb-wb-kicker { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em; opacity: 0.72; text-transform: uppercase; margin-bottom: 0.15rem; }
+        .sb-wb-title { font-size: 1.02rem; font-weight: 700; line-height: 1.25; }
+        .sb-wb-sub { font-size: 0.78rem; opacity: 0.80; margin-top: 0.2rem; line-height: 1.3; }
+        [data-testid="stMetricValue"] { font-size: 1.55rem !important; line-height: 1.25 !important; white-space: normal !important; overflow-wrap: break-word !important; }
+        [data-testid="stMetricDelta"] > div { white-space: normal !important; overflow-wrap: break-word !important; font-size: 0.80rem !important; }
+        [data-testid="stMetricLabel"] p { white-space: normal !important; line-height: 1.2 !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def require_password() -> bool:
+    """Gate workbench access behind a session password prompt on launch."""
+    if st.session_state.setdefault("authenticated", False):
+        return True
+
+    st.markdown("<style>[data-testid='stSidebar'] { display: none; }</style>", unsafe_allow_html=True)
+    _, col_auth, _ = st.columns([1.1, 1.4, 1.1])
+    with col_auth:
+        st.markdown(
+            """
+            <div class="auth-card">
+                <div style="font-size: 1.45rem; font-weight: 700; margin-bottom: 0.35rem;">
+                    🔒 Ballistics & Dispersion Monte Carlo Workbench
+                </div>
+                <div style="font-size: 0.92rem; opacity: 0.82;">
+                    Protected engineering workbench — enter the access password to continue.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        with st.form("auth_login_form", clear_on_submit=False):
+            entered_pw = st.text_input(
+                "Access Password",
+                type="password",
+                placeholder="Enter password...",
+                key="auth_pw_field",
+            )
+            submitted = st.form_submit_button("🔓 Unlock Workbench", width="stretch", type="primary")
+        if submitted:
+            try:
+                secrets_map = st.secrets
+            except Exception:
+                secrets_map = None
+            if verify_app_password(entered_pw, secrets_mapping=secrets_map):
+                st.session_state["authenticated"] = True
+                st.rerun()
+            else:
+                st.error("❌ Incorrect password. Please try again.")
+    return False
+
+
+def render_header() -> None:
+    st.markdown(
+        '<div class="main-title">🎯 Ballistics, Dispersion & Terminal Physics Monte Carlo Workbench</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="sub-title">End-to-end stochastic engineering simulation: Interior Thermodynamics (STANAG 4367) → Exterior 3-DoF / Modified Point Mass (STANAG 4355) → Fuze Reliability → Pressure/Fragmentation Kinematics → Dispersion & Vulnerability.</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"""
+        <div class="gov-banner">
+        <b>GOVERNANCE & USE LIMITATION NOTICE:</b> {USE_LIMITATION_NOTICE}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
