@@ -1,0 +1,81 @@
+"""Small Arms Ballistics, Shotgun Patterning & Anti-Drone Dispersion Package."""
+
+from __future__ import annotations
+
+from .catalogs import (
+    GAUGE_BORE_DIAMETERS_M,
+    CHOKE_DEFINITIONS,
+    PELLET_SPECIFICATIONS,
+    SHOTGUN_PRESETS,
+    MULTIBARREL_PRESETS,
+    get_shotgun_presets,
+    get_choke_definitions,
+    get_multibarrel_presets,
+    get_pellet_specifications,
+    DRONE_TARGET_SPECS,
+    get_drone_target_specs,
+    DRONE_ASPECT_PRESETS,
+    get_drone_aspect_presets,
+    STANDARD_BARREL_LENGTHS,
+    get_standard_barrel_lengths,
+)
+from .geometry import (
+    _convex_hull_2d,
+    polygon_area,
+    point_in_convex_polygon,
+    compute_drone_projected_geometry,
+    check_target_hit,
+    evaluate_drone_impact,
+)
+from .ballistics import (
+    simulate_shotgun_pattern_mc,
+    simulate_multibarrel_burst_mc,
+    evaluate_shotgun_dispersion_vs_distance,
+    evaluate_multibarrel_dispersion_vs_distance,
+    benchmark_multibarrel_aspect_angles_mc,
+    compare_barrel_lengths_dispersion,
+)
+from .arrays import (
+    generate_multishotgun_array_layout,
+    compute_balanced_pair_fire_times,
+    configure_array_pointing_vectors,
+    simulate_anti_drone_multishotgun_mc,
+    benchmark_drone_aspect_angles_mc,
+    compare_anti_drone_layouts,
+)
+
+__all__ = [
+    "GAUGE_BORE_DIAMETERS_M",
+    "CHOKE_DEFINITIONS",
+    "PELLET_SPECIFICATIONS",
+    "SHOTGUN_PRESETS",
+    "MULTIBARREL_PRESETS",
+    "get_shotgun_presets",
+    "get_choke_definitions",
+    "get_multibarrel_presets",
+    "get_pellet_specifications",
+    "DRONE_TARGET_SPECS",
+    "get_drone_target_specs",
+    "DRONE_ASPECT_PRESETS",
+    "get_drone_aspect_presets",
+    "STANDARD_BARREL_LENGTHS",
+    "get_standard_barrel_lengths",
+    "_convex_hull_2d",
+    "polygon_area",
+    "point_in_convex_polygon",
+    "compute_drone_projected_geometry",
+    "check_target_hit",
+    "evaluate_drone_impact",
+    "simulate_shotgun_pattern_mc",
+    "simulate_multibarrel_burst_mc",
+    "evaluate_shotgun_dispersion_vs_distance",
+    "evaluate_multibarrel_dispersion_vs_distance",
+    "benchmark_multibarrel_aspect_angles_mc",
+    "compare_barrel_lengths_dispersion",
+    "generate_multishotgun_array_layout",
+    "compute_balanced_pair_fire_times",
+    "configure_array_pointing_vectors",
+    "simulate_anti_drone_multishotgun_mc",
+    "benchmark_drone_aspect_angles_mc",
+    "compare_anti_drone_layouts",
+]

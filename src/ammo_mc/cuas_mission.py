@@ -518,13 +518,15 @@ def _segment_crosses_obstacle_3d(
     p0: tuple[float, float, float],
     p1: tuple[float, float, float],
     obs: dict[str, Any],
+    z_base_m: float = 0.0,
 ) -> bool:
     """Return True if 3D line segment p0->p1 intersects an axis-aligned obstacle prism."""
     xmin = float(obs["x_m"]) - 0.5 * float(obs["width_m"])
     xmax = float(obs["x_m"]) + 0.5 * float(obs["width_m"])
     ymin = float(obs["y_m"]) - 0.5 * float(obs["length_m"])
     ymax = float(obs["y_m"]) + 0.5 * float(obs["length_m"])
-    z_top = float(obs["height_m"])
+    z_min = float(z_base_m)
+    z_top = z_min + float(obs["height_m"])
 
     # Liang-Barsky slab intersection in 3D [0, 1]
     dx = p1[0] - p0[0]
@@ -536,7 +538,7 @@ def _segment_crosses_obstacle_3d(
         (dx, xmax - p0[0]),
         (-dy, p0[1] - ymin),
         (dy, ymax - p0[1]),
-        (-dz, p0[2] - 0.0),
+        (-dz, p0[2] - z_min),
         (dz, z_top - p0[2]),
     ]:
         if abs(p) < 1e-12:
@@ -581,6 +583,7 @@ def simulate_multiturret_site_defense_mc(
     custom_turrets: list[dict[str, Any]] | None = None,
     custom_obstacles: list[dict[str, Any]] | None = None,
     custom_nfz: list[dict[str, Any]] | None = None,
+    terrain_dem: Any | None = None,
     threat_altitude_m: float = 22.0,
     threat_speed_mps: float = 22.0,
     drone_model: str = "fpv_quad_small",
@@ -589,13 +592,24 @@ def simulate_multiturret_site_defense_mc(
     n_raid_trials: int = 80,
     seed: int = 42,
 ) -> dict[str, Any]:
-    """Evaluate 360-deg coverage, obstacle LOS blind spots, NFZ fallout conflicts, and multi-turret raid stops."""
+    """Evaluate 360-deg coverage, obstacle & DEM terrain LOS blind spots, NFZ fallout conflicts, and raids."""
     rng = np.random.default_rng(seed)
     site = SITE_DEFENSE_PRESETS.get(site_preset, SITE_DEFENSE_PRESETS["fob_compound_4_turret"])
     turrets = [dict(t) for t in (custom_turrets if custom_turrets is not None else site["turrets"])]
     obstacles = [dict(o) for o in (custom_obstacles if custom_obstacles is not None else site["obstacles"])]
     nfz_zones = [dict(n) for n in (custom_nfz if custom_nfz is not None else site["nfz_sectors"])]
     asset_r = float(site.get("asset_radius_m", 40.0))
+
+    if terrain_dem is not None:
+        from ammo_mc.terrain_dem import segment_crosses_terrain_dem, summarize_site_terrain_fallout
+
+        obs_z_bases = [float(terrain_dem.elevation_at(float(o["x_m"]), float(o["y_m"]))) for o in obstacles]
+        turret_ground_z = [float(terrain_dem.elevation_at(float(t["x_m"]), float(t["y_m"]))) for t in turrets]
+        center_ground_z = float(terrain_dem.elevation_at(0.0, 0.0))
+    else:
+        obs_z_bases = [0.0 for _ in obstacles]
+        turret_ground_z = [0.0 for _ in turrets]
+        center_ground_z = 0.0
 
     drone_specs = get_drone_target_specs()
     drone_spec = drone_specs.get(drone_model, drone_specs["fpv_quad_small"])
@@ -607,20 +621,24 @@ def simulate_multiturret_site_defense_mc(
     azimuth_profile: list[dict[str, Any]] = []
     blind_azimuths: list[float] = []
     nfz_conflict_bins = 0
+    terrain_masked_bins = 0
 
     for idx in range(72):
         az = idx * 5.0
         az_rad = math.radians(az)
         tx_tgt = eval_r * math.cos(az_rad)
         ty_tgt = eval_r * math.sin(az_rad)
-        tz_tgt = float(threat_altitude_m)
+        g_tgt = float(terrain_dem.elevation_at(tx_tgt, ty_tgt)) if terrain_dem is not None else 0.0
+        tz_tgt = max(g_tgt + 3.0, center_ground_z + float(threat_altitude_m))
 
         active_count = 0
         los_blocked_any = False
+        terr_blocked_any = False
         nfz_blocked_any = False
 
-        for t in turrets:
-            tx, ty, tz = float(t["x_m"]), float(t["y_m"]), float(t.get("z_m", 3.5))
+        for t_idx, t in enumerate(turrets):
+            tx, ty = float(t["x_m"]), float(t["y_m"])
+            tz = turret_ground_z[t_idx] + float(t.get("z_m", 3.5))
             dx, dy, dz = tx_tgt - tx, ty_tgt - ty, tz_tgt - tz
             horiz_dist = math.hypot(dx, dy)
             slant_dist = math.sqrt(dx * dx + dy * dy + dz * dz)
@@ -632,7 +650,15 @@ def simulate_multiturret_site_defense_mc(
             if abs(_angle_diff_deg(ray_az, float(t.get("boresight_az_deg", ray_az)))) > float(t.get("sector_half_deg", 180.0)):
                 continue
 
-            if any(_segment_crosses_obstacle_3d((tx, ty, tz), (tx_tgt, ty_tgt, tz_tgt), obs) for obs in obstacles):
+            if any(
+                _segment_crosses_obstacle_3d((tx, ty, tz), (tx_tgt, ty_tgt, tz_tgt), obs, z_base_m=obs_z_bases[oi])
+                for oi, obs in enumerate(obstacles)
+            ):
+                los_blocked_any = True
+                continue
+
+            if terrain_dem is not None and segment_crosses_terrain_dem((tx, ty, tz), (tx_tgt, ty_tgt, tz_tgt), terrain_dem):
+                terr_blocked_any = True
                 los_blocked_any = True
                 continue
 
@@ -645,6 +671,8 @@ def simulate_multiturret_site_defense_mc(
 
         if active_count == 0:
             blind_azimuths.append(az)
+        if terr_blocked_any:
+            terrain_masked_bins += 1
         if nfz_blocked_any:
             nfz_conflict_bins += 1
 
@@ -653,6 +681,7 @@ def simulate_multiturret_site_defense_mc(
                 "az_deg": az,
                 "active_turrets": active_count,
                 "los_blocked": bool(los_blocked_any),
+                "terrain_masked": bool(terr_blocked_any),
                 "nfz_restricted": bool(nfz_blocked_any),
             }
         )
@@ -661,6 +690,7 @@ def simulate_multiturret_site_defense_mc(
     cov_2plus = sum(1 for row in azimuth_profile if row["active_turrets"] >= 2) / 72.0 * 100.0
     blind_pct = len(blind_azimuths) / 72.0 * 100.0
     nfz_conflict_pct = nfz_conflict_bins / 72.0 * 100.0
+    terr_masked_pct = terrain_masked_bins / 72.0 * 100.0
 
     # Monte Carlo incoming raid checks across random azimuths
     turret_kills = {t["id"]: 0 for t in turrets}
@@ -673,10 +703,13 @@ def simulate_multiturret_site_defense_mc(
         az = float(rng.uniform(0.0, 360.0))
         az_rad = math.radians(az)
         sx, sy = start_r * math.cos(az_rad), start_r * math.sin(az_rad)
+        sz_g = float(terrain_dem.elevation_at(sx, sy)) if terrain_dem is not None else 0.0
+        sz = sz_g + float(threat_altitude_m)
         ux_in, uy_in = -math.cos(az_rad), -math.sin(az_rad)
 
         killed = False
         end_x, end_y = asset_r * 0.6 * math.cos(az_rad), asset_r * 0.6 * math.sin(az_rad)
+        end_z = (float(terrain_dem.elevation_at(end_x, end_y)) if terrain_dem is not None else 0.0) + float(threat_altitude_m)
         killer_id = "NONE"
 
         # Step drone inward along approach path every 0.4s
@@ -687,10 +720,12 @@ def simulate_multiturret_site_defense_mc(
                 break
             dx_pos = sx + st_idx * threat_speed_mps * 0.4 * ux_in
             dy_pos = sy + st_idx * threat_speed_mps * 0.4 * uy_in
-            dz_pos = float(threat_altitude_m)
+            g_pos = float(terrain_dem.elevation_at(dx_pos, dy_pos)) if terrain_dem is not None else 0.0
+            dz_pos = g_pos + float(threat_altitude_m)
 
-            for t in turrets:
-                tx, ty, tz = float(t["x_m"]), float(t["y_m"]), float(t.get("z_m", 3.5))
+            for t_idx, t in enumerate(turrets):
+                tx, ty = float(t["x_m"]), float(t["y_m"])
+                tz = turret_ground_z[t_idx] + float(t.get("z_m", 3.5))
                 vx, vy, vz = dx_pos - tx, dy_pos - ty, dz_pos - tz
                 hdist = math.hypot(vx, vy)
                 sdist = math.sqrt(vx * vx + vy * vy + vz * vz)
@@ -700,7 +735,12 @@ def simulate_multiturret_site_defense_mc(
                 ray_az = math.degrees(math.atan2(vy, vx)) % 360.0
                 if abs(_angle_diff_deg(ray_az, float(t.get("boresight_az_deg", ray_az)))) > float(t.get("sector_half_deg", 180.0)):
                     continue
-                if any(_segment_crosses_obstacle_3d((tx, ty, tz), (dx_pos, dy_pos, dz_pos), obs) for obs in obstacles):
+                if any(
+                    _segment_crosses_obstacle_3d((tx, ty, tz), (dx_pos, dy_pos, dz_pos), obs, z_base_m=obs_z_bases[oi])
+                    for oi, obs in enumerate(obstacles)
+                ):
+                    continue
+                if terrain_dem is not None and segment_crosses_terrain_dem((tx, ty, tz), (dx_pos, dy_pos, dz_pos), terrain_dem):
                     continue
                 if any(_ray_hits_circle_2d(tx, ty, vx / hdist, vy / hdist, elevation_sdz_range_m, float(n["x_m"]), float(n["y_m"]), float(n["radius_m"])) for n in nfz_zones):
                     continue
@@ -721,7 +761,7 @@ def simulate_multiturret_site_defense_mc(
                 )
                 if float(rng.random()) < pk_b:
                     killed = True
-                    end_x, end_y = dx_pos, dy_pos
+                    end_x, end_y, end_z = dx_pos, dy_pos, dz_pos
                     killer_id = t["id"]
                     turret_kills[t["id"]] += 1
                     break
@@ -737,24 +777,35 @@ def simulate_multiturret_site_defense_mc(
                     "id": f"Raid-{r_i+1}",
                     "sx": round(sx, 2),
                     "sy": round(sy, 2),
+                    "sz": round(sz, 2),
                     "ex": round(end_x, 2),
                     "ey": round(end_y, 2),
+                    "ez": round(end_z, 2),
                     "status": "killed" if killed else "leaker",
                     "killer": killer_id,
                 }
             )
+
+    terrain_fallout: dict[str, Any] = {}
+    terrain_relief_m = 0.0
+    terrain_source = "Flat 0 m Datum"
+    if terrain_dem is not None:
+        terrain_fallout = summarize_site_terrain_fallout(turrets=turrets, dem=terrain_dem)
+        terrain_relief_m = float(terrain_dem.stats()["relief_m"])
+        terrain_source = terrain_dem.name
 
     turret_workload = [
         {
             "turret_id": t["id"],
             "x_m": t["x_m"],
             "y_m": t["y_m"],
+            "ground_elev_m": round(turret_ground_z[ti], 2),
             "boresight_az_deg": t.get("boresight_az_deg", 0.0),
             "sector_half_deg": t.get("sector_half_deg", 180.0),
             "bursts_fired": turret_shots[t["id"]],
             "kills": turret_kills[t["id"]],
         }
-        for t in turrets
+        for ti, t in enumerate(turrets)
     ]
 
     return {
@@ -770,6 +821,12 @@ def simulate_multiturret_site_defense_mc(
             "blind_spot_pct": round(blind_pct, 1),
             "blind_spot_count": len(blind_azimuths),
             "blind_spot_azimuths_deg": blind_azimuths[:12],
+            "terrain_masked_pct": round(terr_masked_pct, 1),
+            "terrain_relief_m": round(terrain_relief_m, 2),
+            "terrain_source": terrain_source,
+            "flat_fallout_m": terrain_fallout.get("flat_fallout_m"),
+            "terrain_fallout_min_m": terrain_fallout.get("terrain_fallout_min_m"),
+            "terrain_fallout_max_m": terrain_fallout.get("terrain_fallout_max_m"),
             "nfz_fallout_conflict_pct": round(nfz_conflict_pct, 1),
             "site_zero_breach_pct": round((stopped_raids / max(n_raid_trials, 1)) * 100.0, 1),
         },
@@ -779,6 +836,7 @@ def simulate_multiturret_site_defense_mc(
         "azimuth_profile": azimuth_profile,
         "sample_tracks": sample_tracks,
         "turret_workload": turret_workload,
+        "terrain_fallout_profile": terrain_fallout.get("azimuth_samples", []),
     }
 
 

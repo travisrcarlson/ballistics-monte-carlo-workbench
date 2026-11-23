@@ -18,13 +18,13 @@ def test_ui_password_gate_reject_and_unlock(monkeypatch: pytest.MonkeyPatch) -> 
     assert not at.session_state["authenticated"]
 
     # Wrong password keeps screen locked with error
-    at.text_input(key="auth_pw_field").input("wrong-password").run()
+    at.text_input(key="auth_pw_field").set_value("wrong-password")
     at.button[0].click().run()
     assert not at.session_state["authenticated"]
     assert len(at.error) >= 1
 
     # Valid password unlocks into default Monte Carlo Simulator workbench
-    at.text_input(key="auth_pw_field").input("ci-ui-pass").run()
+    at.text_input(key="auth_pw_field").set_value("ci-ui-pass")
     at.button[0].click().run()
     assert at.session_state["authenticated"] is True
     assert not at.exception
@@ -37,9 +37,12 @@ def test_ui_password_gate_reject_and_unlock(monkeypatch: pytest.MonkeyPatch) -> 
         ("cuas", "comparator", "🛸 C-UAS & Small Arms"),
         ("cuas", "site_defense", "🛸 C-UAS & Small Arms"),
         ("cuas", "sensitivity", "🛸 C-UAS & Small Arms"),
+        ("cuas", "raid", "🛸 C-UAS & Small Arms"),
+        ("cuas", "calibration", "🛸 C-UAS & Small Arms"),
         ("mcdrag", None, "🚀 MCDRAG & 3D CAD"),
         ("iatg", None, "🏛️ UNODA IATG Safety"),
         ("validation", None, "✅ Validation Suite"),
+        ("literature", None, "📚 Literature & Sources"),
     ],
 )
 def test_ui_deeplinks_and_contextual_sidebars(

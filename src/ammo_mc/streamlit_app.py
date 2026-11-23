@@ -11,9 +11,11 @@ _SRC_DIR = str(Path(__file__).resolve().parents[1])
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
+from ammo_mc import __version__  # noqa: E402
 from ammo_mc.ui.common import (  # noqa: E402,F401
     _WORKBENCH_OPTIONS,
     _configure_page_and_styles,
+    _set_active_workbench,
     build_deeplink_query,
     init_from_query_params,
     render_header,
@@ -23,6 +25,7 @@ from ammo_mc.ui.common import (  # noqa: E402,F401
 from ammo_mc.ui.cuas import tab_cuas_and_small_arms  # noqa: E402
 from ammo_mc.ui.firing_tables import tab_firing_tables  # noqa: E402
 from ammo_mc.ui.iatg import tab_iatg  # noqa: E402
+from ammo_mc.ui.literature import tab_literature  # noqa: E402
 from ammo_mc.ui.mcdrag import tab_mcdrag  # noqa: E402
 from ammo_mc.ui.physics_labs import tab_calculators  # noqa: E402
 from ammo_mc.ui.sim_3d import tab_3d_simulation  # noqa: E402
@@ -63,12 +66,23 @@ def main() -> None:
         tab_firing_tables()
     elif active_wb == "✅ Validation Suite":
         tab_validation()
+    elif active_wb == "📚 Literature & Sources":
+        tab_literature()
 
     sync_query_params()
 
     with st.sidebar:
         st.divider()
+        st.caption(f"ammo-mc v{__version__} • 68 Sources • 96 Formulas")
         st.caption(f"🔗 Shareable view: `{build_deeplink_query()}`")
+        if active_wb != "📚 Literature & Sources":
+            st.button(
+                "📚 View Scientific Sources",
+                on_click=_set_active_workbench,
+                args=("📚 Literature & Sources",),
+                width="stretch",
+                key="sidebar_jump_literature_btn",
+            )
         if st.button("🔒 Lock Workbench", width="stretch", key="lock_workbench_btn"):
             st.session_state["authenticated"] = False
             st.rerun()

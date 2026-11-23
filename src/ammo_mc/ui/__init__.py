@@ -10,6 +10,7 @@ from ammo_mc.ui.common import (
 from ammo_mc.ui.cuas import tab_cuas_and_small_arms
 from ammo_mc.ui.firing_tables import tab_firing_tables
 from ammo_mc.ui.iatg import tab_iatg
+from ammo_mc.ui.literature import tab_literature
 from ammo_mc.ui.mcdrag import tab_mcdrag
 from ammo_mc.ui.physics_labs import tab_calculators
 from ammo_mc.ui.sim_3d import tab_3d_simulation
@@ -27,6 +28,7 @@ __all__ = [
     "tab_cuas_and_small_arms",
     "tab_firing_tables",
     "tab_iatg",
+    "tab_literature",
     "tab_mcdrag",
     "tab_simulator",
     "tab_validation",

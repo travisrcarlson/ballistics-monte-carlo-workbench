@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 import streamlit as st
 
-from ammo_mc.auth import verify_app_password
+from ammo_mc.auth import LoginRateLimiter, verify_app_password
 from ammo_mc.cuas_analytics import (
     analyze_artillery_sensitivity_tornado,
     analyze_cuas_sensitivity_tornado,
@@ -46,6 +47,7 @@ _WORKBENCH_OPTIONS = [
     "🏛️ UNODA IATG Safety",
     "📋 Firing Tables & Met",
     "✅ Validation Suite",
+    "📚 Literature & Sources",
 ]
 
 _WORKBENCH_SLUGS: dict[str, str] = {
@@ -57,11 +59,12 @@ _WORKBENCH_SLUGS: dict[str, str] = {
     "🏛️ UNODA IATG Safety": "iatg",
     "📋 Firing Tables & Met": "firing",
     "✅ Validation Suite": "validation",
+    "📚 Literature & Sources": "literature",
 }
 _SLUG_TO_WORKBENCH: dict[str, str] = {v: k for k, v in _WORKBENCH_SLUGS.items()}
 
 _CUAS_SUITES = [
-    "🛸 C-UAS Turret Suite (11 Modules)",
+    "🛸 C-UAS Turret Suite (13 Modules)",
     "🔫 Small Arms & Multi-Barrel Array (5 Modes)",
 ]
 
@@ -77,6 +80,8 @@ _CUAS18_MODULES = [
     "🔥 9. Logistics, Barrel Heat, $/Kill & Report",
     "⚔️ 10. A/B Turret Comparator & Layered Defense",
     "📊 11. Sensitivity & Bottleneck Tornado",
+    "⚔️ 12. Unified 3D Tactical Raid Simulator",
+    "🧪 13. Field-Test Calibration & Residuals",
 ]
 
 _CUAS_MOD_SLUGS: dict[str, str] = {
@@ -91,6 +96,8 @@ _CUAS_MOD_SLUGS: dict[str, str] = {
     _CUAS18_MODULES[8]: "logistics",
     _CUAS18_MODULES[9]: "comparator",
     _CUAS18_MODULES[10]: "sensitivity",
+    _CUAS18_MODULES[11]: "raid",
+    _CUAS18_MODULES[12]: "calibration",
 }
 _SLUG_TO_CUAS_MOD: dict[str, str] = {v: k for k, v in _CUAS_MOD_SLUGS.items()}
 
@@ -381,17 +388,22 @@ def _cached_site_defense(
     custom_turrets_json: str = "",
     custom_obstacles_json: str = "",
     custom_nfz_json: str = "",
+    terrain_dem_json: str = "",
     n_raid_trials: int = 80,
     seed: int = 42,
 ) -> dict[str, Any]:
+    from ammo_mc.terrain_dem import TerrainDEMGrid
+
     c_tur = json.loads(custom_turrets_json) if custom_turrets_json else None
     c_obs = json.loads(custom_obstacles_json) if custom_obstacles_json else None
     c_nfz = json.loads(custom_nfz_json) if custom_nfz_json else None
+    dem_obj = TerrainDEMGrid.from_dict(json.loads(terrain_dem_json)) if terrain_dem_json else None
     return simulate_multiturret_site_defense_mc(
         site_preset=site_preset,
         custom_turrets=c_tur,
         custom_obstacles=c_obs,
         custom_nfz=c_nfz,
+        terrain_dem=dem_obj,
         threat_altitude_m=threat_altitude_m,
         threat_speed_mps=threat_speed_mps,
         drone_model=drone_model,
@@ -574,6 +586,60 @@ def _cached_artillery_tornado(
     )
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_unified_raid(
+    site_preset: str,
+    custom_turrets_json: str,
+    custom_obstacles_json: str,
+    custom_nfz_json: str,
+    terrain_dem_json: str,
+    sensors_tuple: tuple[str, ...],
+    weather_condition: str,
+    n_drones: int,
+    fiber_optic_fraction: float,
+    drone_model: str,
+    approach_pattern: str,
+    evasion_profile: str,
+    maneuver_g: float,
+    threat_speed_mps: float,
+    threat_altitude_m: float,
+    stagger_window_s: float,
+    ammunition_preset: str,
+    choke: str,
+    magazine_type: str,
+    weapon_max_range_m: float,
+    n_mc_trials: int = 30,
+    seed: int = 42,
+) -> dict[str, Any]:
+    from ammo_mc.cuas_raid import simulate_unified_tactical_raid_mc
+    from ammo_mc.terrain_dem import TerrainDEMGrid
+
+    return simulate_unified_tactical_raid_mc(
+        site_preset=site_preset,
+        custom_turrets=json.loads(custom_turrets_json) if custom_turrets_json else None,
+        custom_obstacles=json.loads(custom_obstacles_json) if custom_obstacles_json else None,
+        custom_nfz=json.loads(custom_nfz_json) if custom_nfz_json else None,
+        terrain_dem=TerrainDEMGrid.from_dict(json.loads(terrain_dem_json)) if terrain_dem_json else None,
+        sensors=list(sensors_tuple),
+        weather_condition=weather_condition,
+        n_drones=n_drones,
+        fiber_optic_fraction=fiber_optic_fraction,
+        drone_model=drone_model,
+        approach_pattern=approach_pattern,
+        evasion_profile=evasion_profile,
+        maneuver_g=maneuver_g,
+        threat_speed_mps=threat_speed_mps,
+        threat_altitude_m=threat_altitude_m,
+        stagger_window_s=stagger_window_s,
+        ammunition_preset=ammunition_preset,
+        choke=choke,
+        magazine_type=magazine_type,
+        weapon_max_range_m=weapon_max_range_m,
+        n_mc_trials=n_mc_trials,
+        seed=seed,
+    )
+
+
 # -------------------------------------------------------------------------
 # NAVIGATION CALLBACKS & URL DEEP-LINKING
 # -------------------------------------------------------------------------
@@ -691,9 +757,14 @@ def _configure_page_and_styles() -> None:
 
 
 def require_password() -> bool:
-    """Gate workbench access behind a session password prompt on launch."""
+    """Gate workbench access behind a rate-limited session password prompt on launch."""
     if st.session_state.setdefault("authenticated", False):
         return True
+
+    limiter = st.session_state.get("_auth_rate_limiter")
+    if not isinstance(limiter, LoginRateLimiter):
+        limiter = LoginRateLimiter()
+        st.session_state["_auth_rate_limiter"] = limiter
 
     st.markdown("<style>[data-testid='stSidebar'] { display: none; }</style>", unsafe_allow_html=True)
     _, col_auth, _ = st.columns([1.1, 1.4, 1.1])
@@ -720,15 +791,30 @@ def require_password() -> bool:
             )
             submitted = st.form_submit_button("🔓 Unlock Workbench", width="stretch", type="primary")
         if submitted:
-            try:
-                secrets_map = st.secrets
-            except Exception:
-                secrets_map = None
-            if verify_app_password(entered_pw, secrets_mapping=secrets_map):
-                st.session_state["authenticated"] = True
-                st.rerun()
+            locked, rem_s = limiter.is_locked()
+            if locked:
+                st.error(
+                    f"⏳ Too many failed attempts. Please wait {max(1, math.ceil(rem_s))} s before retrying."
+                )
             else:
-                st.error("❌ Incorrect password. Please try again.")
+                try:
+                    secrets_map = st.secrets
+                except Exception:
+                    secrets_map = None
+                if verify_app_password(entered_pw, secrets_mapping=secrets_map):
+                    limiter.record_success()
+                    st.session_state["authenticated"] = True
+                    st.rerun()
+                else:
+                    cooldown = limiter.record_failure()
+                    if cooldown > 0.0:
+                        st.error(
+                            f"❌ Incorrect password. Login locked for {math.ceil(cooldown)} s."
+                        )
+                    else:
+                        st.error(
+                            f"❌ Incorrect password. {limiter.remaining_attempts()} attempt(s) remaining before cooldown."
+                        )
     return False
 
 

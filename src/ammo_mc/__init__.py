@@ -18,7 +18,7 @@ from ammo_mc.formulas_registry import (
 from ammo_mc.pipeline import GovernanceError, compute_governed_safety_distance, run_simulation
 from ammo_mc.schemas import AmmoDefinition, Scenario, SimulationResult
 
-__version__ = "1.0.0"
+__version__ = "1.2.0"
 
 __all__ = [
     "__version__",

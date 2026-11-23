@@ -457,5 +457,59 @@ def cmd_cuas_sweep(
         typer.echo(f"  {param}={r['param_value']:<7.1f} -> Kill-Chain Pk={r['kill_chain_pk_pct']:5.1f}% | Breach={r['breach_rate_pct']:5.1f}% | Salvos={r['mean_salvos']:.2f}")
 
 
+@cuas_app.command("unified-raid")
+def cmd_cuas_unified_raid(
+    site: str = typer.Option("fob_compound_4_turret", help="Site preset."),
+    terrain: Optional[str] = typer.Option(None, "--terrain", help="Optional DEM terrain preset."),
+    drones: int = typer.Option(10, help="Number of swarm drones."),
+    fiber_optic: float = typer.Option(0.30, help="Fraction of RF-silent fiber-optic drones (0-1)."),
+    trials: int = typer.Option(20, help="Monte Carlo trial count."),
+    as_json: bool = typer.Option(False, "--json", help="Output raw JSON."),
+) -> None:
+    """Run Unified Dynamic 3D Cooperative Multi-Turret C-UAS Raid simulation."""
+    from ammo_mc.cuas_raid import simulate_unified_tactical_raid_mc
+    from ammo_mc.terrain_dem import build_preset_terrain_dem
+
+    dem_obj = build_preset_terrain_dem(terrain) if terrain and terrain != "flat_airfield" else None
+    res = simulate_unified_tactical_raid_mc(
+        site_preset=site,
+        terrain_dem=dem_obj,
+        n_drones=drones,
+        fiber_optic_fraction=fiber_optic,
+        n_mc_trials=trials,
+    )
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    sm = res["summary"]
+    typer.echo(
+        f"Unified 3D Raid [{sm['site_name']}]: Zero-Breach={sm['zero_breach_pct']:.1f}% | "
+        f"Kill-Rate={sm['mean_kill_rate_pct']:.1f}% | $/Kill=${sm['cost_per_kill_usd']:.2f} | "
+        f"Peak Temp={sm['peak_barrel_temp_c']:.1f} C"
+    )
+
+
+@app.command("literature")
+def cmd_literature(
+    query: str = typer.Option("", "--query", "-q", help="Filter sources by keyword, author, DOI, or formula."),
+    workbench: Optional[str] = typer.Option(None, "--workbench", "-w", help="Filter by workbench slug (e.g. cuas, sim, iatg)."),
+    as_json: bool = typer.Option(False, "--json", help="Output literature summary and matching entries as JSON."),
+) -> None:
+    """Browse the Scientific Literature Database & Model Provenance Map."""
+    from ammo_mc.literature import build_literature_audit_summary, search_literature
+
+    summary = build_literature_audit_summary()
+    rows = search_literature(query=query, workbench_slug=workbench)
+    if as_json:
+        typer.echo(json.dumps({"summary": summary, "sources": rows}, indent=2))
+        return
+    typer.echo(
+        f"Literature KB: {summary['total_sources']} sources ({summary['doi_sources']} DOIs) | "
+        f"{summary['total_formulas']} formulas | {summary['mapped_modules']} mapped modules"
+    )
+    for r in rows[:20]:
+        typer.echo(f"  [{r['source_id']}] ({r['year'] or 'n/a'}) {r['title'][:75]} [{r['category']}]")
+
+
 if __name__ == "__main__":
     app()

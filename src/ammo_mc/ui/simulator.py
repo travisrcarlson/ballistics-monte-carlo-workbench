@@ -232,6 +232,11 @@ from ammo_mc.vis_3d import (
     create_range_curves_shotgun_figure,
 )
 from ammo_mc.vulnerability import tv_04_sspk_carleton, tv_05_multi_round_independent as tv_05_salvo_pk_independent
+from ammo_mc.briefing_export import (
+    generate_executive_briefing_pdf,
+    generate_executive_briefing_pptx,
+)
+from ammo_mc.scenario_library import ScenarioLibrary
 from ammo_mc.vis_cuas_analytics import create_sensitivity_tornado_figure
 
 
@@ -261,6 +266,12 @@ from ammo_mc.ui.common import (
     _set_cuas_module,
 )
 
+
+
+def _jump_to_calibration_lab() -> None:
+    st.session_state["active_workbench"] = _WORKBENCH_OPTIONS[1]
+    st.session_state["cuas_wb_suite"] = _CUAS_SUITES[0]
+    st.session_state["cuas18_active_module"] = _CUAS18_MODULES[12]
 
 
 def tab_simulator() -> None:
@@ -395,6 +406,30 @@ def tab_simulator() -> None:
             )
             ff_mu = st.slider("Ballistic Form Factor (i)", 0.60, 1.50, float(base_ammo.aero.form_factor.mu), 0.02)
             prop_temp = st.slider("Propellant Temp (°C)", -30.0, 55.0, float(base_scn.aim.propellant_temp_C), 1.0)
+            has_cal = any(
+                k in st.session_state
+                for k in ("_calibrated_mv_mps", "_calibrated_mv_sd_mps", "_calibrated_form_factor")
+            )
+            use_cal_overrides = False
+            if has_cal:
+                cal_parts = []
+                if "_calibrated_mv_mps" in st.session_state:
+                    cal_parts.append(f"MV={st.session_state['_calibrated_mv_mps']:.1f}m/s")
+                if "_calibrated_mv_sd_mps" in st.session_state:
+                    cal_parts.append(f"SD={st.session_state['_calibrated_mv_sd_mps']:.2f}")
+                if "_calibrated_form_factor" in st.session_state:
+                    cal_parts.append(f"i={st.session_state['_calibrated_form_factor']:.3f}")
+                use_cal_overrides = st.checkbox(
+                    f"Apply Field-Calibrated Values ({', '.join(cal_parts)})",
+                    value=True,
+                    key="sim_use_cal_overrides",
+                )
+            st.button(
+                "🧪 Open Field Calibration Lab",
+                on_click=_jump_to_calibration_lab,
+                width="stretch",
+                key="sim_jump_cal_btn",
+            )
             st.markdown("**🚀 Rocket Motor Boost (`EB-13`)**")
             rk_burn_s = st.slider(
                 "Rocket Motor Burn Time t_burn (s)",
@@ -464,6 +499,15 @@ def tab_simulator() -> None:
     if rk_burn_s > 0.0 and ammo.launch.mode == "gun":
         ammo.launch.mode = "rocket"
     ammo.aero.form_factor.mu = float(ff_mu)
+    if use_cal_overrides:
+        if "_calibrated_mv_mps" in st.session_state:
+            ammo.launch.mv.mu = float(st.session_state["_calibrated_mv_mps"])
+        if "_calibrated_mv_sd_mps" in st.session_state:
+            ammo.launch.mv.sigma_rr = float(st.session_state["_calibrated_mv_sd_mps"])
+        if "_calibrated_dv_dt" in st.session_state:
+            ammo.launch.temp_coeff_mps_per_C = float(st.session_state["_calibrated_dv_dt"])
+        if "_calibrated_form_factor" in st.session_state:
+            ammo.aero.form_factor.mu = float(st.session_state["_calibrated_form_factor"])
     ammo.failure_modes.p_propulsion_anomaly = float(fm_prop_pct) / 100.0
     ammo.failure_modes.p_fin_or_sabot_anomaly = float(fm_fin_pct) / 100.0
     ammo.failure_modes.p_fuze_arming_fail = float(fm_sa_pct) / 100.0
@@ -914,6 +958,7 @@ def tab_simulator() -> None:
                     seed=int(cur_scn.seed or 42),
                 )
             tsm = tor_res["summary"]
+            st.session_state["sim_tornado_last"] = tor_res
             st.info(
                 f"**#1 CEP50 Bottleneck:** `{tsm['top_driver']}` (swing **{tsm['top_swing']:.2f} m**) — "
                 f"{tor_res['top_bottlenecks'][0]['recommendation']}"
@@ -1231,3 +1276,95 @@ def tab_simulator() -> None:
             "application/pdf",
             width="stretch",
         )
+
+    sim_summary_payload = {"dispersion": res.dispersion, "effectiveness": res.effectiveness}
+    src_ids_used = [s["source_id"] for s in res.provenance.get("sources", []) if "source_id" in s]
+    with st.expander("💾 Scenario Library & Executive Briefing Deck (.pdf / .pptx)", expanded=False):
+        eb1, eb2 = st.columns(2)
+        with eb1:
+            st.download_button(
+                "📑 Executive Multi-Page Briefing (.pdf)",
+                generate_executive_briefing_pdf(
+                    title=f"{cur_ammo.name} — Monte Carlo Engineering Briefing",
+                    subtitle=f"{cur_scn.name} [{cur_scn.fidelity}, {cur_scn.sampler}]",
+                    simulator_summary=sim_summary_payload,
+                    tornado_result=st.session_state.get("sim_tornado_last"),
+                    source_ids=src_ids_used or None,
+                ),
+                f"{cur_ammo.id}_executive_briefing.pdf",
+                "application/pdf",
+                width="stretch",
+                key="sim_dl_exec_pdf",
+            )
+        with eb2:
+            st.download_button(
+                "📊 Executive 16:9 Slide Deck (.pptx)",
+                generate_executive_briefing_pptx(
+                    title=f"{cur_ammo.name} — Monte Carlo Engineering Briefing",
+                    subtitle=f"{cur_scn.name} [{cur_scn.fidelity}, {cur_scn.sampler}]",
+                    simulator_summary=sim_summary_payload,
+                    tornado_result=st.session_state.get("sim_tornado_last"),
+                    source_ids=src_ids_used or None,
+                ),
+                f"{cur_ammo.id}_executive_briefing.pptx",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                width="stretch",
+                key="sim_dl_exec_pptx",
+            )
+
+        sim_lib = ScenarioLibrary()
+        sl1, sl2, sl3 = st.columns([1.4, 1.0, 0.8])
+        with sl1:
+            sim_sv_name = st.text_input("Snapshot Name", value=f"{cur_ammo.id} @ {cur_scn.aim.range_m:.0f}m", key="sim_lib_name")
+        with sl2:
+            sim_sv_tags = st.text_input("Tags", value=f"{cur_ammo.class_id},{cur_scn.fidelity}", key="sim_lib_tags")
+        with sl3:
+            st.write("")
+            if st.button("💾 Save Run", type="primary", width="stretch", key="sim_lib_save"):
+                rec = sim_lib.save_scenario(
+                    name=sim_sv_name,
+                    domain="ballistics",
+                    config={
+                        "preset_id": cur_ammo.id,
+                        "fidelity": cur_scn.fidelity,
+                        "range_m": cur_scn.aim.range_m,
+                        "mv_mu": cur_ammo.launch.mv.mu,
+                        "form_factor": cur_ammo.aero.form_factor.mu,
+                    },
+                    metrics={
+                        "mean_range_m": round(float(res.dispersion.get("mean_range_m", 0.0)), 2),
+                        "cep_m": round(float(res.dispersion.get("cep_m", 0.0)), 2),
+                        "salvo_pk_mean": round(float(res.effectiveness.get("salvo_pk_mean", 0.0)), 4),
+                    },
+                    tags=[t.strip() for t in sim_sv_tags.split(",") if t.strip()],
+                )
+                st.success(f"Saved `{rec['name']}` ({rec['id']}).")
+
+        sim_saved = sim_lib.list_scenarios(domain="ballistics")
+        if sim_saved:
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "ID": r["id"],
+                            "Name": r["name"],
+                            "Updated": r["updated_at"],
+                            "CEP50 (m)": r["metrics"].get("cep_m", "—"),
+                            "Salvo Pk": r["metrics"].get("salvo_pk_mean", "—"),
+                        }
+                        for r in sim_saved
+                    ]
+                ),
+                width="stretch",
+            )
+            if len(sim_saved) >= 2:
+                id_map_s = {f"{r['name']} ({r['id']})": r["id"] for r in sim_saved}
+                sd1, sd2 = st.columns(2)
+                with sd1:
+                    sa_pick = st.selectbox("Compare Baseline A", list(id_map_s.keys()), index=1, key="sim_lib_da")
+                with sd2:
+                    sb_pick = st.selectbox("Compare Candidate B", list(id_map_s.keys()), index=0, key="sim_lib_db")
+                if id_map_s[sa_pick] != id_map_s[sb_pick]:
+                    d_sim = sim_lib.diff_scenarios(id_map_s[sa_pick], id_map_s[sb_pick])
+                    if d_sim["metric_diffs"]:
+                        st.dataframe(pd.DataFrame(d_sim["metric_diffs"]), width="stretch")

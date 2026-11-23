@@ -6,13 +6,22 @@ import os
 import time
 from typing import Any, Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 import numpy as np
 from pydantic import BaseModel, Field
 
 from ammo_mc.auth import verify_app_password
+from ammo_mc.briefing_export import (
+    generate_executive_briefing_pdf,
+    generate_executive_briefing_pptx,
+)
+from ammo_mc.calibration import (
+    calibrate_chronograph_from_csv,
+    calibrate_drag_form_factor_from_csv,
+    calibrate_shotgun_pattern_from_csv,
+)
 from ammo_mc.cuas_analytics import (
     analyze_cuas_sensitivity_tornado,
     build_cuas_site_geojson,
@@ -25,6 +34,7 @@ from ammo_mc.cuas_defense import (
     get_shotgun_presets,
     simulate_anti_drone_multishotgun_mc,
 )
+from ammo_mc.cuas_raid import simulate_unified_tactical_raid_mc
 from ammo_mc.cuas_mission import (
     generate_cuas_trade_study_html,
     get_cuas_ammo_economics_catalog,
@@ -39,6 +49,11 @@ from ammo_mc.data import get_kb
 from ammo_mc.export import geojson_to_str, summary_to_json_str
 from ammo_mc.formulas_registry import USE_LIMITATION_NOTICE
 from ammo_mc.gis import export_hazard_geojson
+from ammo_mc.literature import (
+    build_literature_audit_summary,
+    get_provenance_map,
+    search_literature,
+)
 from ammo_mc.mcdrag import McDragInputs, estimate_mcdrag
 from ammo_mc.pipeline import GovernanceError, run_simulation
 from ammo_mc.presets import get_preset, list_presets
@@ -52,7 +67,7 @@ app = FastAPI(
         "Production REST API for stochastic ammunition effects, trajectory dispersion, "
         "fuze reliability, blast/fragmentation hazard modeling, and Counter-UAS trade studies."
     ),
-    version="1.1.0",
+    version="1.2.0",
 )
 
 app.add_middleware(
@@ -157,6 +172,21 @@ def list_all_formulas(flagged_only: bool = Query(False, description="Filter for 
     if flagged_only:
         return [f for f in kb.formulas if f.get("is_flagged")]
     return kb.formulas
+
+
+@app.get("/literature", tags=["Knowledge Base"])
+def get_literature_endpoint(
+    query: str = Query("", description="Search author, title, DOI, or keyword"),
+    category: Optional[str] = Query(None, description="Filter by domain category"),
+    workbench_slug: Optional[str] = Query(None, description="Filter by workbench slug"),
+    doi_only: bool = Query(False, description="Only entries with peer-reviewed/RFC DOIs"),
+) -> dict[str, Any]:
+    """Return scientific literature sources, module provenance map, and audit summary."""
+    return {
+        "summary": build_literature_audit_summary(),
+        "sources": search_literature(query=query, category=category, workbench_slug=workbench_slug, doi_only=doi_only),
+        "module_provenance": get_provenance_map(),
+    }
 
 
 @app.get("/presets", tags=["Presets"])
@@ -296,6 +326,7 @@ class CuasSiteDefenseRequest(BaseModel):
     custom_turrets: Optional[list[dict[str, Any]]] = None
     custom_obstacles: Optional[list[dict[str, Any]]] = None
     custom_nfz: Optional[list[dict[str, Any]]] = None
+    terrain_preset: Optional[str] = None
     threat_altitude_m: float = 22.0
     threat_speed_mps: float = 22.0
     drone_model: str = "fpv_quad_small"
@@ -307,6 +338,27 @@ class CuasSiteDefenseRequest(BaseModel):
     origin_lat: float = 32.9000
     origin_lon: float = -106.4000
     heading_deg: float = 0.0
+
+
+class CuasUnifiedRaidRequest(BaseModel):
+    site_preset: str = "fob_compound_4_turret"
+    terrain_preset: Optional[str] = None
+    sensors: list[str] = Field(
+        default_factory=lambda: ["micro_doppler_radar", "eoir_thermal_optical", "rf_c2_df"]
+    )
+    weather_condition: str = "clear_day"
+    n_drones: int = 10
+    fiber_optic_fraction: float = 0.30
+    drone_model: str = "fpv_quad_small"
+    approach_pattern: str = "multi_vector_360"
+    evasion_profile: str = "jinking_weave"
+    threat_speed_mps: float = 22.0
+    threat_altitude_m: float = 22.0
+    ammunition_preset: str = "12G_NO4_BUCK_C_UAS"
+    magazine_type: str = "box_10rd"
+    weapon_max_range_m: float = 65.0
+    n_mc_trials: int = 20
+    seed: int = 42
 
 
 class CuasLogisticsRequest(BaseModel):
@@ -416,12 +468,19 @@ def post_cuas_kill_chain(req: CuasKillChainRequest) -> dict[str, Any]:
 
 @app.post("/cuas/site-defense", tags=["C-UAS"], dependencies=[Depends(_verify_api_auth)])
 def post_cuas_site_defense(req: CuasSiteDefenseRequest) -> dict[str, Any]:
-    """Simulate multi-turret 360-deg coverage, obstacles, NFZ fallout & optional GeoJSON."""
+    """Simulate multi-turret 360-deg coverage, obstacles, DEM terrain masking, NFZ fallout & GeoJSON."""
+    dem_obj = None
+    if req.terrain_preset and req.terrain_preset != "flat_airfield":
+        from ammo_mc.terrain_dem import build_preset_terrain_dem
+
+        dem_obj = build_preset_terrain_dem(req.terrain_preset, origin_lat=req.origin_lat, origin_lon=req.origin_lon)
+
     res = simulate_multiturret_site_defense_mc(
         site_preset=req.site_preset,
         custom_turrets=req.custom_turrets,
         custom_obstacles=req.custom_obstacles,
         custom_nfz=req.custom_nfz,
+        terrain_dem=dem_obj,
         threat_altitude_m=req.threat_altitude_m,
         threat_speed_mps=req.threat_speed_mps,
         drone_model=req.drone_model,
@@ -438,6 +497,35 @@ def post_cuas_site_defense(req: CuasSiteDefenseRequest) -> dict[str, Any]:
             sdz_radius_m=req.elevation_sdz_range_m,
             heading_deg=req.heading_deg,
         )
+    return _to_json_safe(res)
+
+
+@app.post("/cuas/unified-raid", tags=["C-UAS"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_unified_raid(req: CuasUnifiedRaidRequest) -> dict[str, Any]:
+    """Run Unified Dynamic 3D Cooperative Multi-Turret C-UAS Tactical Raid simulation."""
+    dem_obj = None
+    if req.terrain_preset and req.terrain_preset != "flat_airfield":
+        from ammo_mc.terrain_dem import build_preset_terrain_dem
+
+        dem_obj = build_preset_terrain_dem(req.terrain_preset)
+    res = simulate_unified_tactical_raid_mc(
+        site_preset=req.site_preset,
+        terrain_dem=dem_obj,
+        sensors=req.sensors,
+        weather_condition=req.weather_condition,
+        n_drones=req.n_drones,
+        fiber_optic_fraction=req.fiber_optic_fraction,
+        drone_model=req.drone_model,
+        approach_pattern=req.approach_pattern,
+        evasion_profile=req.evasion_profile,
+        threat_speed_mps=req.threat_speed_mps,
+        threat_altitude_m=req.threat_altitude_m,
+        ammunition_preset=req.ammunition_preset,
+        magazine_type=req.magazine_type,
+        weapon_max_range_m=req.weapon_max_range_m,
+        n_mc_trials=req.n_mc_trials,
+        seed=req.seed,
+    )
     return _to_json_safe(res)
 
 
@@ -465,6 +553,52 @@ def post_cuas_sensitivity(req: CuasSensitivityRequest) -> dict[str, Any]:
     return _to_json_safe(analyze_cuas_sensitivity_tornado(**req.model_dump()))
 
 
+class CalibratePatternRequest(BaseModel):
+    csv_text: str
+    range_m: float = 36.58
+    nominal_choke: str = "Modified"
+    ammunition_preset: str = "12G_NO4_BUCK_C_UAS"
+
+
+class CalibrateChronographRequest(BaseModel):
+    csv_text: str
+    nominal_mv_mps: Optional[float] = None
+    std_temp_c: float = 21.1
+
+
+class CalibrateDragRequest(BaseModel):
+    csv_text: str
+    preset_id: str = "NOTIONAL-SA-01"
+    fit_mv: bool = False
+
+
+@app.post("/calibrate/pattern", tags=["Calibration"], dependencies=[Depends(_verify_api_auth)])
+def post_calibrate_pattern(req: CalibratePatternRequest) -> dict[str, Any]:
+    """Fit Rayleigh choke dispersion & POI bias from range patterning-board CSV."""
+    try:
+        return _to_json_safe(calibrate_shotgun_pattern_from_csv(**req.model_dump()))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@app.post("/calibrate/chronograph", tags=["Calibration"], dependencies=[Depends(_verify_api_auth)])
+def post_calibrate_chronograph(req: CalibrateChronographRequest) -> dict[str, Any]:
+    """Fit chronograph MV mean, lot SD, and optional FM 6-40 dMV/dT temperature sensitivity."""
+    try:
+        return _to_json_safe(calibrate_chronograph_from_csv(**req.model_dump()))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@app.post("/calibrate/drag", tags=["Calibration"], dependencies=[Depends(_verify_api_auth)])
+def post_calibrate_drag(req: CalibrateDragRequest) -> dict[str, Any]:
+    """Fit exterior ballistic drag form factor (i) against range drop/velocity CSV."""
+    try:
+        return _to_json_safe(calibrate_drag_form_factor_from_csv(**req.model_dump()))
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
 @app.post("/cuas/report", tags=["C-UAS"], dependencies=[Depends(_verify_api_auth)])
 def post_cuas_report(req: CuasReportRequest) -> Any:
     """Generate standalone HTML C-UAS Trade-Study Report (or JSON envelope)."""
@@ -481,3 +615,37 @@ def post_cuas_report(req: CuasReportRequest) -> Any:
     if req.format.lower() == "json":
         return {"scenario_name": req.scenario_name, "html": html_doc}
     return HTMLResponse(content=html_doc)
+
+
+class BriefingExportRequest(BaseModel):
+    title: str = "C-UAS & Ballistics Executive Briefing"
+    subtitle: str = "Monte Carlo Engineering Trade Study"
+    ab_result: Optional[dict[str, Any]] = None
+    site_result: Optional[dict[str, Any]] = None
+    tornado_result: Optional[dict[str, Any]] = None
+    logistics_result: Optional[dict[str, Any]] = None
+    raid_result: Optional[dict[str, Any]] = None
+    simulator_summary: Optional[dict[str, Any]] = None
+    source_ids: Optional[list[str]] = None
+
+
+@app.post("/cuas/briefing/pdf", tags=["C-UAS", "Export"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_briefing_pdf(req: BriefingExportRequest) -> Response:
+    """Export multi-page landscape Executive Briefing PDF."""
+    pdf_bytes = generate_executive_briefing_pdf(**req.model_dump())
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=cuas_executive_briefing.pdf"},
+    )
+
+
+@app.post("/cuas/briefing/pptx", tags=["C-UAS", "Export"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_briefing_pptx(req: BriefingExportRequest) -> Response:
+    """Export native 16:9 widescreen PowerPoint (.pptx) Executive Briefing deck."""
+    pptx_bytes = generate_executive_briefing_pptx(**req.model_dump())
+    return Response(
+        content=pptx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        headers={"Content-Disposition": "attachment; filename=cuas_executive_briefing.pptx"},
+    )

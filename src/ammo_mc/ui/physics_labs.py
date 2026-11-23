@@ -909,10 +909,10 @@ def tab_calculators() -> None:
             )
             st.plotly_chart(fig_salvo, width="stretch")
 
-        st.subheader("📚 Authoritative Knowledge Base Explorer (96 Formulas & 36 Primary Sources)")
+        st.subheader("📚 Authoritative Knowledge Base Explorer (96 Formulas & 68 Primary Sources)")
         kb_tab_choice = st.selectbox(
             "Select Knowledge Base Sheet",
-            ["Formulas (96)", "Explosives", "THOR_Coefficients", "Ammo_Taxonomy", "Sources (36)"],
+            ["Formulas (96)", "Explosives", "THOR_Coefficients", "Ammo_Taxonomy", "Sources (68)"],
         )
         if kb_tab_choice == "Formulas (96)":
             forms_df = pd.DataFrame(kb.formulas)

@@ -523,3 +523,131 @@ def create_logistics_thermal_and_cost_figure(log_res: dict[str, Any]) -> go.Figu
     )
     fig.update_annotations(font_size=12)
     return fig
+
+
+def create_terrain_dem_site_3d_figure(
+    site_res: dict[str, Any],
+    terrain_dem: Any,
+) -> go.Figure:
+    """Create 3D topographic DEM site defense figure showing ridge LOS masking & raid tracks."""
+    sm = site_res.get("summary", {})
+    turrets = site_res.get("turrets", [])
+    obstacles = site_res.get("obstacles", [])
+    tracks = site_res.get("sample_tracks", [])
+    az_prof = site_res.get("azimuth_profile", [])
+    asset_r = float(sm.get("asset_radius_m", 40.0))
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Surface(
+            x=terrain_dem.x_m,
+            y=terrain_dem.y_m,
+            z=terrain_dem.z_grid_m,
+            colorscale="Earth",
+            opacity=0.88,
+            name="Terrain DEM (m)",
+            colorbar=dict(title="Elev (m)", len=0.65, x=1.02),
+            contours=dict(z=dict(show=True, usecolormap=True, project_z=False)),
+        )
+    )
+
+    # 3D Building Prisms anchored to ground elevation
+    for idx, obs in enumerate(obstacles):
+        ox, oy = float(obs["x_m"]), float(obs["y_m"])
+        z0 = float(terrain_dem.elevation_at(ox, oy))
+        h = float(obs["height_m"])
+        hw, hl = 0.5 * float(obs["width_m"]), 0.5 * float(obs["length_m"])
+        vx = [ox - hw, ox + hw, ox + hw, ox - hw, ox - hw, ox + hw, ox + hw, ox - hw]
+        vy = [oy - hl, oy - hl, oy + hl, oy + hl, oy - hl, oy - hl, oy + hl, oy + hl]
+        vz = [z0, z0, z0, z0, z0 + h, z0 + h, z0 + h, z0 + h]
+        fig.add_trace(
+            go.Mesh3d(
+                x=vx,
+                y=vy,
+                z=vz,
+                i=[0, 0, 4, 4, 0, 0, 1, 1, 2, 2, 3, 3],
+                j=[1, 2, 5, 6, 1, 5, 2, 6, 3, 7, 0, 4],
+                k=[2, 3, 6, 7, 5, 4, 6, 5, 7, 6, 4, 7],
+                color="#64748B",
+                opacity=0.85,
+                name="LOS Buildings" if idx == 0 else obs["name"],
+                showlegend=bool(idx == 0),
+                hovertext=f"{obs['name']} (AGL={h:.1f}m)",
+            )
+        )
+
+    # Elevated Turrets
+    if turrets:
+        txs = [float(t["x_m"]) for t in turrets]
+        tys = [float(t["y_m"]) for t in turrets]
+        tzs = [float(terrain_dem.elevation_at(float(t["x_m"]), float(t["y_m"]))) + float(t.get("z_m", 3.5)) for t in turrets]
+        fig.add_trace(
+            go.Scatter3d(
+                x=txs,
+                y=tys,
+                z=tzs,
+                mode="markers+text",
+                marker=dict(size=7, color="#38BDF8", symbol="diamond"),
+                text=[t["id"] for t in turrets],
+                textposition="top center",
+                name="Turret Sites (MSL)",
+            )
+        )
+
+    # Terrain-masked azimuth alert markers at outer ring
+    eval_r = min(asset_r + 0.30 * float(sm.get("weapon_max_range_m", 60.0)), 140.0)
+    masked_rows = [r for r in az_prof if r.get("terrain_masked")]
+    if masked_rows:
+        mx = [eval_r * math.cos(math.radians(r["az_deg"])) for r in masked_rows]
+        my = [eval_r * math.sin(math.radians(r["az_deg"])) for r in masked_rows]
+        mz = [float(terrain_dem.elevation_at(px, py)) + 16.0 for px, py in zip(mx, my)]
+        fig.add_trace(
+            go.Scatter3d(
+                x=mx,
+                y=my,
+                z=mz,
+                mode="markers",
+                marker=dict(size=5, color="#F97316", symbol="x"),
+                name=f"Terrain-Masked Sectors ({len(masked_rows)*5}°)",
+            )
+        )
+
+    # 3D Incoming Raid Tracks
+    shown_k, shown_l = False, False
+    for tr in tracks:
+        is_k = tr["status"] == "killed"
+        show_l = bool((is_k and not shown_k) or ((not is_k) and not shown_l))
+        if is_k:
+            shown_k = True
+        else:
+            shown_l = True
+        sz = float(tr.get("sz", float(terrain_dem.elevation_at(tr["sx"], tr["sy"])) + 20.0))
+        ez = float(tr.get("ez", float(terrain_dem.elevation_at(tr["ex"], tr["ey"])) + 20.0))
+        fig.add_trace(
+            go.Scatter3d(
+                x=[tr["sx"], tr["ex"]],
+                y=[tr["sy"], tr["ey"]],
+                z=[sz, ez],
+                mode="lines+markers",
+                line=dict(color="#10B981" if is_k else "#EF4444", width=4),
+                marker=dict(size=4),
+                name="Intercepted Track" if is_k else "Breach (Leaker)",
+                showlegend=show_l,
+            )
+        )
+
+    fig.update_layout(
+        title=(
+            f"⛰️ 3D DEM Terrain LOS Masking — {sm.get('terrain_source', terrain_dem.name)} | "
+            f"Terrain Masked: {sm.get('terrain_masked_pct', 0.0):.1f}% | Relief: {sm.get('terrain_relief_m', 0.0):.1f} m"
+        ),
+        scene=dict(
+            xaxis_title="East X (m)",
+            yaxis_title="North Y (m)",
+            zaxis_title="Elevation MSL (m)",
+            aspectmode="data",
+        ),
+        margin=dict(l=10, r=10, t=65, b=15),
+        height=600,
+    )
+    return fig

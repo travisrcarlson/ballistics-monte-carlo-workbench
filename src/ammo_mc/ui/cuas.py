@@ -194,6 +194,15 @@ from ammo_mc.vis_cuas_mission import (
     create_kill_chain_timeline_figure,
     create_logistics_thermal_and_cost_figure,
     create_multiturret_site_map_figure,
+    create_terrain_dem_site_3d_figure,
+)
+from ammo_mc.terrain_dem import (
+    TerrainDEMGrid,
+    build_preset_terrain_dem,
+    fetch_open_meteo_elevation_dem,
+    get_terrain_dem_presets,
+    parse_dem_csv,
+    parse_esri_ascii_grid,
 )
 from ammo_mc.vis_3d import (
     create_2d_antidrone_intercept_figure,
@@ -246,6 +255,29 @@ from ammo_mc.vis_cuas_analytics import (
     create_real_map_site_defense_figure,
     create_sensitivity_tornado_figure,
 )
+from ammo_mc.vis_cuas_raid import (
+    create_raid_timeline_and_heat_figure,
+    create_unified_tactical_raid_3d_figure,
+)
+from ammo_mc.calibration import (
+    calibrate_chronograph_from_csv,
+    calibrate_drag_form_factor_from_csv,
+    calibrate_shotgun_pattern_from_csv,
+    generate_sample_chronograph_csv,
+    generate_sample_pattern_csv,
+    generate_sample_range_drop_csv,
+)
+from ammo_mc.presets import list_presets
+from ammo_mc.vis_calibration import (
+    create_chronograph_calibration_figure,
+    create_drag_calibration_figure,
+    create_pattern_calibration_figure,
+)
+from ammo_mc.briefing_export import (
+    generate_executive_briefing_pdf,
+    generate_executive_briefing_pptx,
+)
+from ammo_mc.scenario_library import ScenarioLibrary
 
 
 from ammo_mc.ui.common import (
@@ -269,6 +301,7 @@ from ammo_mc.ui.common import (
     _cached_optimize_antidrone_array,
     _cached_site_defense,
     _cached_sustained_logistics,
+    _cached_unified_raid,
     _render_sidebar_header,
     _set_active_workbench,
     _set_cuas_module,
@@ -1451,16 +1484,17 @@ def tab_cuas_and_small_arms() -> None:
                 rk_c.metric("Replay Horizon", f"{r_sm['t_end_ms']:.0f} ms", delta="NEUTRALIZED" if r_sm["drone_neutralized"] else "TRACKING")
                 st.plotly_chart(create_3d_animated_intercept_figure(cuas_replay), width="stretch")
 
-    # --- SUB-LAB 18: COMPLETE C-UAS TURRET ENGINEERING SUITE (11 MODULES) ---
+    # --- SUB-LAB 18: COMPLETE C-UAS TURRET ENGINEERING SUITE (13 MODULES) ---
     else:
         st.subheader("🛸 Multi-Shotgun C-UAS Turret Engineering & Mission Effectiveness Suite")
         st.markdown(
-            "Complete 11-module counter-UAS engineering laboratory integrating **Closed-Loop Kalman Fire Control**, "
+            "Complete 13-module counter-UAS engineering laboratory integrating **Closed-Loop Kalman Fire Control**, "
             "**Coordinated Swarm Saturation**, **Tungsten TSS / Flechette / Airburst Payloads**, "
             "**Turret Recoil & Constrained Pareto Optimization**, **Elevated Fallout SDZ Safety Zones**, "
-            "**Multi-Sensor Kill-Chain Timelines**, **Custom Site Builder, Real-World Map & GeoJSON/KML Exports**, "
-            "**3D Animated Intercept Replay**, **Sustained Logistics, Barrel Heat & $/Kill Reports**, "
-            "**A/B Turret Comparator & Layered Defense**, and **Automated Sensitivity Tornado Bottleneck Analysis**."
+            "**Multi-Sensor Kill-Chain Timelines**, **Custom Site Builder, DEM Terrain Masking, Real-World Map & GeoJSON/KML Exports**, "
+            "**3D Animated Intercept Replay**, **Sustained Logistics, Barrel Heat, $/Kill & PDF/PPTX Briefings**, "
+            "**A/B Turret Comparator & Layered Defense**, **Sensitivity Tornado Bottleneck Analysis**, "
+            "**Unified Dynamic 3D Cooperative Raid**, and **Field-Test Calibration & Residual Diagnostics**."
         )
         st.latex(
             r"""
@@ -2090,7 +2124,74 @@ def tab_cuas_and_small_arms() -> None:
                     custom_obs_json = json.dumps(edited_obs)
                     custom_nfz_json = json.dumps(edited_nfz)
 
-            with st.spinner("Evaluating 360° Line-of-Sight Coverage, NFZ Conflicts & Multi-Turret Raids..."):
+            # Terrain / DEM Elevation Model Selection
+            dem_presets = get_terrain_dem_presets()
+            active_dem_obj: TerrainDEMGrid | None = None
+            active_dem_json = ""
+            with st.expander("⛰️ Terrain Elevation (DEM) LOS Masking & Slope Fallout", expanded=False):
+                td1, td2 = st.columns([1.2, 1.3])
+                with td1:
+                    dem_mode = st.radio(
+                        "Terrain Elevation Source",
+                        ["Flat Datum (0 m)", "Tactical DEM Preset", "Upload CSV / ESRI .asc DEM", "Fetch Real Elevation (Open-Meteo)"],
+                        horizontal=False,
+                        key="cuas18_dem_mode",
+                    )
+                with td2:
+                    cur_lat = float(st.session_state.get("cuas18_map_lat", 32.9000))
+                    cur_lon = float(st.session_state.get("cuas18_map_lon", -106.4000))
+                    if dem_mode == "Tactical DEM Preset":
+                        dem_pk = st.selectbox(
+                            "Select Terrain Profile",
+                            [k for k in dem_presets.keys() if k != "flat_airfield"],
+                            format_func=lambda k: dem_presets[k]["name"],
+                            key="cuas18_dem_preset_key",
+                        )
+                        active_dem_obj = build_preset_terrain_dem(
+                            dem_pk, origin_lat=cur_lat, origin_lon=cur_lon
+                        )
+                        st.caption(dem_presets[dem_pk]["description"])
+                    elif dem_mode == "Upload CSV / ESRI .asc DEM":
+                        up_dem = st.file_uploader(
+                            "Upload Terrain DEM (.csv `x_m,y_m,z_m` or `lat,lon,elev_m` | ESRI `.asc`)",
+                            type=["csv", "asc", "txt"],
+                            key="cuas18_dem_upload",
+                        )
+                        if up_dem is not None:
+                            try:
+                                txt = up_dem.getvalue().decode("utf-8", errors="replace")
+                                if up_dem.name.lower().endswith(".asc") or "ncols" in txt[:200].lower():
+                                    active_dem_obj = parse_esri_ascii_grid(txt, origin_lat=cur_lat, origin_lon=cur_lon, name=up_dem.name)
+                                else:
+                                    active_dem_obj = parse_dem_csv(txt, origin_lat=cur_lat, origin_lon=cur_lon, name=up_dem.name)
+                                st.success(f"Loaded {active_dem_obj.name} ({active_dem_obj.stats()['grid_shape']})")
+                            except Exception as exc:
+                                st.error(f"DEM parse error: {exc}")
+                        else:
+                            st.info("Upload a CSV or `.asc` DEM file, or choose a preset.")
+                    elif dem_mode == "Fetch Real Elevation (Open-Meteo)":
+                        st.caption(f"Site Anchor: {cur_lat:.4f}°, {cur_lon:.4f}° (adjust in the Real-World Map tab)")
+                        if st.button("🌐 Fetch Live Copernicus/SRTM DEM Patch", width="stretch", key="cuas18_fetch_dem_btn"):
+                            ok_d, live_d, msg_d = fetch_open_meteo_elevation_dem(cur_lat, cur_lon)
+                            if ok_d and live_d is not None:
+                                st.session_state["_cuas18_live_dem_json"] = live_d.to_json()
+                                st.success(msg_d)
+                            else:
+                                st.warning(msg_d)
+                        if st.session_state.get("_cuas18_live_dem_json"):
+                            active_dem_obj = TerrainDEMGrid.from_dict(
+                                json.loads(st.session_state["_cuas18_live_dem_json"])
+                            )
+
+                if active_dem_obj is not None:
+                    active_dem_json = active_dem_obj.to_json()
+                    d_st = active_dem_obj.stats()
+                    st.caption(
+                        f"DEM Active: **{active_dem_obj.name}** | Relief: **{d_st['relief_m']:.1f} m** "
+                        f"({d_st['min_m']:.1f}..{d_st['max_m']:.1f} m) | Max Slope: **{d_st['max_slope_deg']:.1f}°**"
+                    )
+
+            with st.spinner("Evaluating 360° Line-of-Sight Coverage, DEM Masking, NFZ Conflicts & Raids..."):
                 site_res = _cached_site_defense(
                     site_preset=str(site_key),
                     threat_altitude_m=float(site_alt),
@@ -2101,18 +2202,36 @@ def tab_cuas_and_small_arms() -> None:
                     custom_turrets_json=custom_tur_json,
                     custom_obstacles_json=custom_obs_json,
                     custom_nfz_json=custom_nfz_json,
+                    terrain_dem_json=active_dem_json,
                     n_raid_trials=80,
                     seed=42,
                 )
+            st.session_state["_report_site_result"] = site_res
+            st.session_state["_site_active_layout"] = {
+                "site_preset": str(site_key),
+                "turrets": edited_turrets,
+                "obstacles": edited_obs,
+                "nfz_zones": edited_nfz,
+                "terrain_dem_json": active_dem_json,
+            }
 
             sts = site_res["summary"]
-            sk_1, sk_2, sk_3 = st.columns(3)
+            sk_1, sk_2, sk_3, sk_4 = st.columns(4)
             sk_1.metric("Perimeter Azimuth Coverage", f"{sts['perimeter_coverage_pct']:.1f} %", delta=f"{sts['n_turrets']} Active Turrets")
             sk_2.metric("Overlapping Mutual Support (≥2)", f"{sts['overlapping_coverage_pct']:.1f} %", delta=f"Blind Spots: {sts['blind_spot_pct']:.1f} %")
             sk_3.metric("NFZ SDZ Sector Conflicts", f"{sts['nfz_fallout_conflict_pct']:.1f} %", delta=f"Zero-Breach Raid Stop: {sts['site_zero_breach_pct']:.1f} %")
+            if active_dem_obj is not None and sts.get("terrain_fallout_max_m") is not None:
+                sk_4.metric(
+                    "DEM Masked / Fallout Span",
+                    f"{sts['terrain_masked_pct']:.1f}% masked",
+                    delta=f"Fallout {sts['terrain_fallout_min_m']:.0f}–{sts['terrain_fallout_max_m']:.0f} m (flat {sts['flat_fallout_m']:.0f} m)",
+                )
+            else:
+                sk_4.metric("Terrain Relief", "0.0 m (Flat)", delta="Enable DEM above to model ridge masking")
 
-            site_v1, site_v2 = st.tabs([
+            site_v1, site_v2, site_v3 = st.tabs([
                 "🗺️ Local Tactical Map & Workload",
+                "⛰️ 3D DEM Terrain LOS & Slope Fallout",
                 "🌍 Real-World Lat/Lon Map & GIS Export (.geojson / .kml)",
             ])
             with site_v1:
@@ -2121,6 +2240,19 @@ def tab_cuas_and_small_arms() -> None:
                 st.dataframe(pd.DataFrame(site_res["turret_workload"]), width="stretch")
 
             with site_v2:
+                dem_for_plot = active_dem_obj or build_preset_terrain_dem(
+                    "flat_airfield",
+                    origin_lat=float(st.session_state.get("cuas18_map_lat", 32.9000)),
+                    origin_lon=float(st.session_state.get("cuas18_map_lon", -106.4000)),
+                )
+                st.plotly_chart(create_terrain_dem_site_3d_figure(site_res, dem_for_plot), width="stretch")
+                if site_res.get("terrain_fallout_profile"):
+                    st.markdown("##### 📐 Terrain-Adjusted Elevated Fallout SDZ vs Azimuth (12-Gauge #4 Buck @ 30°)")
+                    st.dataframe(pd.DataFrame(site_res["terrain_fallout_profile"]), width="stretch")
+                else:
+                    st.info("Select a Tactical DEM Preset, upload a CSV/.asc grid, or fetch Copernicus/SRTM elevation above to compute ridge-line masking and upslope/downslope Fallout SDZs.")
+
+            with site_v3:
                 g1, g2, g3, g4 = st.columns([1.4, 0.9, 0.9, 0.9])
                 with g1:
                     st.selectbox(
@@ -2319,10 +2451,10 @@ def tab_cuas_and_small_arms() -> None:
                 economics_table=log_res["economics_comparison"],
                 sdz_summary=st.session_state.get("_report_sdz_summary"),
             )
-            rep_c1, rep_c2 = st.columns(2)
+            rep_c1, rep_c2, rep_c3, rep_c4 = st.columns(4)
             with rep_c1:
                 st.download_button(
-                    "📥 Download Standalone HTML Trade-Study Report",
+                    "📥 Standalone HTML Report",
                     rep_html.encode("utf-8"),
                     "cuas_trade_study_report.html",
                     "text/html",
@@ -2330,14 +2462,104 @@ def tab_cuas_and_small_arms() -> None:
                     width="stretch",
                 )
             with rep_c2:
+                pdf_deck = generate_executive_briefing_pdf(
+                    title=str(rep_name),
+                    subtitle=f"{lsm['magazine_name']} | {lsm['ammo_name']}",
+                    ab_result=st.session_state.get("_report_ab_result"),
+                    site_result=st.session_state.get("_report_site_result"),
+                    tornado_result=st.session_state.get("_report_tornado_result"),
+                    logistics_result=log_res,
+                    raid_result=st.session_state.get("_report_raid_result"),
+                )
                 st.download_button(
-                    "📥 Download Scenario Preset JSON",
+                    "📑 Executive Briefing (.pdf)",
+                    pdf_deck,
+                    "cuas_executive_briefing.pdf",
+                    "application/pdf",
+                    key="cuas18_dl_pdf_briefing",
+                    width="stretch",
+                )
+            with rep_c3:
+                pptx_deck = generate_executive_briefing_pptx(
+                    title=str(rep_name),
+                    subtitle=f"{lsm['magazine_name']} | {lsm['ammo_name']}",
+                    ab_result=st.session_state.get("_report_ab_result"),
+                    site_result=st.session_state.get("_report_site_result"),
+                    tornado_result=st.session_state.get("_report_tornado_result"),
+                    logistics_result=log_res,
+                    raid_result=st.session_state.get("_report_raid_result"),
+                )
+                st.download_button(
+                    "📊 PowerPoint Deck (.pptx)",
+                    pptx_deck,
+                    "cuas_executive_briefing.pptx",
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    key="cuas18_dl_pptx_briefing",
+                    width="stretch",
+                )
+            with rep_c4:
+                st.download_button(
+                    "💾 Preset Config (.json)",
                     serialize_cuas_scenario_config(rep_cfg).encode("utf-8"),
                     "cuas_trade_study_preset.json",
                     "application/json",
                     key="cuas18_dl_json_report",
                     width="stretch",
                 )
+
+            with st.expander("💾 Persistent Scenario Library (Save / Load / Compare Diff)", expanded=False):
+                lib = ScenarioLibrary()
+                sv_c1, sv_c2, sv_c3 = st.columns([1.4, 1.0, 0.8])
+                with sv_c1:
+                    scn_save_name = st.text_input(
+                        "Scenario Snapshot Name",
+                        value=f"C-UAS {lg_nb}Bbl {str(lg_ammo)[:12]}",
+                        key="cuas18_lib_name",
+                    )
+                with sv_c2:
+                    scn_save_tags = st.text_input("Tags (comma-separated)", value="cuas,logistics", key="cuas18_lib_tags")
+                with sv_c3:
+                    st.write("")
+                    if st.button("💾 Save to Library", type="primary", width="stretch", key="cuas18_lib_save_btn"):
+                        rec = lib.save_scenario(
+                            name=scn_save_name,
+                            domain="cuas",
+                            config={**rep_cfg, "n_waves": int(lg_waves), "drones_per_wave": int(lg_dpw), "n_barrels": int(lg_nb), "ammo_family": str(lg_ammo)},
+                            metrics=lsm,
+                            tags=[t.strip() for t in scn_save_tags.split(",") if t.strip()],
+                        )
+                        st.success(f"Saved `{rec['name']}` (id `{rec['id']}`).")
+
+                saved_list = lib.list_scenarios(domain="cuas")
+                if saved_list:
+                    st.dataframe(
+                        pd.DataFrame(
+                            [
+                                {
+                                    "ID": r["id"],
+                                    "Name": r["name"],
+                                    "Updated": r["updated_at"],
+                                    "Tags": ", ".join(r["tags"]),
+                                    "$/Kill": r["metrics"].get("mean_cost_per_kill_usd", "—"),
+                                    "Peak °C": r["metrics"].get("peak_barrel_temp_c", "—"),
+                                }
+                                for r in saved_list
+                            ]
+                        ),
+                        width="stretch",
+                    )
+                    if len(saved_list) >= 2:
+                        id_map = {f"{r['name']} ({r['id']})": r["id"] for r in saved_list}
+                        dc1, dc2 = st.columns(2)
+                        with dc1:
+                            pick_a = st.selectbox("Diff Baseline A", list(id_map.keys()), index=1, key="cuas18_lib_da")
+                        with dc2:
+                            pick_b = st.selectbox("Diff Candidate B", list(id_map.keys()), index=0, key="cuas18_lib_db")
+                        if id_map[pick_a] != id_map[pick_b]:
+                            diff_res = lib.diff_scenarios(id_map[pick_a], id_map[pick_b])
+                            if diff_res["metric_diffs"]:
+                                st.markdown("**Outcome Metric Delta (B - A)**")
+                                st.dataframe(pd.DataFrame(diff_res["metric_diffs"][:10]), width="stretch")
 
         # --- TAB 18.10: A/B TURRET COMPARATOR & LAYERED C-UAS DEFENSE ---
         elif active_cuas_mod == _CUAS18_MODULES[9]:
@@ -2414,6 +2636,7 @@ def tab_cuas_and_small_arms() -> None:
                         )
                     ab_sm = ab_res["summary"]
                     ab_sc = ab_res["scorecard"]
+                    st.session_state["_report_ab_result"] = ab_res
                     win_row = max(ab_sc, key=lambda r: r["mei_score"])
                     ak1, ak2, ak3 = st.columns(3)
                     ak1.metric("Top Ranked Architecture", win_row["short_name"], delta=f"MEI Score: {win_row['mei_score']:.1f} / 100")
@@ -2564,6 +2787,7 @@ def tab_cuas_and_small_arms() -> None:
                     seed=42,
                 )
             ct_sm = cuas_tor["summary"]
+            st.session_state["_report_tornado_result"] = cuas_tor
             bn_top = cuas_tor["top_bottlenecks"]
             sk_t1, sk_t2, sk_t3 = st.columns(3)
             sk_t1.metric("Baseline Kill-Chain P_kill", f"{ct_sm['baseline_value']:.1f} %", delta=f"±{ct_sm['perturbation_pct']:.0f}% OAT Sweep")
@@ -2585,3 +2809,264 @@ def tab_cuas_and_small_arms() -> None:
                 "text/csv",
                 key="cuas18_dl_tor_csv",
             )
+
+        # --- TAB 18.12: UNIFIED DYNAMIC 3D TACTICAL RAID SIMULATOR ---
+        elif active_cuas_mod == _CUAS18_MODULES[11]:
+            st.markdown("#### ⚔️ Unified Dynamic 3D Cooperative Multi-Turret Tactical Raid")
+            st.caption(
+                "Time-stepped 3D engagement engine unifying Multi-Sensor Kill Chain (RF / Fiber-Optic immunity), "
+                "Swarm Evasion, Cooperative Turret Weapon-Target Assignment (WTA), Building & DEM LOS Masking, "
+                "Magazine Reloads, and Newton Barrel Heating."
+            )
+            site_cat_12 = get_site_defense_presets()
+            dem_presets_12 = get_terrain_dem_presets()
+            kc_sens_12 = get_kill_chain_sensor_catalog()
+            mag_cat_12 = get_magazine_system_specs()
+
+            saved_site = st.session_state.get("_site_active_layout")
+            use_m7 = False
+            if saved_site is not None:
+                use_m7 = st.checkbox(
+                    f"Use Active Site & DEM Layout Configured in Module 7 ({saved_site.get('site_preset', 'custom')})",
+                    value=True,
+                    key="cuas18_raid_use_m7",
+                )
+
+            rd1, rd2, rd3 = st.columns(3)
+            with rd1:
+                if use_m7 and saved_site is not None:
+                    r_site = str(saved_site.get("site_preset", "fob_compound_4_turret"))
+                    r_tur_json = json.dumps(saved_site.get("turrets", []))
+                    r_obs_json = json.dumps(saved_site.get("obstacles", []))
+                    r_nfz_json = json.dumps(saved_site.get("nfz_zones", []))
+                    r_dem_json = str(saved_site.get("terrain_dem_json", ""))
+                    r_dem_obj = TerrainDEMGrid.from_dict(json.loads(r_dem_json)) if r_dem_json else None
+                else:
+                    r_site = st.selectbox(
+                        "Facility Layout",
+                        list(site_cat_12.keys()),
+                        format_func=lambda k: site_cat_12[k]["name"],
+                        key="cuas18_raid_site",
+                    )
+                    r_dem_pk = st.selectbox(
+                        "Terrain Elevation Profile",
+                        list(dem_presets_12.keys()),
+                        format_func=lambda k: dem_presets_12[k]["name"],
+                        key="cuas18_raid_dem",
+                    )
+                    r_tur_json, r_obs_json, r_nfz_json = "", "", ""
+                    r_dem_obj = None if r_dem_pk == "flat_airfield" else build_preset_terrain_dem(r_dem_pk)
+                    r_dem_json = r_dem_obj.to_json() if r_dem_obj is not None else ""
+
+                r_sensors = st.multiselect(
+                    "Active Kill-Chain Sensors",
+                    list(kc_sens_12.keys()),
+                    default=["micro_doppler_radar", "eoir_thermal_optical", "rf_c2_df"],
+                    format_func=lambda k: kc_sens_12[k]["short_label"],
+                    key="cuas18_raid_sensors",
+                )
+                r_wx = st.selectbox(
+                    "Weather Regime",
+                    ["clear_day", "overcast_dusk", "night_clear", "heavy_fog_rain"],
+                    key="cuas18_raid_wx",
+                )
+
+            with rd2:
+                r_n_drones = st.slider("Inbound Swarm Size", 4, 24, 10, 1, key="cuas18_raid_nd")
+                r_fo_pct = st.slider("Fiber-Optic (RF-Dark) Share (%)", 0, 100, 30, 5, key="cuas18_raid_fo")
+                r_pattern = st.selectbox(
+                    "Approach Vector Doctrine",
+                    ["multi_vector_360", "pincer_dual_axis", "concentrated_axis"],
+                    key="cuas18_raid_pat",
+                )
+                r_evasion = st.selectbox(
+                    "Drone Evasion Maneuver",
+                    ["jinking_weave", "pop_up_terminal", "straight_dive"],
+                    key="cuas18_raid_ev",
+                )
+
+            with rd3:
+                r_ammo = st.selectbox(
+                    "Turret Ammunition Load",
+                    list(sg_presets_18.keys()),
+                    format_func=lambda k: sg_presets_18[k]["name"],
+                    index=list(sg_presets_18.keys()).index("12G_NO4_BUCK_C_UAS") if "12G_NO4_BUCK_C_UAS" in sg_presets_18 else 0,
+                    key="cuas18_raid_ammo",
+                )
+                r_mag = st.selectbox(
+                    "Magazine / Feed System",
+                    list(mag_cat_12.keys()),
+                    format_func=lambda k: mag_cat_12[k]["name"],
+                    index=1,
+                    key="cuas18_raid_mag",
+                )
+                r_speed = st.slider("Swarm Speed (m/s)", 10.0, 42.0, 22.0, 1.0, key="cuas18_raid_spd")
+                r_rmax = st.slider("Turret Engagement Range (m)", 35.0, 95.0, 65.0, 5.0, key="cuas18_raid_rmax")
+
+            with st.spinner("Running 30-Trial Cooperative 3D Multi-Turret Raid Simulation..."):
+                raid_res = _cached_unified_raid(
+                    site_preset=r_site,
+                    custom_turrets_json=r_tur_json,
+                    custom_obstacles_json=r_obs_json,
+                    custom_nfz_json=r_nfz_json,
+                    terrain_dem_json=r_dem_json,
+                    sensors_tuple=tuple(r_sensors or ["micro_doppler_radar"]),
+                    weather_condition=str(r_wx),
+                    n_drones=int(r_n_drones),
+                    fiber_optic_fraction=float(r_fo_pct) / 100.0,
+                    drone_model="fpv_quad_small",
+                    approach_pattern=str(r_pattern),
+                    evasion_profile=str(r_evasion),
+                    maneuver_g=1.6,
+                    threat_speed_mps=float(r_speed),
+                    threat_altitude_m=22.0,
+                    stagger_window_s=5.0,
+                    ammunition_preset=str(r_ammo),
+                    choke="Modified",
+                    magazine_type=str(r_mag),
+                    weapon_max_range_m=float(r_rmax),
+                    n_mc_trials=30,
+                    seed=42,
+                )
+            st.session_state["_report_raid_result"] = raid_res
+
+            rsm = raid_res["summary"]
+            rk1, rk2, rk3, rk4 = st.columns(4)
+            rk1.metric("Zero-Breach Raid Stop", f"{rsm['zero_breach_pct']:.1f} %", delta=f"Mean Leakers: {rsm['mean_leakers']:.2f}/{rsm['n_drones']}")
+            rk2.metric("Mean Swarm Kill Rate", f"{rsm['mean_kill_rate_pct']:.1f} %", delta=f"Mean Intercept: {rsm['mean_intercept_range_m']:.1f} m")
+            rk3.metric("Cost per Neutralized Drone", f"${rsm['cost_per_kill_usd']:.2f}", delta=f"{rsm['mean_rounds_expended']:.1f} rds/raid • Handoffs: {rsm['handoff_count_mean']:.2f}")
+            rk4.metric("Peak Barrel Temp", f"{rsm['peak_barrel_temp_c']:.1f} °C", delta=f"Reload Downtime: {rsm['reload_downtime_pct']:.1f}% • Terrain: {rsm['terrain_source'][:20]}")
+
+            rt1, rt2, rt3 = st.tabs([
+                "🎮 3D Animated Cooperative Raid Arena",
+                "📊 Barrel Thermal & Attrition Telemetry",
+                "📋 Turret Workload & Event Log",
+            ])
+            with rt1:
+                st.plotly_chart(
+                    create_unified_tactical_raid_3d_figure(raid_res, terrain_dem=r_dem_obj),
+                    width="stretch",
+                )
+            with rt2:
+                st.plotly_chart(create_raid_timeline_and_heat_figure(raid_res), width="stretch")
+            with rt3:
+                st.markdown("##### 🔫 Cooperative Turret Statistics (MC Means)")
+                st.dataframe(pd.DataFrame(raid_res["turret_stats"]), width="stretch")
+                st.markdown("##### 📝 Representative Trial Tactical Event Feed")
+                st.dataframe(pd.DataFrame(raid_res["event_log"]), width="stretch", height=300)
+
+        # --- TAB 18.13: FIELD-TEST CALIBRATION & EMPIRICAL RESIDUALS ---
+        elif active_cuas_mod == _CUAS18_MODULES[12]:
+            st.markdown("#### 🧪 Field-Test Calibration & Empirical vs. Model Residual Diagnostics")
+            st.caption(
+                "Upload range CSV measurements (or load realistic synthetic field logs) to fit choke spread multipliers, "
+                "chronograph MV & FM 6-40 temperature sensitivity, and exterior ballistic drag form factors via SciPy nonlinear least squares."
+            )
+            cal_t1, cal_t2, cal_t3 = st.tabs([
+                "🎯 Shotgun Patterning-Board Fit",
+                "📏 Chronograph MV & Temp Lot Fit",
+                "🚀 Exterior Drag Form-Factor (i) Fit",
+            ])
+
+            with cal_t1:
+                pc1, pc2, pc3 = st.columns(3)
+                with pc1:
+                    pat_rng = st.number_input("Patterning Range (m)", 10.0, 100.0, 36.58, 1.0, key="cal_pat_rng")
+                with pc2:
+                    pat_choke = st.selectbox("Nominal Choke", list(get_choke_definitions().keys()), index=3, key="cal_pat_choke")
+                with pc3:
+                    pat_ammo = st.selectbox("Reference Load", list(sg_presets_18.keys()), index=0, key="cal_pat_ammo")
+                pat_up = st.file_uploader("Upload Pellet Impact CSV (`y_m,z_m` or `y_cm,z_cm` or `y_in,z_in`)", type=["csv"], key="cal_pat_up")
+                if st.button("📋 Load Sample Patterning-Board CSV", key="cal_pat_sample_btn"):
+                    st.session_state["_cal_pat_csv"] = generate_sample_pattern_csv(range_m=float(pat_rng), nominal_choke=str(pat_choke))
+                pat_csv = pat_up.getvalue().decode("utf-8", errors="replace") if pat_up is not None else st.session_state.get("_cal_pat_csv") or generate_sample_pattern_csv(range_m=float(pat_rng), nominal_choke=str(pat_choke))
+                try:
+                    pat_res = calibrate_shotgun_pattern_from_csv(
+                        pat_csv,
+                        range_m=float(pat_rng),
+                        nominal_choke=str(pat_choke),
+                        ammunition_preset=str(pat_ammo),
+                    )
+                    pm1, pm2, pm3, pm4 = st.columns(4)
+                    pm1.metric("Fitted Spread Multiplier", f"{pat_res['calibrated_spread_factor']:.2f}×", delta=f"Closest: {pat_res['closest_standard_choke']}")
+                    pm2.metric("POI Bias (Y / Z)", f"{pat_res['poi_bias_y_mrad']:+.1f} / {pat_res['poi_bias_z_mrad']:+.1f} mrad", delta=f"40-yd 30\" Eff: {pat_res['fitted_40yd_30in_pct']:.1f}%")
+                    pm3.metric("Fitted R50 / R90", f"{pat_res['r50_fit_m']:.2f} / {pat_res['r90_fit_m']:.2f} m", delta=f"σ_fit={pat_res['sigma_fit_m']:.3f} m")
+                    pm4.metric("Rayleigh Goodness-of-Fit", f"R²={pat_res['r2_cdf']:.3f}", delta=f"KS p={pat_res['ks_pvalue']:.3f} (RMSE={pat_res['rmse_cdf']:.3f})")
+                    st.plotly_chart(create_pattern_calibration_figure(pat_res), width="stretch")
+                    if st.button("✅ Apply Calibrated Choke & Aim Bias to C-UAS Workbench", type="primary", key="cal_pat_apply_btn"):
+                        st.session_state["cuas_choke"] = pat_res["closest_standard_choke"]
+                        st.session_state["_calibrated_aim_bias_mrad"] = round(
+                            math.hypot(pat_res["poi_bias_y_mrad"], pat_res["poi_bias_z_mrad"]), 2
+                        )
+                        st.success(
+                            f"Applied closest choke `{pat_res['closest_standard_choke']}` & radial bias "
+                            f"{st.session_state['_calibrated_aim_bias_mrad']:.2f} mrad to session!"
+                        )
+                except Exception as exc:
+                    st.error(f"Pattern calibration error: {exc}")
+
+            with cal_t2:
+                ch1, ch2 = st.columns(2)
+                with ch1:
+                    ch_nom = st.number_input("Nominal MV Reference (m/s)", 100.0, 1800.0, 415.0, 5.0, key="cal_ch_nom")
+                with ch2:
+                    ch_tstd = st.number_input("Standard Propellant Temp (°C)", 0.0, 35.0, 21.1, 0.5, key="cal_ch_tstd")
+                ch_up = st.file_uploader("Upload Chronograph CSV (`velocity_mps` or `velocity_fps`, optional `temp_c`)", type=["csv"], key="cal_ch_up")
+                if st.button("📋 Load Sample Multi-Temperature Chronograph CSV", key="cal_ch_sample_btn"):
+                    st.session_state["_cal_ch_csv"] = generate_sample_chronograph_csv()
+                ch_csv = ch_up.getvalue().decode("utf-8", errors="replace") if ch_up is not None else st.session_state.get("_cal_ch_csv") or generate_sample_chronograph_csv()
+                try:
+                    ch_res = calibrate_chronograph_from_csv(ch_csv, nominal_mv_mps=float(ch_nom), std_temp_c=float(ch_tstd))
+                    cm1, cm2, cm3, cm4 = st.columns(4)
+                    cm1.metric("Fitted Mean MV @ T_std", f"{ch_res['v_std_fit_mps']:.2f} m/s", delta=f"Bias: {ch_res['mv_bias_mps']:+.2f} m/s")
+                    cm2.metric("Round-to-Round Residual SD", f"{ch_res['residual_sd_mps']:.2f} m/s", delta=f"Raw SD: {ch_res['sd_mps']:.2f} | ES: {ch_res['extreme_spread_mps']:.1f}")
+                    cm3.metric("FM 6-40 dMV/dT Slope", f"{ch_res['dv_dt_mps_per_c']:+.3f} m/s/°C" if ch_res["has_temp_fit"] else "Single Temp", delta=f"R²={ch_res['r2_temp_fit']:.3f}" if ch_res["has_temp_fit"] else "Add temp_c column")
+                    cm4.metric("Chrono Sample Size", f"{ch_res['n_shots']} shots", delta=f"{ch_res['min_mv_mps']:.1f}–{ch_res['max_mv_mps']:.1f} m/s")
+                    st.plotly_chart(create_chronograph_calibration_figure(ch_res), width="stretch")
+                    if st.button("✅ Apply Calibrated MV & SD to Monte Carlo Simulator", type="primary", key="cal_ch_apply_btn"):
+                        st.session_state["_calibrated_mv_mps"] = float(ch_res["v_std_fit_mps"])
+                        st.session_state["_calibrated_mv_sd_mps"] = float(ch_res["residual_sd_mps"])
+                        if ch_res["has_temp_fit"]:
+                            st.session_state["_calibrated_dv_dt"] = float(ch_res["dv_dt_mps_per_c"])
+                        st.success(
+                            f"Saved calibrated MV={ch_res['v_std_fit_mps']:.1f} m/s, SD={ch_res['residual_sd_mps']:.2f} m/s for Monte Carlo Simulator!"
+                        )
+                except Exception as exc:
+                    st.error(f"Chronograph calibration error: {exc}")
+
+            with cal_t3:
+                all_pr = [p["preset_id"] for p in list_presets()]
+                sa_def_idx = all_pr.index("NOTIONAL-SA-01") if "NOTIONAL-SA-01" in all_pr else 0
+                dc1, dc2 = st.columns([1.4, 1.0])
+                with dc1:
+                    dg_preset = st.selectbox("Reference Projectile Preset", all_pr, index=sa_def_idx, key="cal_dg_preset")
+                with dc2:
+                    dg_fit_mv = st.checkbox("Jointly Fit MV Scale & Drag Form Factor", value=False, key="cal_dg_fit_mv")
+                dg_up = st.file_uploader("Upload Range Drop / Radar CSV (`range_m,drop_m[,velocity_mps]`)", type=["csv"], key="cal_dg_up")
+                if st.button("📋 Load Sample Range Drop & Velocity CSV", key="cal_dg_sample_btn"):
+                    st.session_state["_cal_dg_csv"] = generate_sample_range_drop_csv(preset_id=str(dg_preset))
+                    st.session_state["_cal_dg_preset_seeded"] = str(dg_preset)
+                if dg_up is not None:
+                    dg_csv = dg_up.getvalue().decode("utf-8", errors="replace")
+                else:
+                    if st.session_state.get("_cal_dg_preset_seeded") != str(dg_preset) or "_cal_dg_csv" not in st.session_state:
+                        st.session_state["_cal_dg_csv"] = generate_sample_range_drop_csv(preset_id=str(dg_preset))
+                        st.session_state["_cal_dg_preset_seeded"] = str(dg_preset)
+                    dg_csv = st.session_state["_cal_dg_csv"]
+                try:
+                    dg_res = calibrate_drag_form_factor_from_csv(dg_csv, preset_id=str(dg_preset), fit_mv=bool(dg_fit_mv))
+                    dm1, dm2, dm3, dm4 = st.columns(4)
+                    dm1.metric("Calibrated Form Factor (i)", f"{dg_res['calibrated_form_factor']:.4f}", delta=f"Nominal: {dg_res['nominal_form_factor']:.3f} ({dg_res['calibrated_form_factor_multiplier']:.3f}×)")
+                    dm2.metric("Drop RMSE (Before -> After)", f"{(dg_res['rmse_drop_after_m'] or 0.0):.4f} m", delta=f"Before: {(dg_res['rmse_drop_before_m'] or 0.0):.4f} m")
+                    dm3.metric("Velocity RMSE (After)", f"{(dg_res['rmse_vel_after_mps'] or 0.0):.2f} m/s" if dg_res["has_vel"] else "—", delta=f"Before: {(dg_res['rmse_vel_before_mps'] or 0.0):.2f} m/s" if dg_res["has_vel"] else "Drop-only fit")
+                    dm4.metric("Fit R²", f"{dg_res['r2_fit']:.5f}", delta=f"{dg_res['n_stations']} stations ({dg_res['drag_ref']})")
+                    st.plotly_chart(create_drag_calibration_figure(dg_res), width="stretch")
+                    st.dataframe(pd.DataFrame(dg_res["stations"]), width="stretch")
+                    if st.button("✅ Apply Calibrated Form Factor (i) to Monte Carlo Simulator", type="primary", key="cal_dg_apply_btn"):
+                        st.session_state["_calibrated_form_factor"] = float(dg_res["calibrated_form_factor"])
+                        st.session_state["_calibrated_preset_id"] = str(dg_preset)
+                        if dg_fit_mv:
+                            st.session_state["_calibrated_mv_mps"] = float(dg_res["calibrated_mv_mps"])
+                        st.success(f"Applied calibrated form factor i={dg_res['calibrated_form_factor']:.4f} for `{dg_preset}`!")
+                except Exception as exc:
+                    st.error(f"Exterior drag calibration error: {exc}")

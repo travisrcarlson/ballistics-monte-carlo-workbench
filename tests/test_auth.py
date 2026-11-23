@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import hashlib
 
-from ammo_mc.auth import _DEFAULT_HASH_HEX, _DEFAULT_SALT_HEX, _PBKDF2_ITERATIONS, verify_app_password
+from ammo_mc.auth import (
+    _DEFAULT_HASH_HEX,
+    _DEFAULT_SALT_HEX,
+    _PBKDF2_ITERATIONS,
+    LoginRateLimiter,
+    verify_app_password,
+)
 
 
 class _BrokenSecrets:
@@ -52,3 +58,34 @@ def test_broken_secrets_falls_back_cleanly(monkeypatch) -> None:
     monkeypatch.setenv("AMMO_MC_PASSWORD", "FallbackEnv")
     assert verify_app_password("FallbackEnv", secrets_mapping=_BrokenSecrets()) is True  # type: ignore[arg-type]
     assert verify_app_password("bad", secrets_mapping=_BrokenSecrets()) is False  # type: ignore[arg-type]
+
+
+def test_login_rate_limiter_lockout_backoff_and_reset() -> None:
+    limiter = LoginRateLimiter(max_attempts=5, base_cooldown_s=15.0, max_cooldown_s=60.0)
+    t0 = 100.0
+    assert limiter.is_locked(now=t0) == (False, 0.0)
+    assert limiter.remaining_attempts() == 5
+
+    for idx in range(4):
+        assert limiter.record_failure(now=t0 + idx) == 0.0
+        assert limiter.remaining_attempts() == 4 - idx
+        assert limiter.is_locked(now=t0 + idx)[0] is False
+
+    # 5th failure triggers first 15s cooldown
+    cooldown_1 = limiter.record_failure(now=t0 + 5.0)
+    assert cooldown_1 == 15.0
+    locked, rem = limiter.is_locked(now=t0 + 10.0)
+    assert locked is True
+    assert rem == 10.0
+
+    # After cooldown expires, another 5 failures triggers 30s backoff
+    assert limiter.is_locked(now=t0 + 21.0) == (False, 0.0)
+    for idx in range(4):
+        assert limiter.record_failure(now=t0 + 22.0 + idx) == 0.0
+    cooldown_2 = limiter.record_failure(now=t0 + 26.0)
+    assert cooldown_2 == 30.0
+
+    # Reset on success clears lockout and restores remaining attempts
+    limiter.record_success()
+    assert limiter.is_locked(now=t0 + 27.0) == (False, 0.0)
+    assert limiter.remaining_attempts() == 5
