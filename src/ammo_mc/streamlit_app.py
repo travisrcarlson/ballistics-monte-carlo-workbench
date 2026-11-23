@@ -166,6 +166,19 @@ from ammo_mc.cuas_defense import (
     simulate_turret_recoil_and_gimbal_loads,
     sweep_recoil_vs_ripple_delay,
 )
+from ammo_mc.cuas_mission import (
+    generate_3d_intercept_replay_data,
+    generate_cuas_trade_study_html,
+    get_cuas_ammo_economics_catalog,
+    get_kill_chain_sensor_catalog,
+    get_magazine_system_specs,
+    get_site_defense_presets,
+    serialize_cuas_scenario_config,
+    simulate_cuas_kill_chain_mc,
+    simulate_cuas_sustained_logistics_mc,
+    simulate_multiturret_site_defense_mc,
+    validate_cuas_scenario_config,
+)
 from ammo_mc.validation import run_validation_suite
 from ammo_mc.vis_cuas import (
     create_2d_cuas_fallout_safety_map_figure,
@@ -177,6 +190,12 @@ from ammo_mc.vis_cuas import (
     create_fcs_tracking_and_evasion_figure,
     create_swarm_doctrine_tradeoff_figure,
     create_turret_recoil_dynamics_figure,
+)
+from ammo_mc.vis_cuas_mission import (
+    create_3d_animated_intercept_figure,
+    create_kill_chain_timeline_figure,
+    create_logistics_thermal_and_cost_figure,
+    create_multiturret_site_map_figure,
 )
 from ammo_mc.vis_3d import (
     create_2d_antidrone_intercept_figure,
@@ -216,6 +235,425 @@ from ammo_mc.vis_3d import (
 )
 from ammo_mc.vulnerability import tv_04_sspk_carleton, tv_05_multi_round_independent as tv_05_salvo_pk_independent
 
+
+# --- CACHED COMPUTATION WRAPPERS (HASHABLE ARGS FOR STREAMLIT CLOUD) ---
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_benchmark_multibarrel_aspect(
+    system_type: str,
+    n_barrels: int,
+    bore_spacing_y_mm: float,
+    bore_spacing_z_mm: float,
+    rotor_radius_mm: float,
+    crossover_range_m: float,
+    burst_rounds: int,
+    target_range_m: float,
+    cyclic_rate_rpm: float,
+    inherent_dispersion_mrad: float,
+    barrel_pointing_bias_mrad: float,
+    thermal_drift_mrad_per_100rd: float,
+    drone_model: str,
+    bullet_energy_j: float,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return benchmark_multibarrel_aspect_angles_mc(
+        system_type=system_type,
+        n_barrels=n_barrels,
+        bore_spacing_y_mm=bore_spacing_y_mm,
+        bore_spacing_z_mm=bore_spacing_z_mm,
+        rotor_radius_mm=rotor_radius_mm,
+        crossover_range_m=crossover_range_m,
+        burst_rounds=burst_rounds,
+        target_range_m=target_range_m,
+        cyclic_rate_rpm=cyclic_rate_rpm,
+        inherent_dispersion_mrad=inherent_dispersion_mrad,
+        barrel_pointing_bias_mrad=barrel_pointing_bias_mrad,
+        thermal_drift_mrad_per_100rd=thermal_drift_mrad_per_100rd,
+        drone_model=drone_model,
+        bullet_energy_j=bullet_energy_j,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_compare_anti_drone_layouts(
+    distance_stations_m: tuple[float, ...],
+    ammunition_preset: str,
+    drone_model: str,
+    drone_velocity_mps: float,
+    pointing_mode: str,
+    firing_mode: str,
+    n_volleys: int = 12,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return compare_anti_drone_layouts(
+        distance_stations_m=list(distance_stations_m),
+        ammunition_preset=ammunition_preset,
+        drone_model=drone_model,
+        drone_velocity_mps=drone_velocity_mps,
+        pointing_mode=pointing_mode,
+        firing_mode=firing_mode,
+        n_volleys=n_volleys,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_benchmark_drone_aspect(
+    layout_type: str,
+    n_barrels: int,
+    mount_radius_m: float,
+    spacing_y_m: float,
+    spacing_z_m: float,
+    n_cols: int,
+    n_rows: int,
+    pointing_mode: str,
+    splay_angle_mrad: float,
+    firing_mode: str,
+    ripple_delay_ms: float,
+    custom_barrel_specs_json: str,
+    ammunition_preset: str,
+    default_choke: str,
+    default_barrel_length_in: float,
+    target_distance_m: float,
+    drone_model: str,
+    drone_velocity_mps: float,
+    aim_error_mrad: float,
+    crosswind_mps: float,
+    n_volleys: int = 15,
+    seed: int = 42,
+) -> dict[str, Any]:
+    custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
+    return benchmark_drone_aspect_angles_mc(
+        layout_type=layout_type,
+        n_barrels=n_barrels,
+        mount_radius_m=mount_radius_m,
+        spacing_y_m=spacing_y_m,
+        spacing_z_m=spacing_z_m,
+        n_cols=n_cols,
+        n_rows=n_rows,
+        pointing_mode=pointing_mode,
+        splay_angle_mrad=splay_angle_mrad,
+        firing_mode=firing_mode,
+        ripple_delay_ms=ripple_delay_ms,
+        custom_barrel_specs=custom_specs,
+        ammunition_preset=ammunition_preset,
+        default_choke=default_choke,
+        default_barrel_length_in=default_barrel_length_in,
+        target_distance_m=target_distance_m,
+        drone_model=drone_model,
+        drone_velocity_mps=drone_velocity_mps,
+        aim_error_mrad=aim_error_mrad,
+        crosswind_mps=crosswind_mps,
+        n_volleys=n_volleys,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_compare_cuas_payloads(
+    distances_m: tuple[float, ...],
+    n_barrels: int,
+    drone_model: str,
+    aspect_mode: str,
+    fuze_time_jitter_ms: float,
+    n_volleys: int = 12,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return compare_cuas_payload_families(
+        distances_m=list(distances_m),
+        n_barrels=n_barrels,
+        drone_model=drone_model,
+        aspect_mode=aspect_mode,
+        fuze_time_jitter_ms=fuze_time_jitter_ms,
+        n_volleys=n_volleys,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_optimize_antidrone_array(
+    n_barrels: int,
+    mount_radius_m: float,
+    target_distance_m: float,
+    drone_model: str,
+    drone_velocity_mps: float,
+    ammunition_preset: str,
+    inner_ammunition_preset: str | None,
+    mount_mass_kg: float,
+    mount_stiffness_n_per_m: float,
+    mount_load_limit_kn: float,
+    gimbal_trunnion_offset_z_m: float,
+    n_volleys: int = 12,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return optimize_antidrone_array_configuration(
+        n_barrels=n_barrels,
+        mount_radius_m=mount_radius_m,
+        target_distance_m=target_distance_m,
+        drone_model=drone_model,
+        drone_velocity_mps=drone_velocity_mps,
+        ammunition_preset=ammunition_preset,
+        inner_ammunition_preset=inner_ammunition_preset,
+        mount_mass_kg=mount_mass_kg,
+        mount_stiffness_n_per_m=mount_stiffness_n_per_m,
+        mount_load_limit_kn=mount_load_limit_kn,
+        gimbal_trunnion_offset_z_m=gimbal_trunnion_offset_z_m,
+        n_volleys=n_volleys,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_compare_cuas_fallout(
+    firing_elevation_deg: float,
+    wind_downrange_mps: float,
+    wind_crossrange_mps: float,
+    default_choke: str,
+    n_sample_pellets: int = 140,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return compare_cuas_fallout_across_loads(
+        firing_elevation_deg=firing_elevation_deg,
+        wind_downrange_mps=wind_downrange_mps,
+        wind_crossrange_mps=wind_crossrange_mps,
+        default_choke=default_choke,
+        n_sample_pellets=n_sample_pellets,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_kill_chain(
+    drone_model: str,
+    aspect_mode: str,
+    drone_speed_mps: float,
+    approach_altitude_m: float,
+    weather: str,
+    ambient_wind_mps: float,
+    fiber_optic_autonomous: bool,
+    enabled_sensors: tuple[str, ...],
+    ai_classify_s: float,
+    human_in_the_loop: bool,
+    human_auth_s: float,
+    slew_angle_deg: float,
+    turret_slew_rate_deg_s: float,
+    max_weapon_range_m: float,
+    keepout_breach_radius_m: float,
+    n_barrels: int,
+    ammunition_preset: str,
+    choke: str,
+    salvo_cycle_time_s: float,
+    n_trials: int = 120,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return simulate_cuas_kill_chain_mc(
+        drone_model=drone_model,
+        aspect_mode=aspect_mode,
+        drone_speed_mps=drone_speed_mps,
+        approach_altitude_m=approach_altitude_m,
+        weather=weather,
+        ambient_wind_mps=ambient_wind_mps,
+        fiber_optic_autonomous=fiber_optic_autonomous,
+        enabled_sensors=enabled_sensors,
+        ai_classify_s=ai_classify_s,
+        human_in_the_loop=human_in_the_loop,
+        human_auth_s=human_auth_s,
+        slew_angle_deg=slew_angle_deg,
+        turret_slew_rate_deg_s=turret_slew_rate_deg_s,
+        max_weapon_range_m=max_weapon_range_m,
+        keepout_breach_radius_m=keepout_breach_radius_m,
+        n_barrels=n_barrels,
+        ammunition_preset=ammunition_preset,
+        choke=choke,
+        salvo_cycle_time_s=salvo_cycle_time_s,
+        n_trials=n_trials,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_site_defense(
+    site_preset: str,
+    threat_altitude_m: float,
+    threat_speed_mps: float,
+    drone_model: str,
+    weapon_max_range_m: float,
+    elevation_sdz_range_m: float,
+    n_raid_trials: int = 80,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return simulate_multiturret_site_defense_mc(
+        site_preset=site_preset,
+        threat_altitude_m=threat_altitude_m,
+        threat_speed_mps=threat_speed_mps,
+        drone_model=drone_model,
+        weapon_max_range_m=weapon_max_range_m,
+        elevation_sdz_range_m=elevation_sdz_range_m,
+        n_raid_trials=n_raid_trials,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_intercept_replay(
+    mode: str,
+    layout_type: str,
+    n_barrels: int,
+    target_distance_m: float,
+    drone_model: str,
+    aspect_mode: str,
+    drone_speed_mps: float,
+    maneuver_profile: str,
+    maneuver_g: float,
+    ammunition_preset: str,
+    choke: str,
+    firing_mode: str,
+    ripple_delay_ms: float,
+    n_frames: int = 30,
+    max_visual_pellets: int = 84,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return generate_3d_intercept_replay_data(
+        mode=mode,
+        layout_type=layout_type,
+        n_barrels=n_barrels,
+        target_distance_m=target_distance_m,
+        drone_model=drone_model,
+        aspect_mode=aspect_mode,
+        drone_speed_mps=drone_speed_mps,
+        maneuver_profile=maneuver_profile,
+        maneuver_g=maneuver_g,
+        ammunition_preset=ammunition_preset,
+        choke=choke,
+        firing_mode=firing_mode,
+        ripple_delay_ms=ripple_delay_ms,
+        n_frames=n_frames,
+        max_visual_pellets=max_visual_pellets,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_sustained_logistics(
+    n_waves: int,
+    drones_per_wave: int,
+    wave_interval_s: float,
+    n_barrels: int,
+    ammo_family: str,
+    magazine_type: str,
+    barrel_mass_kg: float,
+    ambient_temp_c: float,
+    target_range_m: float,
+    drone_model: str,
+    aspect_mode: str,
+    n_trials: int = 60,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return simulate_cuas_sustained_logistics_mc(
+        n_waves=n_waves,
+        drones_per_wave=drones_per_wave,
+        wave_interval_s=wave_interval_s,
+        n_barrels=n_barrels,
+        ammo_family=ammo_family,
+        magazine_type=magazine_type,
+        barrel_mass_kg=barrel_mass_kg,
+        ambient_temp_c=ambient_temp_c,
+        target_range_m=target_range_m,
+        drone_model=drone_model,
+        aspect_mode=aspect_mode,
+        n_trials=n_trials,
+        seed=seed,
+    )
+
+_WORKBENCH_OPTIONS = [
+    "🎯 Monte Carlo Simulator",
+    "🛸 C-UAS & Small Arms",
+    "🌐 3D Simulations",
+    "🚀 MCDRAG & 3D CAD",
+    "🔬 Physics & Ballistics Labs",
+    "🏛️ UNODA IATG Safety",
+    "📋 Firing Tables & Met",
+    "✅ Validation Suite",
+]
+
+_CUAS_SUITES = [
+    "🛸 C-UAS Turret Suite (9 Modules)",
+    "🔫 Small Arms & Multi-Barrel Array (5 Modes)",
+]
+
+_CUAS18_MODULES = [
+    "📡 1. Closed-Loop FCS & Evasive Drones",
+    "🐝 2. Multi-Drone Swarm Saturation",
+    "💥 3. Advanced Payloads & Airburst",
+    "🔩 4. Recoil, Gimbal & Pareto Optimizer",
+    "⚠️ 5. Elevated Fallout & Safety Zone (SDZ)",
+    "🛰️ 6. Multi-Sensor Kill Chain & Timeline",
+    "🏰 7. Multi-Turret Site Defense & NFZ",
+    "🎬 8. 3D Animated Intercept Replay",
+    "🔥 9. Logistics, Barrel Heat, $/Kill & Report",
+]
+
+_SMALL_ARMS_MODES = [
+    "🎯 Single-Range Pattern Spread & Shot Stringing",
+    "📏 Multi-Distance Range Sweep & 3D Plume Slices",
+    "📐 Multiple Barrel Lengths Comparison",
+    "🔄 Multi-Barrel Systems, Rotary Minigun & Volley Dispersion",
+    "🛸 Anti-Drone Multi-Shotgun Defense Array (C-UAS)",
+]
+
+_PHYSICS_LABS = [
+    "🔥 1. Interior Ballistics & P-V Diagram",
+    "🌍 2. ISA Atmosphere, Stability & Coriolis",
+    "🌊 3. Shock Physics & Rankine-Hugoniot",
+    "💥 4. Gurney Energy, Taylor & Mott",
+    "🛡️ 5. Continuum Penetration & Project THOR",
+    "📐 6. Quasi-MC Discrepancy & KB Registry",
+    "🌀 7. STANAG 4355 MPM Yaw & Spin Drift",
+    "⚙️ 8. Bayesian Fuze Reliability & Graze Surface",
+    "🚀 9. Precision Guidance & Proportional Nav (PN/APN)",
+    "📦 10. Cluster Dispenser & UXO Hazard (CCM/IATG)",
+    "🌀 11. Full 6-DoF Rigid-Body & Epicyclic Yaw",
+    "🎯 12. Battery Sheafs & MRSI/TOT Salvo",
+    "🛡️ 13. Multi-Layer Armor & Tandem ERA",
+    "🛰️ 14. Counter-Battery Radar & POO/POI",
+    "🎯 15. Direct-Fire Tank Gunnery & APFSDS Sabot",
+    "📡 16. Electronic Warfare & Laser Homing",
+]
+
+_IATG_TOOLS = [
+    "🏗️ 1. Quantity-Distance (QD), Open-Detonation (TB-15) & 3D PES Map",
+    "🧱 2. Structural Damage (TB-10 Jarrett/GLS) & Swiss Glazing (TB-11)",
+    "📦 3. NATO AASTP-1 Stack Fragmentation (TF-10) & RC Debris (TF-14)",
+    "🫁 4. Axelsson Thoracic Biomechanics ODE (TB-13) & Thermal Dose (TB-16)",
+    "🗺️ 5. Multi-Facility 3D Site Planner & Sympathetic Matrix",
+    "🧪 6. Propellant Aging & In-Service Surveillance (IATG 07.10 / AOP-48)",
+    "🗺️ 7. Terrain Crest Clearance & KML/CZML Export",
+]
+
+
+def _set_active_workbench(wb_name: str) -> None:
+    st.session_state["active_workbench"] = wb_name
+
+
+def _set_cuas_module(mod_name: str) -> None:
+    st.session_state["cuas_wb_suite"] = _CUAS_SUITES[0]
+    st.session_state["cuas18_active_module"] = mod_name
+
+
+def _render_sidebar_header(title: str, subtitle: str) -> None:
+    st.markdown(
+        f"""
+        <div class="sb-wb-badge">
+            <div class="sb-wb-kicker">ACTIVE WORKBENCH</div>
+            <div class="sb-wb-title">{title}</div>
+            <div class="sb-wb-sub">{subtitle}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _configure_page_and_styles() -> None:
     """Configure page metadata and inject theme-adaptive CSS styles on each run."""
     st.set_page_config(
@@ -235,6 +673,10 @@ def _configure_page_and_styles() -> None:
         .flag-banner { background-color: rgba(239, 68, 68, 0.14); border: 1px solid rgba(239, 68, 68, 0.35); border-left: 5px solid #EF4444; color: var(--text-color, #F8FAFC); padding: 0.75rem 1rem; border-radius: 4px; margin-bottom: 1.0rem; font-size: 0.86rem; }
         .epistemic-banner { background-color: rgba(59, 130, 246, 0.14); border: 1px solid rgba(59, 130, 246, 0.35); border-left: 5px solid #3B82F6; color: var(--text-color, #F8FAFC); padding: 0.75rem 1rem; border-radius: 4px; margin-bottom: 1.0rem; font-size: 0.88rem; }
         .auth-card { background-color: rgba(148, 163, 184, 0.08); border: 1px solid rgba(148, 163, 184, 0.25); border-radius: 10px; padding: 1.5rem 1.75rem; margin-top: 2.5rem; margin-bottom: 1rem; }
+        .sb-wb-badge { background-color: rgba(59, 130, 246, 0.12); border: 1px solid rgba(59, 130, 246, 0.30); border-radius: 8px; padding: 0.65rem 0.8rem; margin-bottom: 0.75rem; color: var(--text-color, #F8FAFC); }
+        .sb-wb-kicker { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em; opacity: 0.72; text-transform: uppercase; margin-bottom: 0.15rem; }
+        .sb-wb-title { font-size: 1.02rem; font-weight: 700; line-height: 1.25; }
+        .sb-wb-sub { font-size: 0.78rem; opacity: 0.80; margin-top: 0.2rem; line-height: 1.3; }
         [data-testid="stMetricValue"] { font-size: 1.55rem !important; line-height: 1.25 !important; white-space: normal !important; overflow-wrap: break-word !important; }
         [data-testid="stMetricDelta"] > div { white-space: normal !important; overflow-wrap: break-word !important; font-size: 0.80rem !important; }
         [data-testid="stMetricLabel"] p { white-space: normal !important; line-height: 1.2 !important; }
@@ -272,7 +714,7 @@ def require_password() -> bool:
                 placeholder="Enter password...",
                 key="auth_pw_field",
             )
-            submitted = st.form_submit_button("🔓 Unlock Workbench", use_container_width=True, type="primary")
+            submitted = st.form_submit_button("🔓 Unlock Workbench", width="stretch", type="primary")
         if submitted:
             try:
                 secrets_map = st.secrets
@@ -322,6 +764,7 @@ def tab_simulator() -> None:
     }
 
     with st.sidebar:
+        _render_sidebar_header("🎯 Monte Carlo Simulator", "Stochastic 6-stage exterior, fuze & terminal pipeline")
         st.header("⚙️ Simulation Configuration")
         sel_family = st.selectbox("System Family Filter", list(family_map.keys()), index=0)
         prefixes = family_map[sel_family]
@@ -489,7 +932,7 @@ def tab_simulator() -> None:
             if terrain_mode == "Linear Hill Profile":
                 hill_slope = st.slider("Hill Grade (%)", -10.0, 15.0, 3.0, 0.5)
 
-        run_btn = st.button("🚀 Run Monte Carlo Simulation", type="primary", use_container_width=True)
+        run_btn = st.button("🚀 Run Monte Carlo Simulation", type="primary", width="stretch")
 
     # Prepare ammo and scenario
     ammo = base_ammo.model_copy(deep=True)
@@ -783,7 +1226,7 @@ def tab_simulator() -> None:
                 )
             )
             fig_poi.update_layout(height=430, margin=dict(l=20, r=20, t=40, b=20))
-            st.plotly_chart(fig_poi, use_container_width=True)
+            st.plotly_chart(fig_poi, width="stretch")
 
     with col_plot2:
         st.subheader("📈 Flight Trajectory Bundle & Velocity Profile")
@@ -846,7 +1289,7 @@ def tab_simulator() -> None:
                 height=430,
                 margin=dict(l=20, r=20, t=40, b=20),
             )
-            st.plotly_chart(fig_traj, use_container_width=True)
+            st.plotly_chart(fig_traj, width="stretch")
         else:
             st.info("Sample trajectory available for L1/L2/L3 physics simulations.")
 
@@ -892,7 +1335,7 @@ def tab_simulator() -> None:
                 height=400,
                 margin=dict(l=20, r=20, t=40, b=20),
             )
-            st.plotly_chart(fig_hz, use_container_width=True)
+            st.plotly_chart(fig_hz, width="stretch")
         elif res.penetration is not None:
             pen = res.penetration
             st.markdown("#### 🛡️ Armor Penetration & Perforation Mechanics (`PEN-01..PEN-05`)")
@@ -934,7 +1377,7 @@ def tab_simulator() -> None:
                 title="Variance / Rank-Correlation Contribution to Range Dispersion",
             )
             fig_sens.update_layout(height=400, margin=dict(l=20, r=20, t=40, b=20), coloraxis_showscale=False)
-            st.plotly_chart(fig_sens, use_container_width=True)
+            st.plotly_chart(fig_sens, width="stretch")
         else:
             st.info("Sensitivity analysis requires variation across stochastic parameters.")
 
@@ -1013,10 +1456,10 @@ def tab_simulator() -> None:
                     title="Pareto Breakdown of Non-Nominal Failure Modes (%)" if not non_nom_df.empty else "Failure Mode Distribution (%)",
                 )
                 fig_fmea.update_layout(height=320, margin=dict(l=15, r=15, t=40, b=15), showlegend=False)
-                st.plotly_chart(fig_fmea, use_container_width=True)
+                st.plotly_chart(fig_fmea, width="stretch")
 
             with fmea_col2:
-                st.dataframe(fmea_df, use_container_width=True, height=320)
+                st.dataframe(fmea_df, width="stretch", height=320)
 
     # Row 3: Monte Carlo Convergence & Provenance Audit
     conv_col1, conv_col2 = st.columns(2)
@@ -1055,7 +1498,7 @@ def tab_simulator() -> None:
                 height=340,
                 margin=dict(l=20, r=20, t=40, b=20),
             )
-            st.plotly_chart(fig_conv, use_container_width=True)
+            st.plotly_chart(fig_conv, width="stretch")
 
     with conv_col2:
         st.subheader("🧾 Provenance & Active Formula Audit Trail")
@@ -1064,7 +1507,7 @@ def tab_simulator() -> None:
             f_df = pd.DataFrame(forms_used)
             st.dataframe(
                 f_df[["formula_id", "module", "name", "verification_status", "source_id"]],
-                use_container_width=True,
+                width="stretch",
                 height=300,
             )
 
@@ -1119,7 +1562,7 @@ def tab_simulator() -> None:
                     height=330,
                     margin=dict(l=15, r=15, t=40, b=15),
                 )
-                st.plotly_chart(fig_en, use_container_width=True)
+                st.plotly_chart(fig_en, width="stretch")
 
             with sci_c2:
                 atm_tr = eb_04_isa_atmosphere(rz_a, dT_K=float(cur_scn.met.deviations.dT_K))
@@ -1155,7 +1598,7 @@ def tab_simulator() -> None:
                     height=330,
                     margin=dict(l=15, r=15, t=40, b=15),
                 )
-                st.plotly_chart(fig_re, use_container_width=True)
+                st.plotly_chart(fig_re, width="stretch")
 
         with sci_c3:
             st.markdown("##### 📐 Bivariate Covariance & Eigen-Structure")
@@ -1199,7 +1642,7 @@ def tab_simulator() -> None:
             csv_bytes,
             f"{cur_ammo.id}_trials.csv",
             "text/csv",
-            use_container_width=True,
+            width="stretch",
         )
     with exp_c2:
         json_str = summary_to_json_str(res)
@@ -1208,7 +1651,7 @@ def tab_simulator() -> None:
             json_str.encode("utf-8"),
             f"{cur_ammo.id}_summary.json",
             "application/json",
-            use_container_width=True,
+            width="stretch",
         )
     with exp_c3:
         geojson_str = geojson_to_str(res, scenario=cur_scn)
@@ -1217,7 +1660,7 @@ def tab_simulator() -> None:
             geojson_str.encode("utf-8"),
             f"{cur_ammo.id}_contours.geojson",
             "application/geo+json",
-            use_container_width=True,
+            width="stretch",
         )
     with exp_c4:
         png_bytes = render_report_figure_bytes(res, scenario=cur_scn, fmt="png")
@@ -1226,7 +1669,7 @@ def tab_simulator() -> None:
             png_bytes,
             f"{cur_ammo.id}_report.png",
             "image/png",
-            use_container_width=True,
+            width="stretch",
         )
     with exp_c5:
         pdf_bytes = render_report_figure_bytes(res, scenario=cur_scn, fmt="pdf")
@@ -1235,7 +1678,7 @@ def tab_simulator() -> None:
             pdf_bytes,
             f"{cur_ammo.id}_report.pdf",
             "application/pdf",
-            use_container_width=True,
+            width="stretch",
         )
 
 
@@ -1260,23 +1703,41 @@ def tab_3d_simulation() -> None:
     cur_ammo: AmmoDefinition = st.session_state["last_sim_ammo"]
     cur_scn: Scenario = st.session_state["last_sim_scn"]
 
-    view_mode = st.radio(
-        "Select 3D Simulation Mode:",
-        [
-            "🎯 3D Flight Trajectory Bundle & Terrain",
-            "🎬 Animated 3D Salvo Flight Replay",
-            "🌀 3D Phase-Space & Thermodynamic Manifold",
-            "💥 3D Pressure Wave & Fragment Kinematics",
-            "🏛️ 3D IATG Explosive Safety & QD Domes",
-            "⚔️ Multi-Preset 3D Comparison Arena",
-        ],
-        horizontal=True,
-    )
+    _3d_modes = [
+        "🎯 3D Flight Trajectory Bundle & Terrain",
+        "🎬 Animated 3D Salvo Flight Replay",
+        "🌀 3D Phase-Space & Thermodynamic Manifold",
+        "💥 3D Pressure Wave & Fragment Kinematics",
+        "🏛️ 3D IATG Explosive Safety & QD Domes",
+        "⚔️ Multi-Preset 3D Comparison Arena",
+    ]
+    all_presets_3d = list_presets()
+    p3d_map = {f"{p['preset_id']} — {p['ammo_name']}": p["preset_id"] for p in all_presets_3d}
+    p3d_keys = list(p3d_map.keys())
+    cur_p3d_idx = next((i for i, k in enumerate(p3d_keys) if p3d_map[k] == cur_ammo.id), 0)
 
-    if view_mode == "🎯 3D Flight Trajectory Bundle & Terrain":
-        st.subheader("🎯 3D Flight Dynamics, CEP Ellipses & Terrain Intersection")
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
+    with st.sidebar:
+        _render_sidebar_header("🌐 3D Simulations", "Interactive WebGL trajectories, terrain & terminal scenes")
+        view_mode = st.radio("3D Simulation Mode", _3d_modes, key="sim3d_view_mode")
+        with st.expander("🎯 Active 3D Baseline Munition", expanded=False):
+            st.caption(f"**Loaded:** `{cur_ammo.id}` — {cur_ammo.name}")
+            sel_3d_label = st.selectbox("Switch Baseline Preset", p3d_keys, index=cur_p3d_idx, key="sim3d_preset_sel")
+            if st.button("🔄 Simulate & Load in 3D", width="stretch", key="sim3d_reload_btn"):
+                new_pid = p3d_map[sel_3d_label]
+                new_ammo, new_scn = get_preset(new_pid)
+                with st.spinner(f"Simulating {new_pid} for 3D scene..."):
+                    new_res = run_simulation(new_ammo, new_scn)
+                    st.session_state["last_sim_result"] = new_res
+                    st.session_state["last_sim_ammo"] = new_ammo
+                    st.session_state["last_sim_scn"] = new_scn
+                    st.session_state["last_preset_id"] = new_pid
+                res = new_res
+                cur_ammo = new_ammo
+                cur_scn = new_scn
+
+        st.divider()
+        st.subheader("🎛️ Scene Controls")
+        if view_mode == "🎯 3D Flight Trajectory Bundle & Terrain":
             color_opt = st.selectbox(
                 "Color Trajectories By",
                 ["Speed (m/s)", "Mach Number (-)", "Altitude (m)", "Trajectory Index"],
@@ -1287,18 +1748,62 @@ def tab_3d_simulation() -> None:
                 ["Scenario Default", "Rolling Hills DEM", "Canyon Valley", "Transverse Ridge"],
                 index=0,
             )
-        with c2:
             n_paths = st.slider("3D Trajectories in Bundle", 1, 20, 12, 1)
             cam_preset = st.selectbox(
                 "Camera Perspective", ["Perspective Overview", "Top-Down Map", "Side Profile", "Launcher View"]
             )
-        with c3:
             show_terr = st.checkbox("Show 3D Terrain Surface", value=True)
             show_tgt = st.checkbox("Show 3D Target Volume", value=True)
-        with c4:
             show_poi = st.checkbox("Show Ground Impact POI", value=True)
             show_cep = st.checkbox("Show 3D CEP50 & CEP95 Rings", value=True)
+        elif view_mode == "🎬 Animated 3D Salvo Flight Replay":
+            anim_paths = st.slider("Animated Trajectories", 2, 12, 8, 1)
+            anim_frames = st.slider("Time Resolution (Keyframes)", 12, 40, 24, 2)
+        elif view_mode == "🌀 3D Phase-Space & Thermodynamic Manifold":
+            ps_color_label = st.selectbox(
+                "Color State Trajectories By Physical Field",
+                [
+                    "Dynamic Pressure q = ½ρv² (kPa)",
+                    "Reynolds Number Re_d = ρvL/μ(T) (×10⁶)",
+                    "Specific Mechanical Energy e = ½v² + gz (kJ/kg)",
+                ],
+                index=0,
+            )
+            ps_paths = st.slider("Trajectories in Phase-Space Bundle", 2, 16, 10, 1)
+        elif view_mode == "💥 3D Pressure Wave & Fragment Kinematics":
+            def_charge = float(cur_ammo.warhead.fill.mass_kg if cur_ammo.warhead else 10.0)
+            def_hob = float(cur_ammo.fuze.hob.mu if cur_ammo.fuze else 0.0)
+            charge_kg = st.number_input(
+                "Energetic Fill Mass (kg)", min_value=0.1, max_value=2000.0, value=def_charge, step=1.0
+            )
+            exp_type = st.selectbox(
+                "Energetic Material",
+                ["Composition B", "TNT", "Composition C4", "Octol 75/25", "H-6", "Tritonal 80/20"],
+                index=0,
+            )
+            burst_z = st.slider("Burst Height Above Ground (m)", 0.0, 50.0, def_hob, 1.0)
+            n_frags = st.slider("3D Fragment Trajectory Rays", 30, 300, 120, 10)
+        elif view_mode == "🏛️ 3D IATG Explosive Safety & QD Domes":
+            qd_neq = st.number_input("Net Explosive Quantity NEQ (kg)", 1.0, 100000.0, 1000.0, 50.0, key="3d_qd_neq")
+            qd_auw = st.number_input("All-Up Munition Weight AUW (kg)", 1.0, 250000.0, 2500.0, 100.0, key="3d_qd_auw")
+            qd_exp = st.selectbox(
+                "Energetic Material",
+                ["Composition B", "TNT", "Composition C4", "Octol 75/25", "H-6", "Tritonal 80/20"],
+                index=0,
+                key="3d_qd_exp",
+            )
+            qd_domes = st.checkbox("Show 3D Translucent Hemispherical Safety Domes", value=True, key="3d_qd_domes")
+        elif view_mode == "⚔️ Multi-Preset 3D Comparison Arena":
+            all_p = [p["preset_id"] for p in all_presets_3d]
+            sel_comp = st.multiselect(
+                "Select Presets to Compare in 3D Space (2 to 4 recommended)",
+                all_p,
+                default=["NOTIONAL-AR-01", "NOTIONAL-AR-02", "NOTIONAL-MO-01"],
+                key="3d_comp_presets",
+            )
 
+    if view_mode == "🎯 3D Flight Trajectory Bundle & Terrain":
+        st.subheader("🎯 3D Flight Dynamics, CEP Ellipses & Terrain Intersection")
         c_key = (
             "speed"
             if "Speed" in color_opt
@@ -1332,7 +1837,7 @@ def tab_3d_simulation() -> None:
             )
 
         fig_3d_traj.update_layout(height=650)
-        st.plotly_chart(fig_3d_traj, use_container_width=True)
+        st.plotly_chart(fig_3d_traj, width="stretch")
 
         html_3d_traj = fig_3d_traj.to_html(include_plotlyjs="cdn", full_html=True)
         st.download_button(
@@ -1345,12 +1850,6 @@ def tab_3d_simulation() -> None:
     elif view_mode == "🎬 Animated 3D Salvo Flight Replay":
         st.subheader("🎬 Time-Stepped 3D Salvo Propagation Replay")
         st.caption("Click **▶ Play 3D Salvo** inside the 3D viewport or drag the time slider to scrub through flight.")
-        a1, a2 = st.columns(2)
-        with a1:
-            anim_paths = st.slider("Animated Trajectories", 2, 12, 8, 1)
-        with a2:
-            anim_frames = st.slider("Time Resolution (Keyframes)", 12, 40, 24, 2)
-
         fig_anim = create_3d_animated_flight_figure(
             result=res,
             scenario=cur_scn,
@@ -1358,7 +1857,7 @@ def tab_3d_simulation() -> None:
             n_frames=anim_frames,
         )
         fig_anim.update_layout(height=660)
-        st.plotly_chart(fig_anim, use_container_width=True)
+        st.plotly_chart(fig_anim, width="stretch")
 
         html_anim = fig_anim.to_html(include_plotlyjs="cdn", full_html=True)
         st.download_button(
@@ -1374,20 +1873,6 @@ def tab_3d_simulation() -> None:
             "Maps the stochastic trajectory ensemble into 3D dimensionless Mach-Altitude-Range phase space "
             "with a translucent **Sonic Barrier Plane ($M = 1.0$)** showing where projectiles transition through the transonic wave-drag peak."
         )
-        ps1, ps2 = st.columns(2)
-        with ps1:
-            ps_color_label = st.selectbox(
-                "Color State Trajectories By Physical Field",
-                [
-                    "Dynamic Pressure q = ½ρv² (kPa)",
-                    "Reynolds Number Re_d = ρvL/μ(T) (×10⁶)",
-                    "Specific Mechanical Energy e = ½v² + gz (kJ/kg)",
-                ],
-                index=0,
-            )
-        with ps2:
-            ps_paths = st.slider("Trajectories in Phase-Space Bundle", 2, 16, 10, 1)
-
         ps_map = {
             "Dynamic Pressure q = ½ρv² (kPa)": "dynamic_pressure_kPa",
             "Reynolds Number Re_d = ρvL/μ(T) (×10⁶)": "reynolds_millions",
@@ -1401,29 +1886,10 @@ def tab_3d_simulation() -> None:
             max_trajectories=ps_paths,
         )
         fig_ps.update_layout(height=640)
-        st.plotly_chart(fig_ps, use_container_width=True)
+        st.plotly_chart(fig_ps, width="stretch")
 
     elif view_mode == "💥 3D Pressure Wave & Fragment Kinematics":
         st.subheader("💥 3D Overpressure Iso-Surfaces & Fragmentation Trajectories")
-        d1, d2, d3, d4 = st.columns(4)
-        def_charge = float(cur_ammo.warhead.fill.mass_kg if cur_ammo.warhead else 10.0)
-        def_hob = float(cur_ammo.fuze.hob.mu if cur_ammo.fuze else 0.0)
-
-        with d1:
-            charge_kg = st.number_input(
-                "Energetic Fill Mass (kg)", min_value=0.1, max_value=2000.0, value=def_charge, step=1.0
-            )
-        with d2:
-            exp_type = st.selectbox(
-                "Energetic Material",
-                ["Composition B", "TNT", "Composition C4", "Octol 75/25", "H-6", "Tritonal 80/20"],
-                index=0,
-            )
-        with d3:
-            burst_z = st.slider("Burst Height Above Ground (m)", 0.0, 50.0, def_hob, 1.0)
-        with d4:
-            n_frags = st.slider("3D Fragment Trajectory Rays", 30, 300, 120, 10)
-
         fig_3d_blast = create_3d_blast_and_frag_figure(
             result=res,
             scenario=cur_scn,
@@ -1433,7 +1899,7 @@ def tab_3d_simulation() -> None:
             explosive_name=exp_type,
         )
         fig_3d_blast.update_layout(height=650)
-        st.plotly_chart(fig_3d_blast, use_container_width=True)
+        st.plotly_chart(fig_3d_blast, width="stretch")
 
         html_3d_blast = fig_3d_blast.to_html(include_plotlyjs="cdn", full_html=True)
         st.download_button(
@@ -1445,21 +1911,6 @@ def tab_3d_simulation() -> None:
 
     elif view_mode == "🏛️ 3D IATG Explosive Safety & QD Domes":
         st.subheader("🏛️ 3D UNODA IATG 01.80 / 02.20 Potential Explosion Site (PES) & Quantity-Distance Domes")
-        q1, q2, q3, q4 = st.columns(4)
-        with q1:
-            qd_neq = st.number_input("Net Explosive Quantity NEQ (kg)", 1.0, 100000.0, 1000.0, 50.0, key="3d_qd_neq")
-        with q2:
-            qd_auw = st.number_input("All-Up Munition Weight AUW (kg)", 1.0, 250000.0, 2500.0, 100.0, key="3d_qd_auw")
-        with q3:
-            qd_exp = st.selectbox(
-                "Energetic Material",
-                ["Composition B", "TNT", "Composition C4", "Octol 75/25", "H-6", "Tritonal 80/20"],
-                index=0,
-                key="3d_qd_exp",
-            )
-        with q4:
-            qd_domes = st.checkbox("Show 3D Translucent Hemispherical Safety Domes", value=True, key="3d_qd_domes")
-
         fig_3d_qd = create_3d_iatg_safety_zones_figure(
             neq_kg=float(qd_neq),
             auw_kg=float(qd_auw),
@@ -1467,16 +1918,10 @@ def tab_3d_simulation() -> None:
             show_domes=bool(qd_domes),
         )
         fig_3d_qd.update_layout(height=650)
-        st.plotly_chart(fig_3d_qd, use_container_width=True)
+        st.plotly_chart(fig_3d_qd, width="stretch")
 
     elif view_mode == "⚔️ Multi-Preset 3D Comparison Arena":
         st.subheader("⚔️ Multi-Preset 3D Trajectory & Dispersion Comparison")
-        all_p = [p["preset_id"] for p in list_presets()]
-        sel_comp = st.multiselect(
-            "Select Presets to Compare in 3D Space (2 to 4 recommended)",
-            all_p,
-            default=["NOTIONAL-AR-01", "NOTIONAL-AR-02", "NOTIONAL-MO-01"],
-        )
         if len(sel_comp) >= 1:
             runs_list: list[tuple[SimulationResult, Scenario]] = []
             comp_rows: list[dict[str, Any]] = []
@@ -1500,8 +1945,29 @@ def tab_3d_simulation() -> None:
                     )
             fig_comp = create_3d_multi_preset_comparison_figure(runs_list, show_terrain=True)
             fig_comp.update_layout(height=620)
-            st.plotly_chart(fig_comp, use_container_width=True)
-            st.dataframe(pd.DataFrame(comp_rows), use_container_width=True)
+            st.plotly_chart(fig_comp, width="stretch")
+            st.dataframe(pd.DataFrame(comp_rows), width="stretch")
+
+
+_MCDRAG_ARCHETYPES: dict[str, dict[str, Any]] = {
+    "155mm M795 Artillery": {"cal": 155.0, "tot": 5.2, "nose": 2.8, "bt": 0.60, "base": 0.84, "meplat": 0.12, "band": 1.02, "rt": 0.65, "bl": "L/T"},
+    "120mm Mortar/Shell": {"cal": 120.0, "tot": 4.4, "nose": 2.1, "bt": 0.70, "base": 0.78, "meplat": 0.16, "band": 1.00, "rt": 0.80, "bl": "L/T"},
+    "30mm Autocannon": {"cal": 30.0, "tot": 4.8, "nose": 2.6, "bt": 0.45, "base": 0.86, "meplat": 0.10, "band": 1.02, "rt": 0.70, "bl": "T/T"},
+    "5.56mm NATO Bullet": {"cal": 5.56, "tot": 4.1, "nose": 2.2, "bt": 0.55, "base": 0.82, "meplat": 0.08, "band": 1.00, "rt": 0.90, "bl": "L/L"},
+}
+
+
+def _apply_mcdrag_archetype() -> None:
+    arch = _MCDRAG_ARCHETYPES[st.session_state["mcdrag_archetype_sel"]]
+    st.session_state["mcdrag_cal"] = float(arch["cal"])
+    st.session_state["mcdrag_tot"] = float(arch["tot"])
+    st.session_state["mcdrag_nose"] = float(arch["nose"])
+    st.session_state["mcdrag_bt"] = float(arch["bt"])
+    st.session_state["mcdrag_base"] = float(arch["base"])
+    st.session_state["mcdrag_meplat"] = float(arch["meplat"])
+    st.session_state["mcdrag_band"] = float(arch["band"])
+    st.session_state["mcdrag_rt"] = float(arch["rt"])
+    st.session_state["mcdrag_bl"] = str(arch["bl"])
 
 
 # --- TAB 3: MCDRAG ESTIMATOR & 3D PROJECTILE CAD ---
@@ -1513,19 +1979,26 @@ def tab_mcdrag() -> None:
         "across Mach 0.5 to 5.0 alongside a real-time 3D axisymmetric projectile mesh."
     )
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        cal_mm = st.number_input("Reference Diameter / Calibre (mm)", min_value=5.56, max_value=400.0, value=155.0, step=5.0)
-        tot_len_cal = st.slider("Total Length (calibres)", 2.0, 10.0, 5.2, 0.1)
-        nose_len_cal = st.slider("Nose / Ogive Length (calibres)", 1.0, 6.0, 2.8, 0.1)
-    with c2:
-        bt_len_cal = st.slider("Boattail Length (calibres)", 0.0, 2.0, 0.6, 0.05)
-        base_dia_cal = st.slider("Base Diameter (calibres)", 0.5, 1.0, 0.84, 0.02)
-        meplat_dia_cal = st.slider("Meplat Flat Diameter (calibres)", 0.0, 0.5, 0.12, 0.02)
-    with c3:
-        band_dia_cal = st.slider("Rotating Band Diameter (calibres)", 1.0, 1.1, 1.02, 0.01)
-        rt_r = st.slider("Ogive Tangency Ratio R_t/R (0=cone, 1=tangent)", 0.0, 1.0, 0.65, 0.05)
-        bl_code = st.selectbox("Boundary Layer Condition", ["L/T", "T/T", "L/L"], index=0)
+    with st.sidebar:
+        _render_sidebar_header("🚀 MCDRAG & 3D CAD", "McCoy (1974) axisymmetric drag & 3D shell designer")
+        st.selectbox(
+            "Projectile Archetype Preset",
+            list(_MCDRAG_ARCHETYPES.keys()),
+            index=0,
+            key="mcdrag_archetype_sel",
+            on_change=_apply_mcdrag_archetype,
+        )
+        st.divider()
+        st.subheader("📐 Geometry & Boundary Layer")
+        cal_mm = st.number_input("Reference Diameter / Calibre (mm)", min_value=5.56, max_value=400.0, value=155.0, step=5.0, key="mcdrag_cal")
+        tot_len_cal = st.slider("Total Length (calibres)", 2.0, 10.0, 5.2, 0.1, key="mcdrag_tot")
+        nose_len_cal = st.slider("Nose / Ogive Length (calibres)", 1.0, 6.0, 2.8, 0.1, key="mcdrag_nose")
+        bt_len_cal = st.slider("Boattail Length (calibres)", 0.0, 2.0, 0.6, 0.05, key="mcdrag_bt")
+        base_dia_cal = st.slider("Base Diameter (calibres)", 0.5, 1.0, 0.84, 0.02, key="mcdrag_base")
+        meplat_dia_cal = st.slider("Meplat Flat Diameter (calibres)", 0.0, 0.5, 0.12, 0.02, key="mcdrag_meplat")
+        band_dia_cal = st.slider("Rotating Band Diameter (calibres)", 1.0, 1.1, 1.02, 0.01, key="mcdrag_band")
+        rt_r = st.slider("Ogive Tangency Ratio R_t/R (0=cone, 1=tangent)", 0.0, 1.0, 0.65, 0.05, key="mcdrag_rt")
+        bl_code = st.selectbox("Boundary Layer Condition", ["L/T", "T/T", "L/L"], index=0, key="mcdrag_bl")
 
     inp = McDragInputs(
         d_ref_mm=float(cal_mm),
@@ -1546,7 +2019,7 @@ def tab_mcdrag() -> None:
     with cad_col:
         fig_cad = create_3d_projectile_geometry_figure(inp)
         fig_cad.update_layout(height=470)
-        st.plotly_chart(fig_cad, use_container_width=True)
+        st.plotly_chart(fig_cad, width="stretch")
 
     with drag_col:
         kb = get_kb()
@@ -1615,23 +2088,25 @@ def tab_mcdrag() -> None:
             height=470,
             margin=dict(l=20, r=20, t=40, b=20),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     if res.get("diagnostics"):
         st.warning("MCDRAG Geometric Advisories: " + " | ".join(res["diagnostics"]))
 
     act_c1, act_c2 = st.columns([1, 2])
     with act_c1:
-        if st.button("⚡ Apply Custom MCDRAG Curve to Active Simulation", use_container_width=True):
+        if st.button("⚡ Apply Custom MCDRAG Curve to Active Simulation", width="stretch"):
             cur_ammo_obj = st.session_state.get("last_sim_ammo")
-            if cur_ammo_obj is not None:
-                st.session_state["custom_mcdrag_ammo_id"] = cur_ammo_obj.id
-                st.session_state["custom_mcdrag_table"] = [
-                    {"mach": float(r["mach"]), "cd": float(r["cd0"])} for r in res["table"]
-                ]
-                st.success(
-                    f"Injected custom 26-point MCDRAG Cd(M) table into {cur_ammo_obj.id}! Click 'Run Monte Carlo Simulation' in Tab 1 to fly with this drag curve."
-                )
+            if cur_ammo_obj is None:
+                cur_ammo_obj, _ = get_preset("NOTIONAL-AR-01")
+                st.session_state["last_sim_ammo"] = cur_ammo_obj
+            st.session_state["custom_mcdrag_ammo_id"] = cur_ammo_obj.id
+            st.session_state["custom_mcdrag_table"] = [
+                {"mach": float(r["mach"]), "cd": float(r["cd0"])} for r in res["table"]
+            ]
+            st.success(
+                f"Injected custom 26-point MCDRAG Cd(M) table into {cur_ammo_obj.id}! Switch to '🎯 Monte Carlo Simulator' and click 'Run Monte Carlo Simulation' to fly with this drag curve."
+            )
     with act_c2:
         Peak_Cd = float(table_df["cd0"].max())
         Peak_M = float(table_df.loc[table_df["cd0"].idxmax(), "mach"])
@@ -1641,7 +2116,7 @@ def tab_mcdrag() -> None:
             f"**Supersonic Cruise (Mach 2.0):** $C_{{D0}} = {Supersonic_Cd:.3f}$"
         )
 
-    st.dataframe(table_df, use_container_width=True)
+    st.dataframe(table_df, width="stretch")
 
 
 # --- TAB 4: SCIENTIFIC & CONTINUUM PHYSICS LABS ---
@@ -1653,31 +2128,24 @@ def tab_calculators() -> None:
     )
     kb = get_kb()
 
-    sub1, sub2, sub3, sub4, sub5, sub6, sub7, sub8, sub9, sub10, sub11, sub12, sub13, sub14, sub15, sub16, sub17, sub18 = st.tabs(
-        [
-            "🔥 1. Interior Ballistics & P-V Diagram",
-            "🌍 2. ISA Atmosphere, Stability & Coriolis",
-            "🌊 3. Shock Physics & Rankine-Hugoniot",
-            "💥 4. Gurney Energy, Taylor & Mott",
-            "🛡️ 5. Continuum Penetration & Project THOR",
-            "📐 6. Quasi-MC Discrepancy & KB Registry",
-            "🌀 7. STANAG 4355 MPM Yaw & Spin Drift",
-            "⚙️ 8. Bayesian Fuze Reliability & Graze Surface",
-            "🚀 9. Precision Guidance & Proportional Nav (PN/APN)",
-            "📦 10. Cluster Dispenser & UXO Hazard (CCM/IATG)",
-            "🌀 11. Full 6-DoF Rigid-Body & Epicyclic Yaw",
-            "🎯 12. Battery Sheafs & MRSI/TOT Salvo",
-            "🛡️ 13. Multi-Layer Armor & Tandem ERA",
-            "🛰️ 14. Counter-Battery Radar & POO/POI",
-            "🎯 15. Direct-Fire Tank Gunnery & APFSDS Sabot",
-            "📡 16. Electronic Warfare & Laser Homing",
-            "🔫 17. Small Arms & Multi-Barrel Dispersion",
-            "🛸 18. C-UAS Turret Suite (FCS, Swarms, Payloads, Recoil & SDZ)",
-        ]
-    )
+    with st.sidebar:
+        _render_sidebar_header("🔬 Physics & Ballistics Labs", "First-principles thermodynamics, exterior & terminal labs")
+        active_lab = st.radio("Select Physics Lab (1–16)", _PHYSICS_LABS, key="physics_active_lab")
+        st.divider()
+        st.caption(
+            "Only the selected lab runs on each interaction for fast responsiveness. "
+            "Counter-UAS turrets, multi-barrel arrays, and shotgun dispersion live in their dedicated top-level workbench."
+        )
+        st.button(
+            "🛸 Open C-UAS & Small Arms",
+            on_click=_set_active_workbench,
+            args=("🛸 C-UAS & Small Arms",),
+            width="stretch",
+            key="phys_jump_cuas_btn",
+        )
 
     # --- SUB-LAB 1: STANAG 4367 INTERIOR BALLISTICS ---
-    with sub1:
+    if active_lab == _PHYSICS_LABS[0]:
         st.subheader("🔥 Lumped-Parameter Thermodynamic Interior Ballistics (`IB-01` .. `IB-06`)")
         st.latex(
             r"""
@@ -1756,7 +2224,7 @@ def tab_calculators() -> None:
                 fig_ib_t.update_yaxes(title_text="Pressure (MPa)", secondary_y=False)
                 fig_ib_t.update_yaxes(title_text="Velocity (m/s)", secondary_y=True)
                 fig_ib_t.update_layout(title="Pressure & Velocity vs Time", height=370, margin=dict(l=15, r=15, t=40, b=15))
-                st.plotly_chart(fig_ib_t, use_container_width=True)
+                st.plotly_chart(fig_ib_t, width="stretch")
 
             with p_col2:
                 fig_ib_x = make_subplots(specs=[[{"secondary_y": True}]])
@@ -1782,7 +2250,7 @@ def tab_calculators() -> None:
                 fig_ib_x.update_yaxes(title_text="Pressure (MPa)", secondary_y=False)
                 fig_ib_x.update_yaxes(title_text="Burnt Fraction (%)", secondary_y=True)
                 fig_ib_x.update_layout(title="Pressure & Burn Completion vs Travel", height=370, margin=dict(l=15, r=15, t=40, b=15))
-                st.plotly_chart(fig_ib_x, use_container_width=True)
+                st.plotly_chart(fig_ib_x, width="stretch")
 
             with p_col3:
                 vg_l = hist.get("v_gas_L", hist["x_m"])
@@ -1805,10 +2273,10 @@ def tab_calculators() -> None:
                     height=370,
                     margin=dict(l=15, r=15, t=40, b=15),
                 )
-                st.plotly_chart(fig_pv, use_container_width=True)
+                st.plotly_chart(fig_pv, width="stretch")
 
     # --- SUB-LAB 2: ISA ATMOSPHERE, GYROSCOPIC STABILITY & CORIOLIS ---
-    with sub2:
+    elif active_lab == _PHYSICS_LABS[1]:
         st.subheader("🌍 US Standard Atmosphere 1976 (`EB-04`), Gyroscopic Stability (`EB-07`/`EB-08`) & Coriolis (`EB-10`)")
         st.latex(
             r"""
@@ -1856,7 +2324,7 @@ def tab_calculators() -> None:
             fig_atm.update_yaxes(title_text="Density ρ (kg/m³)", secondary_y=False)
             fig_atm.update_yaxes(title_text="Acoustic Speed a (m/s) / Scaled μ", secondary_y=True)
             fig_atm.update_layout(title="US Standard Atmosphere 1976 & Sutherland Viscosity Profile", height=390)
-            st.plotly_chart(fig_atm, use_container_width=True)
+            st.plotly_chart(fig_atm, width="stretch")
 
         with at_c2:
             st.markdown("##### 🧭 Gyroscopic Stability ($S_g$) & Coriolis Acceleration")
@@ -1891,7 +2359,7 @@ def tab_calculators() -> None:
             )
 
     # --- SUB-LAB 3: SHOCK PHYSICS, RANKINE-HUGONIOT & FRIEDLANDER ---
-    with sub3:
+    elif active_lab == _PHYSICS_LABS[2]:
         st.subheader("🌊 Rankine-Hugoniot Normal Shock Relations (`TB-03` .. `TB-08`)")
         st.latex(
             r"""
@@ -1922,7 +2390,7 @@ def tab_calculators() -> None:
                 yaxis_type="log",
                 height=400,
             )
-            st.plotly_chart(fig_rh, use_container_width=True)
+            st.plotly_chart(fig_rh, width="stretch")
 
         with w_col2:
             w_kg = st.number_input("TNT Equivalent Mass W (kg)", 1.0, 2000.0, 25.0, 5.0)
@@ -1969,10 +2437,10 @@ def tab_calculators() -> None:
                 title=f"Friedlander Waveform & Impulse Integral at R={r_m:.1f}m (Z={z_sc:.2f})",
                 height=400,
             )
-            st.plotly_chart(fig_wave, use_container_width=True)
+            st.plotly_chart(fig_wave, width="stretch")
 
     # --- SUB-LAB 4: GURNEY ENERGY PARTITION, TAYLOR ANGLE & MOTT FRACTURE ---
-    with sub4:
+    elif active_lab == _PHYSICS_LABS[3]:
         st.subheader("💥 Gurney Detonation Energy Partition (`TF-01`, `TF-02`), Taylor Angle (`TF-08`) & Mott Fracture (`TF-04`)")
         st.latex(
             r"""
@@ -2008,7 +2476,7 @@ def tab_calculators() -> None:
                 title=f"Gurney Velocity & Energy Partition ({exp_sel}: √2E = {g_const:.0f} m/s, D = {d_det:.0f} m/s)",
                 height=390,
             )
-            st.plotly_chart(fig_gur, use_container_width=True)
+            st.plotly_chart(fig_gur, width="stretch")
 
         with g_col2:
             m_case = st.number_input("Casing Metal Mass (kg)", 2.0, 200.0, 34.0, 2.0)
@@ -2038,10 +2506,10 @@ def tab_calculators() -> None:
                 yaxis_type="log",
                 height=390,
             )
-            st.plotly_chart(fig_mott, use_container_width=True)
+            st.plotly_chart(fig_mott, width="stretch")
 
     # --- SUB-LAB 5: CONTINUUM PENETRATION MECHANICS ---
-    with sub5:
+    elif active_lab == _PHYSICS_LABS[4]:
         st.subheader("🛡️ Continuum Penetration Mechanics (`TP-01` Lanz-Odermatt, `TP-02` Birkhoff, `TP-04` Lambert-Jonas)")
         st.latex(
             r"""
@@ -2085,7 +2553,7 @@ def tab_calculators() -> None:
                 yaxis_title="Normalized Penetration Depth P / L_w (-)",
                 height=390,
             )
-            st.plotly_chart(fig_lo, use_container_width=True)
+            st.plotly_chart(fig_lo, width="stretch")
 
         with pen_c2:
             v50_bl = st.slider("Ballistic Limit Velocity V₅₀ (m/s)", 200.0, 1200.0, 550.0, 25.0)
@@ -2115,7 +2583,7 @@ def tab_calculators() -> None:
             fig_lj.update_yaxes(title_text="Residual Velocity V_r (m/s)", secondary_y=False)
             fig_lj.update_yaxes(title_text="Perforation Probability (-)", secondary_y=True)
             fig_lj.update_layout(title="Lambert-Jonas Residual Velocity & Probit Perforation Curve", height=390)
-            st.plotly_chart(fig_lj, use_container_width=True)
+            st.plotly_chart(fig_lj, width="stretch")
 
         st.markdown("---")
         st.subheader("🧱 Project THOR 17-Material Fragment Perforation (`TF-12`) & De Marre Armor Scaling (`TF-13`)")
@@ -2195,13 +2663,13 @@ def tab_calculators() -> None:
                 height=440,
                 margin=dict(l=15, r=15, t=40, b=15),
             )
-            st.plotly_chart(fig_thor, use_container_width=True)
+            st.plotly_chart(fig_thor, width="stretch")
         with th_p2:
             st.metric("De Marre Mild-Steel Penetration (TF-13)", f"{dm_pen_m * 1000.0:.2f} mm", delta=f"Fragment KE: {0.5 * (thor_m_g * 1e-3) * (thor_vs**2):.0f} J", delta_color="off")
-            st.dataframe(thor_df, use_container_width=True, height=365)
+            st.dataframe(thor_df, width="stretch", height=365)
 
     # --- SUB-LAB 6: QUASI-MONTE CARLO DISCREPANCY & KNOWLEDGE BASE ---
-    with sub6:
+    elif active_lab == _PHYSICS_LABS[5]:
         st.subheader("📐 Quasi-Monte Carlo Low-Discrepancy Sampling (`MC-05`, `MC-06`) & Salvo Correlation (`TV-04`, `TV-05`)")
         st.latex(
             r"""
@@ -2250,7 +2718,7 @@ def tab_calculators() -> None:
                 yaxis_title="Uniform Dimension U₂",
                 height=380,
             )
-            st.plotly_chart(fig_qmc, use_container_width=True)
+            st.plotly_chart(fig_qmc, width="stretch")
 
         with qmc_c2:
             r_dam_m = st.slider("Carleton Effective Radius R_D (m)", 5.0, 60.0, 25.0, 1.0)
@@ -2297,7 +2765,7 @@ def tab_calculators() -> None:
                 yaxis_title="Cumulative Salvo Effect Probability Pk",
                 height=380,
             )
-            st.plotly_chart(fig_salvo, use_container_width=True)
+            st.plotly_chart(fig_salvo, width="stretch")
 
         st.subheader("📚 Authoritative Knowledge Base Explorer (96 Formulas & 36 Primary Sources)")
         kb_tab_choice = st.selectbox(
@@ -2313,19 +2781,19 @@ def tab_calculators() -> None:
             ]
             st.dataframe(
                 forms_df[cols_f],
-                use_container_width=True,
+                width="stretch",
             )
         elif kb_tab_choice == "Explosives":
-            st.dataframe(pd.DataFrame(kb.explosives.get("tnt_equivalence", [])), use_container_width=True)
+            st.dataframe(pd.DataFrame(kb.explosives.get("tnt_equivalence", [])), width="stretch")
         elif kb_tab_choice == "THOR_Coefficients":
-            st.dataframe(pd.DataFrame(kb.thor.get("materials", [])), use_container_width=True)
+            st.dataframe(pd.DataFrame(kb.thor.get("materials", [])), width="stretch")
         elif kb_tab_choice == "Ammo_Taxonomy":
-            st.dataframe(pd.DataFrame(kb.taxonomy), use_container_width=True)
+            st.dataframe(pd.DataFrame(kb.taxonomy), width="stretch")
         else:
-            st.dataframe(pd.DataFrame(kb.sources), use_container_width=True)
+            st.dataframe(pd.DataFrame(kb.sources), width="stretch")
 
     # --- SUB-LAB 7: STANAG 4355 MPM YAW-OF-REPOSE, SPIN-DAMPING & MAGNUS DRIFT ---
-    with sub7:
+    elif active_lab == _PHYSICS_LABS[6]:
         st.subheader("🌀 STANAG 4355 Modified Point Mass (MPM): Yaw of Repose (`EB-05`), Spin Decay (`EB-06`) & Gyroscopic Drift")
         st.latex(
             r"""
@@ -2388,7 +2856,7 @@ def tab_calculators() -> None:
                 yaxis_title="Right Deflection Drift Y_right (m)",
                 height=390,
             )
-            st.plotly_chart(fig_drift, use_container_width=True)
+            st.plotly_chart(fig_drift, width="stretch")
 
         with mc_right:
             fig_yaw = make_subplots(specs=[[{"secondary_y": True}]])
@@ -2417,10 +2885,10 @@ def tab_calculators() -> None:
                 title="In-Flight Yaw-of-Repose Peak at Trajectory Apex & Exponential Spin Decay",
                 height=390,
             )
-            st.plotly_chart(fig_yaw, use_container_width=True)
+            st.plotly_chart(fig_yaw, width="stretch")
 
     # --- SUB-LAB 8: BAYESIAN FUZE RELIABILITY, GRAZE S-CURVE SURFACE & UXO RISK ---
-    with sub8:
+    elif active_lab == _PHYSICS_LABS[7]:
         st.subheader("⚙️ Bayesian Fuze Reliability (`FZ-01`..`FZ-04`), 3D Graze S-Curve (`FZ-06`) & Self-Destruct Redundancy (`FZ-07`)")
         st.latex(
             r"""
@@ -2474,7 +2942,7 @@ def tab_calculators() -> None:
                 yaxis_title="Posterior Probability Density",
                 height=390,
             )
-            st.plotly_chart(fig_beta, use_container_width=True)
+            st.plotly_chart(fig_beta, width="stretch")
 
         with fz_right:
             aof_deg_grid = np.linspace(1.0, 45.0, 36)
@@ -2508,10 +2976,10 @@ def tab_calculators() -> None:
                 height=390,
                 margin=dict(l=10, r=10, t=40, b=10),
             )
-            st.plotly_chart(fig_graze, use_container_width=True)
+            st.plotly_chart(fig_graze, width="stretch")
 
     # --- SUB-LAB 9: PRECISION GUIDANCE & PROPORTIONAL NAVIGATION (PN / APN) ---
-    with sub9:
+    elif active_lab == _PHYSICS_LABS[8]:
         st.subheader("🚀 Precision Guidance & Autopilot Flight Control (`TPN` / `APN` / `Pure Pursuit`)")
         st.latex(
             r"""
@@ -2565,7 +3033,7 @@ def tab_calculators() -> None:
         with g_p1:
             fig_g_3d = create_3d_guided_intercept_figure(g_res)
             fig_g_3d.update_layout(height=480)
-            st.plotly_chart(fig_g_3d, use_container_width=True)
+            st.plotly_chart(fig_g_3d, width="stretch")
         with g_p2:
             gh = g_res["history"]
             fig_g_dyn = make_subplots(specs=[[{"secondary_y": True}]])
@@ -2585,10 +3053,10 @@ def tab_calculators() -> None:
             fig_g_dyn.update_yaxes(title_text="Lateral Acceleration (g)", secondary_y=False)
             fig_g_dyn.update_yaxes(title_text="Range / Velocity", secondary_y=True)
             fig_g_dyn.update_layout(title="Guidance Dynamics & Control Surface Effort vs Time", height=480)
-            st.plotly_chart(fig_g_dyn, use_container_width=True)
+            st.plotly_chart(fig_g_dyn, width="stretch")
 
     # --- SUB-LAB 10: CLUSTER MUNITION DISPENSER KINEMATICS & UXO HAZARD ---
-    with sub10:
+    elif active_lab == _PHYSICS_LABS[9]:
         st.subheader("📦 Cluster Munition Dispenser Kinematics, Ground Footprint & UXO Contamination (`CCM` / `IATG 10.10`)")
         st.latex(
             r"""
@@ -2644,10 +3112,10 @@ def tab_calculators() -> None:
 
         fig_d_3d = create_3d_submunition_dispersion_figure(d_res)
         fig_d_3d.update_layout(height=480)
-        st.plotly_chart(fig_d_3d, use_container_width=True)
+        st.plotly_chart(fig_d_3d, width="stretch")
 
     # --- SUB-LAB 11: FULL 6-DOF RIGID-BODY BALLISTICS & EPICYCLIC YAW MOTION ---
-    with sub11:
+    elif active_lab == _PHYSICS_LABS[10]:
         st.subheader("🌀 Full 6-Degree-of-Freedom (6-DoF) Rigid-Body Ballistics & Epicyclic Yaw Motion (`STANAG 4355`)")
         st.latex(
             r"""
@@ -2698,7 +3166,7 @@ def tab_calculators() -> None:
         with s_p1:
             fig_6d_3d = create_3d_6dof_attitude_figure(res_6dof)
             fig_6d_3d.update_layout(height=480)
-            st.plotly_chart(fig_6d_3d, use_container_width=True)
+            st.plotly_chart(fig_6d_3d, width="stretch")
         with s_p2:
             s_hist = res_6dof["history"]
             # 2D Epicyclic yaw arm trajectory: alpha (pitch AoA) vs beta (yaw AoA)
@@ -2729,10 +3197,10 @@ def tab_calculators() -> None:
                 yaxis_title="Angle of Pitch α (deg)",
                 height=480,
             )
-            st.plotly_chart(fig_epi, use_container_width=True)
+            st.plotly_chart(fig_epi, width="stretch")
 
     # --- SUB-LAB 12: ARTILLERY BATTERY SHEAFS, MRSI / TOT & SALVO OPTIMIZATION ---
-    with sub12:
+    elif active_lab == _PHYSICS_LABS[11]:
         st.subheader("🎯 Tactical Artillery Battery Sheafs, MRSI / TOT & Salvo Optimization (FM 6-40 / STANAG 4119)")
         st.markdown(
             "Rigorous multi-gun artillery battery firing dynamics grounded in **US Army FM 6-40 / FM 3-09** and **NATO STANAG 4119**: "
@@ -2787,7 +3255,7 @@ def tab_calculators() -> None:
                             f"QE: {rd['qe_deg']}° | TOF: {rd['tof_s']}s",
                         )
                 mrsi_df = pd.DataFrame(mrsi_res["plan"])
-                st.dataframe(mrsi_df[["round_num", "branch", "qe_deg", "tof_s", "fire_time_s", "impact_time_s"]], use_container_width=True)
+                st.dataframe(mrsi_df[["round_num", "branch", "qe_deg", "tof_s", "fire_time_s", "impact_time_s"]], width="stretch")
             else:
                 st.warning("MRSI solution not feasible at current range (exceeds high/low angle split limits).")
 
@@ -2817,7 +3285,7 @@ def tab_calculators() -> None:
         sm4.metric("Target Neutralization P_k", f"{p_neut * 100.0:.1f} %")
 
         fig_bat_3d = create_3d_battery_salvo_figure(salvo_sim)
-        st.plotly_chart(fig_bat_3d, use_container_width=True)
+        st.plotly_chart(fig_bat_3d, width="stretch")
 
         with st.expander("📋 Detailed Battery Firing & Impact Telemetry Log", expanded=False):
             rounds_df = pd.DataFrame(salvo_sim["rounds"])
@@ -2826,10 +3294,10 @@ def tab_calculators() -> None:
                 "miss_dist_m", "dist_from_target_m", "v_impact_mps", "tof_s"
             ]
             disp_cols = [c for c in preferred_cols if c in rounds_df.columns]
-            st.dataframe(rounds_df[disp_cols] if disp_cols else rounds_df, use_container_width=True)
+            st.dataframe(rounds_df[disp_cols] if disp_cols else rounds_df, width="stretch")
 
     # --- SUB-LAB 13: MULTI-LAYER ARMOR DEFEAT & TANDEM ERA ---
-    with sub13:
+    elif active_lab == _PHYSICS_LABS[12]:
         st.subheader("🛡️ Modern Multi-Layer Armor Defeat, Tandem Shaped Charges & Explosive Reactive Armor (ERA)")
         st.markdown(
             "Advanced hydrodynamic and solid-mechanics armor defeat laboratory extending **`TP-02` (Birkhoff hydrodynamic shaped-charge jet penetration)**: "
@@ -2896,7 +3364,7 @@ def tab_calculators() -> None:
         ap4.metric("Behind-Armor Spall Fragments", f"{spall.get('spall_fragment_count', 0)} frags")
 
         fig_arm_3d = create_3d_armor_defeat_figure(armor_res)
-        st.plotly_chart(fig_arm_3d, use_container_width=True)
+        st.plotly_chart(fig_arm_3d, width="stretch")
 
         with st.expander("🔬 Physical Layer Degradation & Energy Dissipation Log", expanded=True):
             lay_c1, lay_c2 = st.columns(2)
@@ -2916,7 +3384,7 @@ def tab_calculators() -> None:
                 st.write(f"- **Crew Incapacitation Probability**: {p_crew * 100.0:.1f} %")
 
     # --- SUB-LAB 14: COUNTER-BATTERY RADAR & POO/POI RECONSTRUCTION ---
-    with sub14:
+    elif active_lab == _PHYSICS_LABS[13]:
         st.subheader("🛰️ Counter-Battery Radar & Trajectory Reconstruction (NATO STANAG 4114 / AN/TPQ-53)")
         st.markdown(
             "Defensive artillery radar tracking and weapon location grounded in **NATO STANAG 4114**: "
@@ -3001,15 +3469,15 @@ def tab_calculators() -> None:
         rk4.metric("Radar Detections Used", f"{len(radar_track_sim['track_points'])} echoes", delta=f"{radar_track_sim.get('track_duration_s', 0.0)}s arc")
 
         fig_rad_3d = create_3d_counter_battery_radar_figure(radar_track_sim, recon_sol)
-        st.plotly_chart(fig_rad_3d, use_container_width=True)
+        st.plotly_chart(fig_rad_3d, width="stretch")
 
         with st.expander("📋 Radar Track Telemetry & Covariance Confidence Log", expanded=False):
             if radar_track_sim["track_points"]:
                 rad_df = pd.DataFrame(radar_track_sim["track_points"])
-                st.dataframe(rad_df[["t_s", "obs_x", "obs_y", "obs_z", "slant_range_m", "elevation_deg", "azimuth_deg"]], use_container_width=True)
+                st.dataframe(rad_df[["t_s", "obs_x", "obs_y", "obs_z", "slant_range_m", "elevation_deg", "azimuth_deg"]], width="stretch")
 
     # --- SUB-LAB 15: DIRECT-FIRE TANK GUNNERY & APFSDS SABOT DYNAMICS ---
-    with sub15:
+    elif active_lab == _PHYSICS_LABS[14]:
         st.subheader("🎯 Direct-Fire Tank Gunnery, APFSDS Sabot Discard & Moving Target FCS")
         st.markdown(
             "High-velocity kinetic armor defeat ($1,500\text{–}1,800\text{ m/s}$) and moving target gunnery: "
@@ -3078,7 +3546,7 @@ def tab_calculators() -> None:
         dk4.metric("Sabot Petal Hazard Zone", f"{sabot_sim['sabot_hazard_zone']['danger_length_m']:.0f}m x {sabot_sim['sabot_hazard_zone']['danger_width_m']:.0f}m", delta=f"{sabot_sim['petal_discard_completed_distance_m']}m discard")
 
         fig_direct_3d = create_3d_direct_fire_sabot_figure(sabot_sim, direct_sim)
-        st.plotly_chart(fig_direct_3d, use_container_width=True)
+        st.plotly_chart(fig_direct_3d, width="stretch")
 
         with st.expander("🔬 Sabot Petal Discard Telemetry & FCS Corrections", expanded=False):
             sc1, sc2 = st.columns(2)
@@ -3097,7 +3565,7 @@ def tab_calculators() -> None:
                 st.write(f"- **Crosswind Jump**: {fcs_info['crosswind_drift_m']:.2f} m")
 
     # --- SUB-LAB 16: ELECTRONIC WARFARE, GPS JAMMING & LASER HOMING ---
-    with sub16:
+    elif active_lab == _PHYSICS_LABS[15]:
         st.subheader("📡 Electronic Warfare (EW), GPS Jamming Resilience & Semi-Active Laser Guidance")
         st.markdown(
             "Precision guided munitions operating under hostile electronic warfare: "
@@ -3159,7 +3627,7 @@ def tab_calculators() -> None:
         ek4.metric("Laser Optical Transmission", f"{sal_sim['optical_transmission']*100.0:.1f} %", delta="Lock Acquired" if sal_sim["seeker_locked"] else "Smoke Attenuated")
 
         fig_ew_3d = create_3d_ew_guidance_figure(ew_sim, sal_sim)
-        st.plotly_chart(fig_ew_3d, use_container_width=True)
+        st.plotly_chart(fig_ew_3d, width="stretch")
 
         with st.expander("📋 EW Electronic Warfare & Laser Guidance Telemetry Log", expanded=False):
             st.write(f"- **Standoff Distance at Denial**: {ew_sim.get('standoff_distance_at_denial_m', 0.0):.1f} m")
@@ -3167,8 +3635,107 @@ def tab_calculators() -> None:
             st.write(f"- **Laser Seeker Acquisition Lock Range**: {sal_sim.get('lock_range_m', 0.0):.1f} m")
             st.write(f"- **Laser Spot Position**: {sal_sim.get('laser_spot_pos_m', [])}")
 
+# --- WORKBENCH: C-UAS TURRET ENGINEERING & SMALL ARMS ---
+def tab_cuas_and_small_arms() -> None:
+    st.header("🛸 Counter-UAS Turret Engineering & Multi-Barrel Small Arms Workbench")
+    st.markdown(
+        "Dedicated engineering environment for **Multi-Shotgun Counter-UAS Turrets** (Closed-Loop FCS, Swarm Saturation, "
+        "Airburst/TSS Payloads, Gimbal Recoil Optimization, Fallout SDZ, Multi-Sensor Kill Chain, Multi-Turret Site/NFZ, "
+        "3D Replay & Sustained Logistics/Reports) and **Small Arms & Multi-Barrel Dispersion**."
+    )
+
+    with st.sidebar:
+        _render_sidebar_header("🛸 C-UAS & Small Arms", "Counter-UAS turret engineering & multi-barrel ballistics")
+        cuas_suite = st.radio(
+            "Engineering Suite",
+            _CUAS_SUITES,
+            key="cuas_wb_suite",
+        )
+        st.divider()
+        active_cuas_mod = _CUAS18_MODULES[0]
+        arm_mode = _SMALL_ARMS_MODES[4]
+        if cuas_suite == _CUAS_SUITES[0]:
+            active_cuas_mod = st.radio(
+                "Active C-UAS Module",
+                _CUAS18_MODULES,
+                key="cuas18_active_module",
+            )
+            with st.expander("📄 Trade-Study Report Readiness", expanded=False):
+                _rc_items = [
+                    ("Array Summary (Mode 5)", st.session_state.get("_report_array_summary") is not None),
+                    ("3D Aspect Table (Mode 5)", st.session_state.get("_report_aspect_table") is not None),
+                    ("Kill Chain (Module 6)", st.session_state.get("_report_kc_summary") is not None),
+                    ("Fallout SDZ (Module 5)", st.session_state.get("_report_sdz_summary") is not None),
+                ]
+                for _lbl, _ready in _rc_items:
+                    st.markdown(f"{'✅' if _ready else '○'} {_lbl}")
+                if active_cuas_mod != _CUAS18_MODULES[8]:
+                    st.button(
+                        "📄 Jump to Module 9: Report Export",
+                        on_click=_set_cuas_module,
+                        args=(_CUAS18_MODULES[8],),
+                        width="stretch",
+                        key="cuas18_jump_report_btn",
+                    )
+        else:
+            arm_mode = st.radio(
+                "Small Arms Analysis Mode",
+                _SMALL_ARMS_MODES,
+                key="small_arms_mode",
+            )
+            if arm_mode == "🛸 Anti-Drone Multi-Shotgun Defense Array (C-UAS)":
+                with st.expander("💾 Scenario Preset Save / Load (JSON)", expanded=True):
+                    uploaded_cfg = st.file_uploader(
+                        "Upload Saved C-UAS Scenario Preset (.json)",
+                        type=["json"],
+                        key="cuas_cfg_upload",
+                    )
+                    if uploaded_cfg is not None:
+                        raw_bytes = uploaded_cfg.getvalue()
+                        sig = f"{uploaded_cfg.name}:{len(raw_bytes)}:{hash(raw_bytes)}"
+                        if st.session_state.get("_cuas_last_uploaded_sig") != sig:
+                            ok_cfg, cleaned_cfg, msg_cfg = validate_cuas_scenario_config(
+                                raw_bytes.decode("utf-8", errors="replace")
+                            )
+                            if ok_cfg:
+                                _key_map = {
+                                    "layout_type": "cuas_layout",
+                                    "n_barrels": "cuas_n_barrels",
+                                    "mount_radius_m": "cuas_mount_r",
+                                    "spacing_y_m": "cuas_sp_y",
+                                    "spacing_z_m": "cuas_sp_z",
+                                    "barrel_length_in": "cuas_b_len",
+                                    "choke": "cuas_choke",
+                                    "pointing_mode": "cuas_pointing",
+                                    "splay_angle_mrad": "cuas_splay",
+                                    "firing_mode": "cuas_fire_mode",
+                                    "ripple_delay_ms": "cuas_ripple_dt",
+                                    "ammunition_preset": "cuas_ammo",
+                                    "drone_model": "cuas_drone_model",
+                                    "aspect_mode": "cuas_aspect_mode",
+                                    "drone_pitch_deg": "cuas_pitch_tilt",
+                                    "drone_yaw_deg": "cuas_yaw_angle",
+                                    "drone_roll_deg": "cuas_roll_angle",
+                                    "target_distance_m": "cuas_dist",
+                                    "drone_speed_mps": "cuas_speed",
+                                    "drone_heading_deg": "cuas_heading",
+                                    "custom_coords_text": "cuas_custom_text",
+                                }
+                                for cfg_k, ss_k in _key_map.items():
+                                    if cfg_k in cleaned_cfg:
+                                        st.session_state[ss_k] = cleaned_cfg[cfg_k]
+                                if "n_barrels" in cleaned_cfg:
+                                    st.session_state["cuas_n_barrels_fan"] = cleaned_cfg["n_barrels"]
+                                st.session_state["_cuas_last_uploaded_sig"] = sig
+                                st.session_state["_cuas_upload_notice"] = msg_cfg
+                                st.rerun()
+                            else:
+                                st.error(f"❌ Invalid scenario file: {msg_cfg}")
+                    if st.session_state.get("_cuas_upload_notice"):
+                        st.success(f"✅ {st.session_state['_cuas_upload_notice']}")
+
     # --- SUB-LAB 17: SMALL ARMS, SHOTGUN PATTERNING & MULTI-BARREL DISPERSION ---
-    with sub17:
+    if cuas_suite == _CUAS_SUITES[1]:
         st.subheader("🔫 Small Arms Ballistics, Shotgun Pattern Spread & Multi-Barrel Dispersion Monte Carlo")
         st.markdown(
             "Exterior ballistics and stochastic Monte Carlo dispersion engine for **small arms**, "
@@ -3181,19 +3748,6 @@ def tab_calculators() -> None:
             L_{\text{string}}(R) \approx k_{\text{string}} R, \quad
             y_{\text{bore}}^{(i)}(R) = y_0^{(i)}\left(1 - \frac{R}{R_{\text{crossover}}}\right) + R \cdot \theta_{\text{bias}}^{(i)}
             """
-        )
-
-        arm_mode = st.radio(
-            "Select Small Arms Analysis Mode:",
-            [
-                "🎯 Single-Range Pattern Spread & Shot Stringing",
-                "📏 Multi-Distance Range Sweep & 3D Plume Slices",
-                "📐 Multiple Barrel Lengths Comparison",
-                "🔄 Multi-Barrel Systems, Rotary Minigun & Volley Dispersion",
-                "🛸 Anti-Drone Multi-Shotgun Defense Array (C-UAS)",
-            ],
-            horizontal=True,
-            key="small_arms_mode",
         )
 
         if arm_mode == "🎯 Single-Range Pattern Spread & Shot Stringing":
@@ -3275,14 +3829,14 @@ def tab_calculators() -> None:
             st_tab1, st_tab2 = st.tabs(["🎯 2D Pattern Board", "🌐 3D Shot Plume & Stringing"])
             with st_tab1:
                 fig_2d_pat = create_2d_target_pattern_figure(sg_sim)
-                st.plotly_chart(fig_2d_pat, use_container_width=True)
+                st.plotly_chart(fig_2d_pat, width="stretch")
             with st_tab2:
                 fig_3d_plume = create_3d_shotgun_plume_figure(sg_sim)
-                st.plotly_chart(fig_3d_plume, use_container_width=True)
+                st.plotly_chart(fig_3d_plume, width="stretch")
 
             with st.expander("📋 Pellet Impact & Ballistic Gel Penetration Telemetry", expanded=False):
                 sg_pellet_df = pd.DataFrame(sg_sim["sample_pellet_records"])
-                st.dataframe(sg_pellet_df, use_container_width=True)
+                st.dataframe(sg_pellet_df, width="stretch")
                 csv_sg = sg_pellet_df.to_csv(index=False).encode("utf-8")
                 st.download_button(
                     "📥 Download Shotgun Pellet Dispersion Dataset (.csv)",
@@ -3354,17 +3908,17 @@ def tab_calculators() -> None:
             ])
             with sw_tab1:
                 fig_sw_3d = create_3d_multi_distance_shotgun_figure(sw_res)
-                st.plotly_chart(fig_sw_3d, use_container_width=True)
+                st.plotly_chart(fig_sw_3d, width="stretch")
             with sw_tab2:
                 fig_sw_2d = create_2d_multi_distance_shotgun_comparison_figure(sw_res)
-                st.plotly_chart(fig_sw_2d, use_container_width=True)
+                st.plotly_chart(fig_sw_2d, width="stretch")
             with sw_tab3:
                 fig_sw_curves = create_range_curves_shotgun_figure(sw_res)
-                st.plotly_chart(fig_sw_curves, use_container_width=True)
+                st.plotly_chart(fig_sw_curves, width="stretch")
 
             with st.expander("📊 Multi-Distance Progression Telemetry Dataset", expanded=False):
                 sw_df = pd.DataFrame(rec)
-                st.dataframe(sw_df, use_container_width=True)
+                st.dataframe(sw_df, width="stretch")
                 csv_sw = sw_df.to_csv(index=False).encode("utf-8")
                 st.download_button(
                     "📥 Download Multi-Distance Sweep Dataset (.csv)",
@@ -3435,14 +3989,14 @@ def tab_calculators() -> None:
             ])
             with bl_tab1:
                 fig_bl_2d = create_2d_barrel_length_comparison_figure(bl_res)
-                st.plotly_chart(fig_bl_2d, use_container_width=True)
+                st.plotly_chart(fig_bl_2d, width="stretch")
             with bl_tab2:
                 fig_bl_curves = create_barrel_length_diagnostic_curves(bl_res)
-                st.plotly_chart(fig_bl_curves, use_container_width=True)
+                st.plotly_chart(fig_bl_curves, width="stretch")
 
             with st.expander("📊 Barrel Length Performance Comparison Table", expanded=False):
                 bl_df = pd.DataFrame(b_recs)
-                st.dataframe(bl_df, use_container_width=True)
+                st.dataframe(bl_df, width="stretch")
                 csv_bl = bl_df.to_csv(index=False).encode("utf-8")
                 st.download_button(
                     "📥 Download Barrel Length Comparison Dataset (.csv)",
@@ -3599,17 +4153,20 @@ def tab_calculators() -> None:
                 "📏 Multi-Distance Crossover Progression",
             ]
             if mb_tgt_type == "drone":
-                tab_labels.append("🌐 3D Target Presentation & Aspect Benchmark")
+                tab_labels.extend([
+                    "🌐 3D Target Presentation & Aspect Benchmark",
+                    "🎬 3D Animated Volley Replay",
+                ])
 
             mb_tabs = st.tabs(tab_labels)
 
             with mb_tabs[0]:
                 fig_mb_2d = create_2d_multibarrel_target_figure(mb_sim)
-                st.plotly_chart(fig_mb_2d, use_container_width=True)
+                st.plotly_chart(fig_mb_2d, width="stretch")
 
             with mb_tabs[1]:
                 fig_mb_3d = create_3d_multibarrel_dispersion_figure(mb_sim)
-                st.plotly_chart(fig_mb_3d, use_container_width=True)
+                st.plotly_chart(fig_mb_3d, width="stretch")
 
             with mb_tabs[2]:
                 with st.spinner("Generating Multi-Distance Crossover Progression..."):
@@ -3640,9 +4197,9 @@ def tab_calculators() -> None:
                         seed=42,
                     )
                     fig_mb_multidist = create_3d_multi_distance_multibarrel_figure(mb_sweep_res)
-                    st.plotly_chart(fig_mb_multidist, use_container_width=True)
+                    st.plotly_chart(fig_mb_multidist, width="stretch")
                     fig_mb_curves = create_range_curves_multibarrel_figure(mb_sweep_res)
-                    st.plotly_chart(fig_mb_curves, use_container_width=True)
+                    st.plotly_chart(fig_mb_curves, width="stretch")
 
             if mb_tgt_type == "drone":
                 with mb_tabs[3]:
@@ -3652,7 +4209,7 @@ def tab_calculators() -> None:
                         "A head-on frontal ingress minimizes cross-section, while planform overhead exposure maximizes vulnerable surface area."
                     )
                     with st.spinner("Benchmarking multi-barrel salvo effectiveness across 6 3D aspect orientations..."):
-                        mb_bench = benchmark_multibarrel_aspect_angles_mc(
+                        mb_bench = _cached_benchmark_multibarrel_aspect(
                             system_type=str(mb_type),
                             n_barrels=int(mb_n_barrels),
                             bore_spacing_y_mm=float(mb_spacing_y),
@@ -3670,7 +4227,7 @@ def tab_calculators() -> None:
                             seed=42,
                         )
                     fig_mb_radar = create_multibarrel_aspect_radar_figure(mb_bench)
-                    st.plotly_chart(fig_mb_radar, use_container_width=True)
+                    st.plotly_chart(fig_mb_radar, width="stretch")
 
                     st.markdown("##### 📊 Comparative Aspect Telemetry Summary")
                     bench_df = pd.DataFrame(mb_bench["comparison_table"])[
@@ -3686,11 +4243,34 @@ def tab_calculators() -> None:
                         "Drone Neutralized",
                         "Salvo CEP (m)",
                     ]
-                    st.dataframe(bench_df, use_container_width=True)
+                    st.dataframe(bench_df, width="stretch")
+
+                with mb_tabs[4]:
+                    st.markdown("#### 🎬 3D Time-Scrubbed Multi-Barrel Intercept Replay")
+                    st.caption("Press ▶ Play or scrub the timeline slider to inspect 3D drone motion, ripple firing, and projectile impacts.")
+                    mb_replay = _cached_intercept_replay(
+                        mode="multibarrel_volley",
+                        layout_type="circular",
+                        n_barrels=int(mb_n_barrels),
+                        target_distance_m=float(min(max(mb_tgt_range, 15.0), 120.0)),
+                        drone_model=str(mb_drone_model),
+                        aspect_mode=str(mb_aspect_mode),
+                        drone_speed_mps=18.0,
+                        maneuver_profile="sinusoidal_weave",
+                        maneuver_g=1.8,
+                        ammunition_preset="12G_TSS_NO2_C_UAS",
+                        choke="Full",
+                        firing_mode="sequential_ripple",
+                        ripple_delay_ms=12.0,
+                        n_frames=28,
+                        max_visual_pellets=78,
+                        seed=42,
+                    )
+                    st.plotly_chart(create_3d_animated_intercept_figure(mb_replay), width="stretch")
 
             with st.expander("📊 Individual Barrel Cluster Diagnostics & Telemetry Log", expanded=False):
                 b_df = pd.DataFrame(mb_sim["barrel_stats"])
-                st.dataframe(b_df, use_container_width=True)
+                st.dataframe(b_df, width="stretch")
                 csv_mb = b_df.to_csv(index=False).encode("utf-8")
                 st.download_button(
                     "📥 Download Multi-Barrel Diagnostics (.csv)",
@@ -3941,6 +4521,30 @@ def tab_calculators() -> None:
             )
 
             cu_sm = cuas_sim["summary"]
+            current_cuas_cfg = {
+                "layout_type": str(cuas_layout),
+                "n_barrels": int(cuas_n_barrels),
+                "mount_radius_m": float(cuas_mount_r),
+                "spacing_y_m": float(cuas_sp_y),
+                "spacing_z_m": float(cuas_sp_z),
+                "barrel_length_in": float(cuas_b_len),
+                "choke": str(cuas_choke),
+                "pointing_mode": str(cuas_pointing),
+                "splay_angle_mrad": float(cuas_splay),
+                "firing_mode": str(cuas_fire_mode),
+                "ripple_delay_ms": float(cuas_ripple_dt),
+                "ammunition_preset": str(cuas_ammo),
+                "drone_model": str(cuas_drone_model),
+                "aspect_mode": str(cuas_aspect_mode),
+                "drone_pitch_deg": float(cuas_pitch_tilt),
+                "drone_yaw_deg": float(cuas_yaw_angle),
+                "drone_roll_deg": float(cuas_roll_angle),
+                "target_distance_m": float(cuas_dist),
+                "drone_speed_mps": float(cuas_speed),
+                "drone_heading_deg": float(cuas_heading),
+            }
+            st.session_state["_report_cuas_config"] = current_cuas_cfg
+            st.session_state["_report_array_summary"] = cu_sm
 
             # Display KPI metrics
             ck1, ck2, ck3 = st.columns(3)
@@ -3963,7 +4567,7 @@ def tab_calculators() -> None:
                 delta=f"{cs_ratio:.1f}% of planform ({cu_sm.get('aspect_mode', 'head_on')})",
                 delta_color="normal",
             )
-            ck4, ck5 = st.columns(2)
+            ck4, ck5, ck6 = st.columns([1.2, 1.2, 1.0])
             ck4.metric(
                 "Volley Payload Energy",
                 f"{cu_sm['mean_energy_on_drone_j']:.0f} J on drone",
@@ -3974,29 +4578,39 @@ def tab_calculators() -> None:
                 f"{cu_sm['cloud_diameter_90_m']:.2f} m diam",
                 delta=f"CEP50: {cu_sm['cloud_cep_50_m']:.2f} m @ {cu_sm['target_distance_m']:.0f}m",
             )
+            with ck6:
+                st.download_button(
+                    "💾 Save Scenario Preset (.json)",
+                    serialize_cuas_scenario_config(current_cuas_cfg).encode("utf-8"),
+                    "cuas_turret_scenario.json",
+                    "application/json",
+                    key="dl_cuas_scenario_json",
+                    width="stretch",
+                )
 
-            cuas_tab1, cuas_tab2, cuas_tab3, cuas_tab4, cuas_tab5 = st.tabs([
+            cuas_tab1, cuas_tab2, cuas_tab3, cuas_tab4, cuas_tab5, cuas_tab6 = st.tabs([
                 "🎯 2D Drone Intercept & Damage Silhouette",
                 "🛸 3D Muzzle Array & Intercept Volume",
                 "📊 Per-Barrel Efficiency & Hit Contributions",
                 "📈 Array Architecture Benchmark (Geometry Comparison)",
                 "🌐 Aspect Angle Benchmark (Cross-Section Sweep)",
+                "🎬 3D Animated Intercept Replay",
             ])
 
             with cuas_tab1:
                 fig_2d_cuas = create_2d_antidrone_intercept_figure(cuas_sim)
-                st.plotly_chart(fig_2d_cuas, use_container_width=True)
+                st.plotly_chart(fig_2d_cuas, width="stretch")
 
             with cuas_tab2:
                 fig_3d_cuas = create_3d_antidrone_defense_figure(cuas_sim)
-                st.plotly_chart(fig_3d_cuas, use_container_width=True)
+                st.plotly_chart(fig_3d_cuas, width="stretch")
 
             with cuas_tab3:
                 st.markdown("##### Per-Barrel Telemetry & Contribution Breakdown")
                 b_stats = cuas_sim.get("barrel_stats", [])
                 if b_stats:
                     b_df = pd.DataFrame(b_stats)
-                    st.dataframe(b_df, use_container_width=True)
+                    st.dataframe(b_df, width="stretch")
                     csv_b = b_df.to_csv(index=False).encode("utf-8")
                     st.download_button(
                         "📥 Download Barrel Statistics (.csv)",
@@ -4010,8 +4624,8 @@ def tab_calculators() -> None:
                 st.markdown("##### Multi-Layout Benchmark Sweep Across Range (15m to 65m)")
                 st.caption("Compares 5 standard multi-shotgun layouts against the selected drone target under identical engagement kinematics.")
                 with st.spinner("Running Multi-Layout Array Benchmark..."):
-                    bench_res = compare_anti_drone_layouts(
-                        distance_stations_m=[15.0, 25.0, 35.0, 50.0, 65.0],
+                    bench_res = _cached_compare_anti_drone_layouts(
+                        distance_stations_m=(15.0, 25.0, 35.0, 50.0, 65.0),
                         ammunition_preset=str(cuas_ammo),
                         drone_model=str(cuas_drone_model),
                         drone_velocity_mps=float(cuas_speed),
@@ -4021,10 +4635,10 @@ def tab_calculators() -> None:
                         seed=42,
                     )
                     fig_bench = create_antidrone_layout_comparison_figure(bench_res)
-                    st.plotly_chart(fig_bench, use_container_width=True)
+                    st.plotly_chart(fig_bench, width="stretch")
 
                     bench_df = pd.DataFrame(bench_res["comparison_table"])
-                    st.dataframe(bench_df, use_container_width=True)
+                    st.dataframe(bench_df, width="stretch")
 
             with cuas_tab5:
                 st.markdown("##### 3D Target Presentation & Aspect Angle Vulnerability Benchmark")
@@ -4034,7 +4648,7 @@ def tab_calculators() -> None:
                     "Demonstrates the significant cross-section area reduction and required pellet density when engaging ingressing drones edge-on."
                 )
                 with st.spinner("Benchmarking target drone aspect angles..."):
-                    aspect_bench = benchmark_drone_aspect_angles_mc(
+                    aspect_bench = _cached_benchmark_drone_aspect(
                         layout_type=str(cuas_layout),
                         n_barrels=int(cuas_n_barrels),
                         mount_radius_m=float(cuas_mount_r),
@@ -4046,7 +4660,7 @@ def tab_calculators() -> None:
                         splay_angle_mrad=float(cuas_splay),
                         firing_mode=str(cuas_fire_mode),
                         ripple_delay_ms=float(cuas_ripple_dt),
-                        custom_barrel_specs=parsed_custom,
+                        custom_barrel_specs_json=json.dumps(parsed_custom) if parsed_custom else "",
                         ammunition_preset=str(cuas_ammo),
                         default_choke=str(cuas_choke),
                         default_barrel_length_in=float(cuas_b_len),
@@ -4058,11 +4672,12 @@ def tab_calculators() -> None:
                         n_volleys=15,
                         seed=42,
                     )
+                    st.session_state["_report_aspect_table"] = aspect_bench["comparison_table"]
                     fig_aspect = create_drone_aspect_radar_figure(aspect_bench)
-                    st.plotly_chart(fig_aspect, use_container_width=True)
+                    st.plotly_chart(fig_aspect, width="stretch")
 
                     asp_df = pd.DataFrame(aspect_bench["comparison_table"])
-                    st.dataframe(asp_df, use_container_width=True)
+                    st.dataframe(asp_df, width="stretch")
                     csv_asp = asp_df.to_csv(index=False).encode("utf-8")
                     st.download_button(
                         "📥 Download Aspect Benchmark Data (.csv)",
@@ -4072,13 +4687,43 @@ def tab_calculators() -> None:
                         key="dl_aspect_bench_csv",
                     )
 
-    # --- SUB-LAB 18: COMPLETE C-UAS TURRET ENGINEERING SUITE (UPGRADES 1 TO 5) ---
-    with sub18:
-        st.subheader("🛸 Multi-Shotgun C-UAS Turret Engineering & Operational Effectiveness Suite")
+            with cuas_tab6:
+                st.markdown("##### 🎬 Time-Scrubbed 3D Ripple Volley & Evasive Drone Intercept Replay")
+                st.caption("Press ▶ Play or drag the timeline scrubber below to visualize longitudinal shot-stringing, ripple offset timing, and target hits.")
+                cuas_replay = _cached_intercept_replay(
+                    mode="shotgun_array",
+                    layout_type=str(cuas_layout if cuas_layout != "custom" else "circular"),
+                    n_barrels=int(cuas_n_barrels),
+                    target_distance_m=float(cuas_dist),
+                    drone_model=str(cuas_drone_model),
+                    aspect_mode=str(cuas_aspect_mode),
+                    drone_speed_mps=float(cuas_speed),
+                    maneuver_profile="sinusoidal_weave",
+                    maneuver_g=2.0,
+                    ammunition_preset=str(cuas_ammo),
+                    choke=str(cuas_choke),
+                    firing_mode=str(cuas_fire_mode),
+                    ripple_delay_ms=float(cuas_ripple_dt),
+                    n_frames=30,
+                    max_visual_pellets=84,
+                    seed=42,
+                )
+                r_sm = cuas_replay["summary"]
+                rk_a, rk_b, rk_c = st.columns(3)
+                rk_a.metric("Longitudinal Shot String", f"{r_sm['shot_string_length_m']:.2f} m", delta=f"{r_sm['firing_mode']} (Δt={r_sm['ripple_delay_ms']:.0f}ms)")
+                rk_b.metric("Tracked Impact Summary", f"{r_sm['final_hits']} hits ({r_sm['final_lethal_hits']} lethal)", delta=f"{r_sm['total_pellets_tracked']} sampled pellets")
+                rk_c.metric("Replay Horizon", f"{r_sm['t_end_ms']:.0f} ms", delta="NEUTRALIZED" if r_sm["drone_neutralized"] else "TRACKING")
+                st.plotly_chart(create_3d_animated_intercept_figure(cuas_replay), width="stretch")
+
+    # --- SUB-LAB 18: COMPLETE C-UAS TURRET ENGINEERING SUITE (9 MODULES) ---
+    else:
+        st.subheader("🛸 Multi-Shotgun C-UAS Turret Engineering & Mission Effectiveness Suite")
         st.markdown(
-            "Complete 5-module counter-UAS design laboratory integrating **Closed-Loop Kalman Fire Control**, "
+            "Complete 9-module counter-UAS engineering laboratory integrating **Closed-Loop Kalman Fire Control**, "
             "**Coordinated Swarm Saturation**, **Tungsten TSS / Flechette / Airburst Payloads**, "
-            "**Turret Recoil & Constrained Pareto Optimization**, and **Elevated-Fire Pellet Fallout SDZ Safety Zones**."
+            "**Turret Recoil & Constrained Pareto Optimization**, **Elevated Fallout SDZ Safety Zones**, "
+            "**Multi-Sensor Kill-Chain Timelines**, **Multi-Turret Site & NFZ Planning**, **3D Animated Intercept Replay**, "
+            "and **Sustained Multi-Wave Logistics, Barrel Heat & $/Kill Trade-Study Reports**."
         )
         st.latex(
             r"""
@@ -4089,16 +4734,6 @@ def tab_calculators() -> None:
             """
         )
 
-        cuas18_t1, cuas18_t2, cuas18_t3, cuas18_t4, cuas18_t5 = st.tabs(
-            [
-                "📡 1. Closed-Loop FCS & Evasive Drones",
-                "🐝 2. Multi-Drone Swarm Saturation",
-                "💥 3. Advanced Payloads & Airburst",
-                "🔩 4. Recoil, Gimbal & Pareto Optimizer",
-                "⚠️ 5. Elevated Fallout & Safety Zone (SDZ)",
-            ]
-        )
-
         sg_presets_18 = get_shotgun_presets()
         choke_defs_18 = get_choke_definitions()
         drone_specs_18 = get_drone_target_specs()
@@ -4107,7 +4742,7 @@ def tab_calculators() -> None:
         payload_cat_18 = get_cuas_payload_catalog()
 
         # --- TAB 18.1: CLOSED-LOOP FCS & EVASIVE DRONES ---
-        with cuas18_t1:
+        if active_cuas_mod == _CUAS18_MODULES[0]:
             fc1, fc2, fc3 = st.columns(3)
             with fc1:
                 st.markdown("**Tracking Sensor & Predictor Filter**")
@@ -4203,12 +4838,12 @@ def tab_calculators() -> None:
             fk3.metric("Target Jink Excursion", f"{fsm['maneuver_displacement_during_tof_m']:.2f} m", delta=f"{fcs_g:.1f}g during pellet flight")
             fk4.metric("Servo Saturation Rate", f"{fsm['servo_saturated_pct']:.1f} %", delta=f"{fsm['n_barrels']} barrels active")
 
-            st.plotly_chart(create_fcs_tracking_and_evasion_figure(fcs_res), use_container_width=True)
+            st.plotly_chart(create_fcs_tracking_and_evasion_figure(fcs_res), width="stretch")
             if fcs_res.get("architecture_comparison"):
-                st.dataframe(pd.DataFrame(fcs_res["architecture_comparison"]), use_container_width=True)
+                st.dataframe(pd.DataFrame(fcs_res["architecture_comparison"]), width="stretch")
 
         # --- TAB 18.2: MULTI-DRONE SWARM SATURATION ---
-        with cuas18_t2:
+        elif active_cuas_mod == _CUAS18_MODULES[1]:
             sc1, sc2, sc3 = st.columns(3)
             with sc1:
                 st.markdown("**Coordinated Swarm Attack Wave**")
@@ -4284,11 +4919,11 @@ def tab_calculators() -> None:
             sk3.metric("Perimeter Leakers / Wave", f"{sws['mean_leakers']:.2f}", delta=f"Leaker Rate: {sws['leaker_rate_pct']:.1f} %")
             sk4.metric("Magazine Endurance", f"{sws['mean_bursts_fired']:.1f} bursts", delta=f"{sws['mean_reloads']:.2f} full reloads/wave")
 
-            st.plotly_chart(create_3d_swarm_hemisphere_figure(sw_res), use_container_width=True)
-            st.plotly_chart(create_swarm_doctrine_tradeoff_figure(sw_res), use_container_width=True)
+            st.plotly_chart(create_3d_swarm_hemisphere_figure(sw_res), width="stretch")
+            st.plotly_chart(create_swarm_doctrine_tradeoff_figure(sw_res), width="stretch")
 
         # --- TAB 18.3: ADVANCED C-UAS PAYLOADS & AIRBURST ---
-        with cuas18_t3:
+        elif active_cuas_mod == _CUAS18_MODULES[2]:
             pc1, pc2, pc3 = st.columns(3)
             with pc1:
                 st.markdown("**Advanced Standoff Payload Technology**")
@@ -4333,8 +4968,8 @@ def tab_calculators() -> None:
                     n_volleys=25,
                     seed=42,
                 )
-                pay_comp = compare_cuas_payload_families(
-                    distances_m=[20.0, 35.0, 50.0, 70.0, 90.0, 110.0],
+                pay_comp = _cached_compare_cuas_payloads(
+                    distances_m=(20.0, 35.0, 50.0, 70.0, 90.0, 110.0),
                     n_barrels=int(pay_nb),
                     drone_model=str(pay_drone),
                     aspect_mode=str(pay_aspect),
@@ -4352,13 +4987,13 @@ def tab_calculators() -> None:
 
             pt1, pt2 = st.tabs(["📈 7-Family Standoff Range Curves (20–110 m)", "💥 3D Airburst / Cloud Intercept Geometry"])
             with pt1:
-                st.plotly_chart(create_cuas_payload_range_comparison_figure(pay_comp), use_container_width=True)
-                st.dataframe(pd.DataFrame(pay_comp["comparison_table"]), use_container_width=True)
+                st.plotly_chart(create_cuas_payload_range_comparison_figure(pay_comp), width="stretch")
+                st.dataframe(pd.DataFrame(pay_comp["comparison_table"]), width="stretch")
             with pt2:
-                st.plotly_chart(create_airburst_standoff_cone_figure(ab_res), use_container_width=True)
+                st.plotly_chart(create_airburst_standoff_cone_figure(ab_res), width="stretch")
 
         # --- TAB 18.4: TURRET RECOIL, GIMBAL LOADS & PARETO ARRAY OPTIMIZER ---
-        with cuas18_t4:
+        elif active_cuas_mod == _CUAS18_MODULES[3]:
             rc1, rc2, rc3 = st.columns(3)
             with rc1:
                 st.markdown("**Salvo Firing & Mixed Loadout**")
@@ -4410,7 +5045,7 @@ def tab_calculators() -> None:
                     mount_load_limit_kn=float(rec_limit),
                     gimbal_trunnion_offset_z_m=float(rec_ztr),
                 )
-                opt_res = optimize_antidrone_array_configuration(
+                opt_res = _cached_optimize_antidrone_array(
                     n_barrels=int(rec_nb),
                     mount_radius_m=0.20,
                     target_distance_m=float(rec_dist),
@@ -4436,7 +5071,7 @@ def tab_calculators() -> None:
 
             rt1, rt2, rt3 = st.tabs(["🔩 Recoil Force, Gimbal Walk & Ripple Relief", "🏆 Constrained Pareto Array Optimizer", "📋 Per-Barrel Firing & Deflection Log"])
             with rt1:
-                st.plotly_chart(create_turret_recoil_dynamics_figure(rec_res, rec_sweep), use_container_width=True)
+                st.plotly_chart(create_turret_recoil_dynamics_figure(rec_res, rec_sweep), width="stretch")
             with rt2:
                 if opt_res["best_feasible"] is not None:
                     st.success(
@@ -4446,15 +5081,15 @@ def tab_calculators() -> None:
                     )
                 else:
                     st.warning("No candidate stays under the mount structural limit — increase ripple delay, raise buffer stroke/limit, or reduce barrel count.")
-                st.plotly_chart(create_antidrone_optimizer_pareto_figure(opt_res), use_container_width=True)
+                st.plotly_chart(create_antidrone_optimizer_pareto_figure(opt_res), width="stretch")
                 cand_df = pd.DataFrame(opt_res["candidates"])
-                st.dataframe(cand_df, use_container_width=True)
+                st.dataframe(cand_df, width="stretch")
                 st.download_button("📥 Download Optimizer Trade-Study (.csv)", cand_df.to_csv(index=False).encode("utf-8"), "cuas_optimizer_trade_study.csv", "text/csv", key="cuas18_dl_opt")
             with rt3:
-                st.dataframe(pd.DataFrame(rec_res["barrel_firing_states"]), use_container_width=True)
+                st.dataframe(pd.DataFrame(rec_res["barrel_firing_states"]), width="stretch")
 
         # --- TAB 18.5: ELEVATED-FIRE PELLET FALLOUT & SURFACE DANGER ZONE (SDZ) ---
-        with cuas18_t5:
+        elif active_cuas_mod == _CUAS18_MODULES[4]:
             sd1, sd2, sd3 = st.columns(3)
             with sd1:
                 st.markdown("**Elevated Turret Engagement Geometry**")
@@ -4491,7 +5126,7 @@ def tab_calculators() -> None:
                     n_sample_pellets=int(sd_n_p),
                     seed=42,
                 )
-                sd_comp = compare_cuas_fallout_across_loads(
+                sd_comp = _cached_compare_cuas_fallout(
                     firing_elevation_deg=float(sd_el),
                     wind_downrange_mps=float(sd_w_down),
                     wind_crossrange_mps=float(sd_w_cross),
@@ -4501,6 +5136,7 @@ def tab_calculators() -> None:
                 )
 
             ssm = sd_res["summary"]
+            st.session_state["_report_sdz_summary"] = ssm
             sdk1, sdk2, sdk3, sdk4 = st.columns(4)
             sdk1.metric("99% Surface Danger Zone (SDZ)", f"{ssm['max_fallout_range_99_m']:.0f} m", delta=f"Span: {ssm['min_fallout_range_m']:.0f}–{ssm['max_fallout_range_99_m']:.0f}m | Apogee: {ssm['max_apogee_m']:.0f}m")
             sdk2.metric("Terminal Speed / Energy", f"{ssm['mean_terminal_velocity_mps']:.1f} m/s", delta=f"Mean: {ssm['mean_impact_energy_j']:.2f} J ({ssm['mean_specific_energy_j_mm2']:.3f} J/mm²)")
@@ -4509,14 +5145,282 @@ def tab_calculators() -> None:
 
             sdt1, sdt2, sdt3 = st.tabs(["🌐 3D Elevated Fallout Arcs", "🗺️ 2D Ground SDZ Map & Multi-Load Bands", "📊 Multi-Load Safety Footprint Data & CSV"])
             with sdt1:
-                st.plotly_chart(create_3d_cuas_fallout_footprint_figure(sd_res), use_container_width=True)
+                st.plotly_chart(create_3d_cuas_fallout_footprint_figure(sd_res), width="stretch")
             with sdt2:
-                st.plotly_chart(create_2d_cuas_fallout_safety_map_figure(sd_res, sd_comp), use_container_width=True)
+                st.plotly_chart(create_2d_cuas_fallout_safety_map_figure(sd_res, sd_comp), width="stretch")
             with sdt3:
                 comp_df_sd = pd.DataFrame(sd_comp["records"])
-                st.dataframe(comp_df_sd, use_container_width=True)
+                st.dataframe(comp_df_sd, width="stretch")
                 gi_df = pd.DataFrame(sd_res["ground_impacts"])
                 st.download_button("📥 Download Ground Pellet Impact Fallout Log (.csv)", gi_df.to_csv(index=False).encode("utf-8"), "cuas_pellet_fallout_sdz.csv", "text/csv", key="cuas18_dl_sdz")
+
+        # --- TAB 18.6: MULTI-SENSOR DETECTION, CLASSIFICATION & KILL-CHAIN TIMELINE ---
+        elif active_cuas_mod == _CUAS18_MODULES[5]:
+            st.markdown("#### 🛰️ Multi-Sensor Detection, Human-in-the-Loop & Engagement Kill-Chain Timeline")
+            sensor_cat = get_kill_chain_sensor_catalog()
+            kc1, kc2, kc3 = st.columns(3)
+            with kc1:
+                st.markdown("**Threat & Environment**")
+                kc_drone = st.selectbox("Threat Drone Class", list(drone_specs_18.keys()), format_func=lambda k: drone_specs_18[k]["name"], index=0, key="cuas18_kc_dr")
+                kc_aspect = st.selectbox("Approach Aspect", list(aspect_presets_18.keys()), format_func=lambda k: aspect_presets_18[k]["name"], index=0, key="cuas18_kc_asp")
+                kc_speed = st.slider("Threat Approach Speed (m/s)", 8.0, 50.0, 28.0, 1.0, key="cuas18_kc_spd")
+                kc_weather = st.selectbox(
+                    "Atmospheric Visibility / Weather",
+                    ["clear_day", "overcast_dusk", "night_clear", "heavy_fog_rain"],
+                    format_func=lambda k: {
+                        "clear_day": "☀️ Clear Day",
+                        "overcast_dusk": "⛅ Overcast / Dusk",
+                        "night_clear": "🌙 Clear Night (LWIR)",
+                        "heavy_fog_rain": "🌧️ Heavy Fog & Rain",
+                    }.get(k, k),
+                    index=0,
+                    key="cuas18_kc_wx",
+                )
+                kc_wind = st.slider("Ambient Wind Noise (m/s)", 0.0, 20.0, 5.0, 1.0, key="cuas18_kc_wind")
+
+            with kc2:
+                st.markdown("**Sensor Suite & Dark-Drone Countermeasures**")
+                kc_sensors = st.multiselect(
+                    "Active Acquisition Modalities",
+                    list(sensor_cat.keys()),
+                    default=list(sensor_cat.keys()),
+                    format_func=lambda k: sensor_cat[k]["short_label"],
+                    key="cuas18_kc_sens",
+                )
+                kc_fiber = st.checkbox(
+                    "Fiber-Optic / Autonomous Inertial Threat (RF Silent)",
+                    value=False,
+                    key="cuas18_kc_fiber",
+                    help="Drops passive RF / C2 ESM range to 0 m.",
+                )
+                kc_ai_t = st.slider("AI Track Classification Delay (s)", 0.1, 2.5, 0.6, 0.1, key="cuas18_kc_ai")
+                kc_hitl = st.checkbox("Require Human-in-the-Loop Release Auth", value=True, key="cuas18_kc_hitl")
+                kc_auth_t = st.slider("Operator Authorization Latency (s)", 0.2, 4.0, 1.2, 0.1, key="cuas18_kc_auth", disabled=not kc_hitl)
+
+            with kc3:
+                st.markdown("**Turret Agility & Fire Envelope**")
+                kc_slew_ang = st.slider("Initial Off-Boresight Slew Angle (°)", 0.0, 180.0, 60.0, 10.0, key="cuas18_kc_sang")
+                kc_slew_rate = st.slider("Turret Slew Rate (°/s)", 30.0, 220.0, 120.0, 10.0, key="cuas18_kc_sr")
+                kc_rmax = st.slider("Max Weapon Intercept Range (m)", 30.0, 100.0, 55.0, 5.0, key="cuas18_kc_rmax")
+                kc_rmin = st.slider("Asset Keep-Out Breach Radius (m)", 5.0, 30.0, 15.0, 1.0, key="cuas18_kc_rmin")
+                kc_ammo = st.selectbox("Shotgun Payload", list(sg_presets_18.keys()), format_func=lambda k: sg_presets_18[k]["name"], index=list(sg_presets_18.keys()).index("12G_NO4_BUCK_C_UAS") if "12G_NO4_BUCK_C_UAS" in sg_presets_18 else 0, key="cuas18_kc_ammo")
+
+            with st.spinner("Simulating Multi-Sensor Acquisition & Kill-Chain Timeline..."):
+                kc_res = _cached_kill_chain(
+                    drone_model=str(kc_drone),
+                    aspect_mode=str(kc_aspect),
+                    drone_speed_mps=float(kc_speed),
+                    approach_altitude_m=22.0,
+                    weather=str(kc_weather),
+                    ambient_wind_mps=float(kc_wind),
+                    fiber_optic_autonomous=bool(kc_fiber),
+                    enabled_sensors=tuple(kc_sensors) if kc_sensors else ("micro_doppler_radar",),
+                    ai_classify_s=float(kc_ai_t),
+                    human_in_the_loop=bool(kc_hitl),
+                    human_auth_s=float(kc_auth_t),
+                    slew_angle_deg=float(kc_slew_ang),
+                    turret_slew_rate_deg_s=float(kc_slew_rate),
+                    max_weapon_range_m=float(kc_rmax),
+                    keepout_breach_radius_m=float(kc_rmin),
+                    n_barrels=6,
+                    ammunition_preset=str(kc_ammo),
+                    choke="Modified",
+                    salvo_cycle_time_s=0.85,
+                    n_trials=100,
+                    seed=42,
+                )
+
+            kcs = kc_res["summary"]
+            st.session_state["_report_kc_summary"] = kcs
+            kk1, kk2, kk3 = st.columns(3)
+            kk1.metric("Fused Mean Detection Range", f"{kcs['fused_detection_range_m']:.1f} m", delta=f"RCS: {kcs['presented_area_cm2']:.0f} cm²")
+            kk2.metric("First-Shot Open-Fire Range", f"{kcs['first_shot_range_m']:.1f} m", delta=f"C2 + Slew Overhead: {kcs['t_overhead_s']:.2f} s")
+            kk3.metric("Engagement Window Duration", f"{kcs['t_engagement_window_s']:.2f} s", delta=f"Mean Salvos: {kcs['mean_salvos_fired']:.2f}")
+            kk4, kk5 = st.columns(2)
+            kk4.metric("Cumulative Kill-Chain P_kill", f"{kcs['cumulative_pk_pct']:.1f} %", delta=f"Bottleneck: {kcs['limiting_bottleneck']}")
+            kk5.metric("Perimeter Breach Probability", f"{kcs['breach_rate_pct']:.1f} %", delta=f"Keep-out: {kcs['keepout_breach_radius_m']:.0f} m")
+
+            st.plotly_chart(create_kill_chain_timeline_figure(kc_res), width="stretch")
+            with st.expander("📋 Sensor Modality Performance & Approach Speed Sensitivity", expanded=False):
+                st.dataframe(pd.DataFrame(kc_res["modality_breakdown"]), width="stretch")
+                st.dataframe(pd.DataFrame(kc_res["speed_sweep"]), width="stretch")
+
+        # --- TAB 18.7: MULTI-TURRET SITE DEFENSE & NO-FIRE ZONE (NFZ) PLANNER ---
+        elif active_cuas_mod == _CUAS18_MODULES[6]:
+            st.markdown("#### 🏰 Multi-Turret Site Defense, Obstacle LOS Masking & Friendly No-Fire Zone (NFZ) Planner")
+            site_cat = get_site_defense_presets()
+            st1, st2, st3 = st.columns(3)
+            with st1:
+                site_key = st.selectbox(
+                    "Defended Facility Architecture",
+                    list(site_cat.keys()),
+                    format_func=lambda k: site_cat[k]["name"],
+                    index=0,
+                    key="cuas18_site_key",
+                )
+            with st2:
+                site_alt = st.slider("Threat Approach Altitude (m)", 5.0, 60.0, 22.0, 1.0, key="cuas18_site_alt")
+                site_spd = st.slider("Threat Raid Speed (m/s)", 8.0, 45.0, 22.0, 1.0, key="cuas18_site_spd")
+            with st3:
+                site_rmax = st.slider("Turret Engagement Range (m)", 30.0, 100.0, 60.0, 5.0, key="cuas18_site_rmax")
+                site_sdz = st.slider("Elevated Fallout SDZ Safety Envelope (m)", 100.0, 500.0, 280.0, 20.0, key="cuas18_site_sdz")
+
+            with st.spinner("Evaluating 360° Line-of-Sight Coverage, NFZ Conflicts & Multi-Turret Raids..."):
+                site_res = _cached_site_defense(
+                    site_preset=str(site_key),
+                    threat_altitude_m=float(site_alt),
+                    threat_speed_mps=float(site_spd),
+                    drone_model="fpv_quad_small",
+                    weapon_max_range_m=float(site_rmax),
+                    elevation_sdz_range_m=float(site_sdz),
+                    n_raid_trials=80,
+                    seed=42,
+                )
+
+            sts = site_res["summary"]
+            sk_1, sk_2, sk_3 = st.columns(3)
+            sk_1.metric("Perimeter Azimuth Coverage", f"{sts['perimeter_coverage_pct']:.1f} %", delta=f"{sts['n_turrets']} Active Turrets")
+            sk_2.metric("Overlapping Mutual Support (≥2)", f"{sts['overlapping_coverage_pct']:.1f} %", delta=f"Blind Spots: {sts['blind_spot_pct']:.1f} %")
+            sk_3.metric("NFZ SDZ Sector Conflicts", f"{sts['nfz_fallout_conflict_pct']:.1f} %", delta=f"Zero-Breach Raid Stop: {sts['site_zero_breach_pct']:.1f} %")
+
+            st.plotly_chart(create_multiturret_site_map_figure(site_res), width="stretch")
+            st.markdown("##### 📊 Per-Turret Engagement Workload & Kills")
+            st.dataframe(pd.DataFrame(site_res["turret_workload"]), width="stretch")
+
+        # --- TAB 18.8: 3D ANIMATED INTERCEPT REPLAY ---
+        elif active_cuas_mod == _CUAS18_MODULES[7]:
+            st.markdown("#### 🎬 3D Time-Scrubbed Intercept Replay (Evasive Drone + Shot-Stringing Pellets)")
+            an1, an2, an3 = st.columns(3)
+            with an1:
+                an_lay = st.selectbox("Turret Layout", ["circular", "concentric", "honeycomb", "grid", "fan_horizontal"], index=0, key="cuas18_an_lay")
+                an_nb = st.slider("Active Barrels", 2, 12, 6, 1, key="cuas18_an_nb")
+                an_ammo = st.selectbox("Ammunition", list(sg_presets_18.keys()), format_func=lambda k: sg_presets_18[k]["name"], index=list(sg_presets_18.keys()).index("12G_NO4_BUCK_C_UAS") if "12G_NO4_BUCK_C_UAS" in sg_presets_18 else 0, key="cuas18_an_ammo")
+            with an2:
+                an_fire = st.selectbox("Firing Mode", ["balanced_pair_ripple", "sequential_ripple", "simultaneous_volley"], index=0, key="cuas18_an_fire")
+                an_dt = st.slider("Ripple Delay Δt (ms)", 0.0, 35.0, 15.0, 1.0, key="cuas18_an_dt")
+                an_dist = st.slider("Nominal Intercept Distance (m)", 15.0, 65.0, 35.0, 5.0, key="cuas18_an_dist")
+            with an3:
+                an_drone = st.selectbox("Target Drone", list(drone_specs_18.keys()), format_func=lambda k: drone_specs_18[k]["name"], index=1, key="cuas18_an_dr")
+                an_aspect = st.selectbox("Presentation Aspect", list(aspect_presets_18.keys()), format_func=lambda k: aspect_presets_18[k]["name"], index=0, key="cuas18_an_asp")
+                an_man = st.selectbox("Evasive Maneuver", ["sinusoidal_weave", "corkscrew_spiral", "terminal_popup_jink", "linear_cruise"], index=0, key="cuas18_an_man")
+
+            replay_res = _cached_intercept_replay(
+                mode="shotgun_array",
+                layout_type=str(an_lay),
+                n_barrels=int(an_nb),
+                target_distance_m=float(an_dist),
+                drone_model=str(an_drone),
+                aspect_mode=str(an_aspect),
+                drone_speed_mps=18.0,
+                maneuver_profile=str(an_man),
+                maneuver_g=2.0,
+                ammunition_preset=str(an_ammo),
+                choke="Modified",
+                firing_mode=str(an_fire),
+                ripple_delay_ms=float(an_dt),
+                n_frames=30,
+                max_visual_pellets=84,
+                seed=42,
+            )
+            rsm18 = replay_res["summary"]
+            rk18_1, rk18_2, rk18_3, rk18_4 = st.columns(4)
+            rk18_1.metric("Longitudinal Shot String", f"{rsm18['shot_string_length_m']:.2f} m", delta=f"Ripple Δt = {rsm18['ripple_delay_ms']:.0f} ms")
+            rk18_2.metric("Sampled Pellet Hits", f"{rsm18['final_hits']} / {rsm18['total_pellets_tracked']}", delta=f"{rsm18['final_lethal_hits']} lethal strikes")
+            rk18_3.metric("Replay Window", f"{rsm18['t_end_ms']:.0f} ms", delta=f"@ {rsm18['target_distance_m']:.0f} m")
+            rk18_4.metric("Outcome", "NEUTRALIZED" if rsm18["drone_neutralized"] else "SURVIVED", delta=rsm18["firing_mode"])
+            st.plotly_chart(create_3d_animated_intercept_figure(replay_res), width="stretch")
+
+        # --- TAB 18.9: SUSTAINED LOGISTICS, BARREL HEAT, $/KILL & TRADE-STUDY REPORT ---
+        elif active_cuas_mod == _CUAS18_MODULES[8]:
+            st.markdown("#### 🔥 Sustained Multi-Wave Logistics, Barrel Heating, $/Kill Economics & HTML Report Export")
+            econ_cat = get_cuas_ammo_economics_catalog()
+            mag_cat = get_magazine_system_specs()
+            lg1, lg2, lg3 = st.columns(3)
+            with lg1:
+                lg_waves = st.slider("Incoming Attack Waves", 2, 12, 6, 1, key="cuas18_lg_wv")
+                lg_dpw = st.slider("Drones per Wave", 1, 10, 4, 1, key="cuas18_lg_dpw")
+                lg_int = st.slider("Inter-Wave Cooling Interval (s)", 15.0, 120.0, 45.0, 5.0, key="cuas18_lg_int")
+            with lg2:
+                lg_ammo = st.selectbox("Primary Ammunition Family", list(econ_cat.keys()), format_func=lambda k: econ_cat[k]["name"], index=0, key="cuas18_lg_ammo")
+                lg_mag = st.selectbox("Magazine / Feed System", list(mag_cat.keys()), format_func=lambda k: mag_cat[k]["name"], index=1, key="cuas18_lg_mag")
+                lg_bmass = st.slider("Single Barrel Steel Mass (kg)", 0.70, 2.50, 1.15, 0.05, key="cuas18_lg_bmass")
+            with lg3:
+                lg_drone = st.selectbox("Wave Threat Class", list(drone_specs_18.keys()), format_func=lambda k: drone_specs_18[k]["name"], index=0, key="cuas18_lg_dr")
+                lg_dist = st.slider("Mean Intercept Range (m)", 15.0, 70.0, 40.0, 5.0, key="cuas18_lg_dist")
+                lg_nb = st.slider("Turret Barrels", 2, 12, 6, 1, key="cuas18_lg_nb")
+
+            with st.spinner("Simulating Multi-Wave Barrel Thermodynamics & Payload Cost-per-Kill..."):
+                log_res = _cached_sustained_logistics(
+                    n_waves=int(lg_waves),
+                    drones_per_wave=int(lg_dpw),
+                    wave_interval_s=float(lg_int),
+                    n_barrels=int(lg_nb),
+                    ammo_family=str(lg_ammo),
+                    magazine_type=str(lg_mag),
+                    barrel_mass_kg=float(lg_bmass),
+                    ambient_temp_c=22.0,
+                    target_range_m=float(lg_dist),
+                    drone_model=str(lg_drone),
+                    aspect_mode="head_on_frontal",
+                    n_trials=60,
+                    seed=42,
+                )
+
+            lsm = log_res["summary"]
+            lk1, lk2, lk3 = st.columns(3)
+            lk1.metric("Peak Barrel Temperature", f"{lsm['peak_barrel_temp_c']:.1f} °C", delta=lsm["cookoff_risk"])
+            lk2.metric("Mean Cost per Kill ($/Kill)", f"${lsm['mean_cost_per_kill_usd']:.2f}", delta=f"{lsm['total_rounds_fired']:.0f} total rounds fired")
+            lk3.metric("Wave Clearance Survival", f"{lsm['wave_survival_pct']:.1f} %", delta=f"{lsm['total_drones_killed']:.1f} kills")
+            lk4, lk5 = st.columns(2)
+            lk4.metric("Reload & Clear Downtime", f"{lsm['total_reload_time_s']:.1f} s", delta=f"Mean Stoppages: {lsm['mean_stoppages']:.2f}")
+            lk5.metric("Feed Architecture", lsm["magazine_name"], delta=lsm["ammo_name"])
+
+            st.plotly_chart(create_logistics_thermal_and_cost_figure(log_res), width="stretch")
+            st.markdown("##### 💵 7-Payload Cost-per-Kill & Mass Efficiency Comparison")
+            st.dataframe(pd.DataFrame(log_res["economics_comparison"]), width="stretch")
+
+            st.markdown("---")
+            st.markdown("##### 📄 One-Click Executive Trade-Study Report Export")
+            rep_name = st.text_input("Report Title", value="Multi-Shotgun C-UAS Turret Engineering Trade Study", key="cuas18_rep_title")
+            rep_cfg = st.session_state.get(
+                "_report_cuas_config",
+                {
+                    "n_barrels": int(lg_nb),
+                    "ammo_family": str(lg_ammo),
+                    "magazine_type": str(lg_mag),
+                    "target_range_m": float(lg_dist),
+                    "drone_model": str(lg_drone),
+                },
+            )
+            rep_html = generate_cuas_trade_study_html(
+                scenario_name=str(rep_name),
+                config=rep_cfg,
+                array_summary=st.session_state.get("_report_array_summary"),
+                aspect_table=st.session_state.get("_report_aspect_table"),
+                kill_chain_summary=st.session_state.get("_report_kc_summary"),
+                logistics_summary=lsm,
+                economics_table=log_res["economics_comparison"],
+                sdz_summary=st.session_state.get("_report_sdz_summary"),
+            )
+            rep_c1, rep_c2 = st.columns(2)
+            with rep_c1:
+                st.download_button(
+                    "📥 Download Standalone HTML Trade-Study Report",
+                    rep_html.encode("utf-8"),
+                    "cuas_trade_study_report.html",
+                    "text/html",
+                    key="cuas18_dl_html_report",
+                    width="stretch",
+                )
+            with rep_c2:
+                st.download_button(
+                    "📥 Download Scenario Preset JSON",
+                    serialize_cuas_scenario_config(rep_cfg).encode("utf-8"),
+                    "cuas_trade_study_preset.json",
+                    "application/json",
+                    key="cuas18_dl_json_report",
+                    width="stretch",
+                )
 
 
 # --- TAB 5: UNODA IATG 01.80 & 02.20 EXPLOSIVE SAFETY & QUANTITY-DISTANCE ---
@@ -4526,25 +5430,43 @@ def tab_iatg() -> None:
         "Comprehensive engineering workbench grounded in **UNODA IATG 01.80:2021 (3rd Edition, *Formulae for ammunition management*)**, "
         "**IATG 02.20 (*Quantity and separation distances*)**, and **NATO AASTP-1**: "
         "Quantity-Distance (QD) scaling laws, open-detonation & vertical airspace safety (`TB-15`), "
-        "UK brick-house structural collapse (`TB-10`), Swiss glazing $P_s\text{–}I_s$ hyperbolas (`TB-11`), "
+        "UK brick-house structural collapse (`TB-10`), Swiss glazing $P_s\\text{–}I_s$ hyperbolas (`TB-11`), "
         "munition stack fragmentation (`TF-10`), RC donor debris launch (`TF-14`), and Axelsson thoracic biomechanics (`TB-13`)."
     )
     kb = get_kb()
 
-    isub1, isub2, isub3, isub4, isub5, isub6, isub7 = st.tabs(
-        [
-            "🏗️ 1. Quantity-Distance (QD), Open-Detonation (TB-15) & 3D PES Map",
-            "🧱 2. Structural Damage (TB-10 Jarrett/GLS) & Swiss Glazing (TB-11)",
-            "📦 3. NATO AASTP-1 Stack Fragmentation (TF-10) & RC Debris (TF-14)",
-            "🫁 4. Axelsson Thoracic Biomechanics ODE (TB-13) & Thermal Dose (TB-16)",
-            "🗺️ 5. Multi-Facility 3D Site Planner & Sympathetic Matrix",
-            "🧪 6. Propellant Aging & In-Service Surveillance (IATG 07.10 / AOP-48)",
-            "🗺️ 7. Terrain Crest Clearance & KML/CZML Export",
-        ]
-    )
+    with st.sidebar:
+        _render_sidebar_header("🏛️ UNODA IATG Safety", "IATG 01.80:2021, IATG 02.20 & NATO AASTP-1")
+        active_iatg_tool = st.radio("Select IATG Safety Tool (1–7)", _IATG_TOOLS, key="iatg_active_tool")
+        st.divider()
+        st.subheader("💣 Explosive Source Baseline")
+        neq_kg = st.number_input("Net Explosive Quantity Q_NEQ (kg)", 1.0, 100000.0, 1000.0, 50.0, key="iatg_neq")
+        auw_kg = st.number_input("All-Up Munition Weight M_AUW (kg)", 1.0, 250000.0, 2500.0, 100.0, key="iatg_auw")
+        exp_name = st.selectbox(
+            "Energetic Material (TB-02 TNT Equivalence)",
+            ["Composition B", "TNT", "Composition C4", "Octol 75/25", "H-6", "Tritonal 80/20", "RDX", "HMX"],
+            index=0,
+            key="iatg_exp",
+        )
+        if active_iatg_tool == _IATG_TOOLS[0]:
+            show_3d_domes = st.checkbox("Render 3D Hemispherical QD Domes", value=True, key="iatg_domes")
+        else:
+            show_3d_domes = True
+        with st.expander("📘 IATG QD Z-Factor Legend", expanded=False):
+            st.markdown(
+                "- **PBD**: `8.0 m/kg^(1/3)` (Process Building)\n"
+                "- **PTRD**: `14.8 m/kg^(1/3)` (Public Traffic Route)\n"
+                "- **IBD**: `22.2 m/kg^(1/3)` (Inhabited Building)\n"
+                "- **VBD**: `44.4 m/kg^(1/3)` (Vulnerable Building)\n"
+                "- **TB-15 Public Frag**: `634 · M_AUW^(1/6)`"
+            )
+
+    wp_eq, wi_eq = tb_02_tnt_equivalence(neq_kg, explosive=exp_name)
+    q_tnt = float(wp_eq)
+    qd_res = tb_15_simple_safety_distances(auw_kg=auw_kg, neq_kg=q_tnt)
 
     # --- IATG SUB-TAB 1: QUANTITY-DISTANCE (QD), TB-15 & 3D PES SITE MAP ---
-    with isub1:
+    if active_iatg_tool == _IATG_TOOLS[0]:
         st.subheader("🏗️ IATG 01.80 / 02.20 Quantity-Distance (QD) & Open-Detonation Safety Envelopes (`TB-02`, `TB-15`)")
         st.latex(
             r"""
@@ -4553,25 +5475,6 @@ def tab_iatg() -> None:
             D_{\text{frag,pub}} = 634\,M_{\text{AUW}}^{1/6}, \quad D_{\text{vert,1}} = 314\,M_{\text{AUW}}^{1/3}, \quad D_{140\text{dB}} = 215\,Q_{\text{TNT}}^{1/3}
             """
         )
-
-        ic1, ic2, ic3, ic4 = st.columns(4)
-        with ic1:
-            neq_kg = st.number_input("Net Explosive Quantity Q_NEQ (kg)", 1.0, 100000.0, 1000.0, 50.0, key="iatg_neq")
-        with ic2:
-            auw_kg = st.number_input("All-Up Munition Weight M_AUW (kg)", 1.0, 250000.0, 2500.0, 100.0, key="iatg_auw")
-        with ic3:
-            exp_name = st.selectbox(
-                "Energetic Material (TB-02 TNT Equivalence)",
-                ["Composition B", "TNT", "Composition C4", "Octol 75/25", "H-6", "Tritonal 80/20", "RDX", "HMX"],
-                index=0,
-                key="iatg_exp",
-            )
-        with ic4:
-            show_3d_domes = st.checkbox("Render 3D Hemispherical QD Domes", value=True, key="iatg_domes")
-
-        wp_eq, wi_eq = tb_02_tnt_equivalence(neq_kg, explosive=exp_name)
-        q_tnt = float(wp_eq)
-        qd_res = tb_15_simple_safety_distances(auw_kg=auw_kg, neq_kg=q_tnt)
 
         m1, m2, m3 = st.columns(3)
         m1.metric("TNT Equiv Q_TNT (TB-02)", f"{q_tnt:.1f} kg", delta=f"Impulse eq: {float(wi_eq):.1f} kg", delta_color="off")
@@ -4591,7 +5494,7 @@ def tab_iatg() -> None:
                 show_domes=bool(show_3d_domes),
             )
             fig_pes.update_layout(height=500)
-            st.plotly_chart(fig_pes, use_container_width=True)
+            st.plotly_chart(fig_pes, width="stretch")
 
         with chart_col:
             q_vec = np.logspace(0.0, 5.0, 100)
@@ -4624,7 +5527,7 @@ def tab_iatg() -> None:
                 height=500,
                 margin=dict(l=15, r=15, t=40, b=15),
             )
-            st.plotly_chart(fig_qd_scale, use_container_width=True)
+            st.plotly_chart(fig_qd_scale, width="stretch")
 
         # Complete IATG 01.80 Table with Kingery-Bulmash Overpressure & Impulse at each boundary
         qd_rows = []
@@ -4653,10 +5556,10 @@ def tab_iatg() -> None:
                     "Impulse Is (kPa·ms)": round(float(bf_row["Is_kPa_ms"]), 1),
                 }
             )
-        st.dataframe(pd.DataFrame(qd_rows), use_container_width=True)
+        st.dataframe(pd.DataFrame(qd_rows), width="stretch")
 
     # --- IATG SUB-TAB 2: STRUCTURAL DAMAGE (TB-10) & SWISS GLAZING (TB-11) ---
-    with isub2:
+    elif active_iatg_tool == _IATG_TOOLS[1]:
         st.subheader("🧱 IATG 01.80 Clause 10.1: Brick-House Damage (`TB-10`) & Swiss Glazing $P_s\text{–}I_s$ Hyperbola (`TB-11`)")
         st.latex(
             r"""
@@ -4710,8 +5613,8 @@ def tab_iatg() -> None:
                 barmode="group",
                 height=390,
             )
-            st.plotly_chart(fig_tb10, use_container_width=True)
-            st.dataframe(tb10_df, use_container_width=True)
+            st.plotly_chart(fig_tb10, width="stretch")
+            st.dataframe(tb10_df, width="stretch")
 
         with sc2:
             # Swiss Glazing P-I Hyperbola Diagram (TB-11) vs Kingery-Bulmash Blast Locus
@@ -4763,7 +5666,7 @@ def tab_iatg() -> None:
                 yaxis_range=[0.0, 2.5],
                 height=390,
             )
-            st.plotly_chart(fig_pi, use_container_width=True)
+            st.plotly_chart(fig_pi, width="stretch")
 
             # Interactive single-point glazing check
             g_r_test = st.slider("Test Window Standoff Distance R (m)", 5.0, 1000.0, float(qd_res["inhabited_building_distance_m"]), 5.0)
@@ -4785,7 +5688,7 @@ def tab_iatg() -> None:
             st.table(pd.DataFrame(w_res))
 
     # --- IATG SUB-TAB 3: MUNITION STACK FRAGMENTATION (TF-10) & RC DEBRIS (TF-14) ---
-    with isub3:
+    elif active_iatg_tool == _IATG_TOOLS[2]:
         st.subheader("📦 IATG 01.80 Clause 6 / NATO AASTP-1 Munition Stack Fragmentation (`TF-10`) & RC Donor Debris (`TF-14`)")
         st.latex(
             r"""
@@ -4862,7 +5765,7 @@ def tab_iatg() -> None:
                 yaxis_type="log",
                 height=420,
             )
-            st.plotly_chart(fig_tf10, use_container_width=True)
+            st.plotly_chart(fig_tf10, width="stretch")
 
         with fc2:
             st.markdown("##### 🧱 RC Donor Structure Debris Velocity (`TF-14`) & DDESB Consequence Union (`TF-15`)")
@@ -4894,7 +5797,7 @@ def tab_iatg() -> None:
             )
 
     # --- IATG SUB-TAB 4: AXELSSON THORACIC BIOMECHANICS (TB-13) & THERMAL DOSE (TB-16) ---
-    with isub4:
+    elif active_iatg_tool == _IATG_TOOLS[3]:
         st.subheader("🫁 IATG 01.80 Clause 10.2: Axelsson Thoracic Biomechanics ODE (`TB-13`) & Thermal Dose (`TB-16`)")
         st.latex(
             r"""
@@ -4962,7 +5865,7 @@ def tab_iatg() -> None:
                     title=f"Axelsson Single-Chamber Thoracic Biomechanics ODE Trajectory (V_max={ax_out['v_chest_max_mps']:.2f} m/s)",
                     height=370,
                 )
-                st.plotly_chart(fig_ax, use_container_width=True)
+                st.plotly_chart(fig_ax, width="stretch")
 
         with bc2:
             q_flux = st.slider("Thermal Radiant Heat Flux q (kW/m²)", 5.0, 150.0, 35.0, 2.5)
@@ -5005,13 +5908,13 @@ def tab_iatg() -> None:
                 yaxis_type="log",
                 height=310,
             )
-            st.plotly_chart(fig_th, use_container_width=True)
+            st.plotly_chart(fig_th, width="stretch")
 
             st.markdown("##### 🌍 IATG 01.80 Ground Shock Peak Particle Velocity (PPV) Structural Thresholds")
-            st.dataframe(pd.DataFrame(kb.effects_criteria.get("ground_shock", [])), use_container_width=True)
+            st.dataframe(pd.DataFrame(kb.effects_criteria.get("ground_shock", [])), width="stretch")
 
     # --- IATG SUB-TAB 5: MULTI-FACILITY 3D SITE PLANNER & SYMPATHETIC MATRIX ---
-    with isub5:
+    elif active_iatg_tool == _IATG_TOOLS[4]:
         st.subheader("🗺️ Multi-Facility 3D Explosive Storage Area (ESA) Site Planner & QD Compliance Matrix")
         st.markdown(
             "Interactive 3D facility layout planner evaluating **Inter-Magazine Sympathetic Detonation (`D_IMD = k_IMD · Q_donor^(1/3)`)**, "
@@ -5046,7 +5949,7 @@ def tab_iatg() -> None:
 
         fig_site, comp_rows = create_3d_multi_facility_site_planner_figure(pes_list=pes_custom, es_list=es_custom)
         fig_site.update_layout(height=540)
-        st.plotly_chart(fig_site, use_container_width=True)
+        st.plotly_chart(fig_site, width="stretch")
 
         comp_df = pd.DataFrame(comp_rows)
         n_viol = sum(1 for r in comp_rows if "VIOLATION" in str(r.get("QD Status", "")))
@@ -5054,10 +5957,10 @@ def tab_iatg() -> None:
             st.error(f"🚨 **{n_viol} Quantity-Distance / Sympathetic Detonation Encroachment(s) Detected!** Adjust facility coordinates or NEQ limits above.")
         else:
             st.success("✅ **All Inter-Magazine (IMD) and Exposed Site (ES) Separation Distances Comply with UNODA IATG 02.20!**")
-        st.dataframe(comp_df, use_container_width=True)
+        st.dataframe(comp_df, width="stretch")
 
     # --- IATG SUB-TAB 6: IN-SERVICE SURVEILLANCE & PROPELLANT AGING (IATG 07.10 / AOP-48) ---
-    with isub6:
+    elif active_iatg_tool == _IATG_TOOLS[5]:
         st.subheader("🧪 In-Service Ammunition Surveillance, Propellant Aging & Thermal Stability (`IATG 07.10` / `NATO AOP-48`)")
         st.markdown(
             "Predicts the chemical consumption of stabilizers (Diphenylamine [DPA], Ethyl Centralite [EC], 2-NDPA) "
@@ -5124,7 +6027,7 @@ def tab_iatg() -> None:
             fig_surv.add_hline(y=thresh["critical_pct"], line_dash="dash", line_color="#DC2626", annotation_text=f"Critical / Auto-Ignition ({thresh['critical_pct']}%)")
             fig_surv.add_vline(x=surv_years, line_dash="dot", line_color="#4B5563", annotation_text=f"Current: {surv_years:.0f} yrs")
             fig_surv.update_layout(title="Propellant Stabilizer Depletion Kinetics vs Critical Thresholds", xaxis_title="Storage Time (Years)", yaxis_title="Active Stabilizer Content (wt %)", height=390)
-            st.plotly_chart(fig_surv, use_container_width=True)
+            st.plotly_chart(fig_surv, width="stretch")
 
         with surv_p2:
             oc = plan_res["oc_curve"]
@@ -5132,10 +6035,10 @@ def tab_iatg() -> None:
             fig_oc.add_trace(go.Scatter(x=oc["p_defect_pct"], y=np.asarray(oc["p_accept"])*100.0, mode="lines", name="Operating Characteristic (OC)", line=dict(color="#10B981", width=3)))
             fig_oc.add_vline(x=surv_aql, line_dash="dash", line_color="#DC2626", annotation_text=f"AQL = {surv_aql}%")
             fig_oc.update_layout(title=f"ISO 2859-1 Surveillance OC Curve (Lot N={surv_lot_n}, n={plan_res['sample_size_n']}, Ac={plan_res['acceptance_number_ac']})", xaxis_title="True Defect Percentage p (%)", yaxis_title="Probability of Lot Acceptance P_acc (%)", height=390)
-            st.plotly_chart(fig_oc, use_container_width=True)
+            st.plotly_chart(fig_oc, width="stretch")
 
     # --- IATG SUB-TAB 7: GEOSPATIAL TERRAIN CREST CLEARANCE & 3D KML/CZML EXPORT ---
-    with isub7:
+    elif active_iatg_tool == _IATG_TOOLS[6]:
         st.subheader("🗺️ Geospatial Terrain Crest Clearance, Dead Space Masking & 3D KML/CZML Exporters (FM 6-40 / STANAG 4119)")
         st.markdown(
             r"Operational artillery field ballistics and terrain masking audit according to **US Army FM 6-40 (Field Artillery Manual Cannon Gunnery)**: "
@@ -5207,7 +6110,7 @@ def tab_iatg() -> None:
         gc4.metric("Dead Space Zone", f"{clearance_res.get('dead_space_start_m', 0.0):.0f}m – {clearance_res.get('dead_space_end_m', 0.0):.0f}m")
 
         fig_terr_3d = create_3d_terrain_clearance_figure(clearance_res, tx_m, ty_m, tz_m)
-        st.plotly_chart(fig_terr_3d, use_container_width=True)
+        st.plotly_chart(fig_terr_3d, width="stretch")
 
         # 3D GIS Exporters
         st.markdown("### 📥 3D GIS & Virtual Globe Data Exporters")
@@ -5241,7 +6144,7 @@ def tab_iatg() -> None:
                 data=kml_str.encode("utf-8"),
                 file_name=f"trajectory_mission_{int(geo_range)}m.kml",
                 mime="application/vnd.google-earth.kml+xml",
-                use_container_width=True,
+                width="stretch",
             )
         with czml_c:
             st.download_button(
@@ -5249,7 +6152,7 @@ def tab_iatg() -> None:
                 data=czml_str.encode("utf-8"),
                 file_name=f"trajectory_stream_{int(geo_range)}m.czml",
                 mime="application/json",
-                use_container_width=True,
+                width="stretch",
             )
 
 
@@ -5267,18 +6170,41 @@ def tab_firing_tables() -> None:
     gun_presets = [p for p in presets if p["class_id"].startswith(("AR-", "RK-", "MS-", "MO-", "NV-", "CN-", "SA-", "GR-"))]
     ft_dict = {f"{p['preset_id']} — {p['ammo_name']}": p["preset_id"] for p in gun_presets}
 
-    f1, f2, f3, f4 = st.columns(4)
-    with f1:
-        ft_label = st.selectbox("Select Weapon / Rocket / Munition System", list(ft_dict.keys()), index=4)
-        ft_pid = ft_dict[ft_label]
-        ft_ammo, _ = get_preset(ft_pid)
-    with f2:
-        qe_min_ft = st.number_input("Minimum Elevation QE (deg)", 2.0, 45.0, 5.0, 1.0)
-    with f3:
-        qe_max_ft = st.number_input("Maximum Elevation QE (deg)", 10.0, 75.0, 65.0, 5.0)
-    with f4:
-        n_steps_ft = st.slider("Elevation Increments", 5, 20, 13, 1)
+    with st.sidebar:
+        _render_sidebar_header("📋 Firing Tables & Met", "FM 6-40 / STANAG 4119 tables & STANAG 4082 METCM")
+        with st.expander("📋 Firing Table Sweep", expanded=True):
+            ft_label = st.selectbox("Select Weapon / Rocket / Munition System", list(ft_dict.keys()), index=4, key="ft_sys_sel")
+            ft_pid = ft_dict[ft_label]
+            ft_ammo, _ = get_preset(ft_pid)
+            qe_min_ft = st.number_input("Minimum Elevation QE (deg)", 2.0, 45.0, 5.0, 1.0, key="ft_qe_min")
+            qe_max_ft = st.number_input("Maximum Elevation QE (deg)", 10.0, 75.0, 65.0, 5.0, key="ft_qe_max")
+            n_steps_ft = st.slider("Elevation Increments", 5, 20, 13, 1, key="ft_n_steps")
 
+        with st.expander("🌐 STANAG 4082 METCM Sounding", expanded=False):
+            st.markdown("**Surface & Boundary Layer**")
+            s_temp_c = st.slider("Surface Temperature (°C)", -30.0, 50.0, 15.0, 1.0, key="met_s_temp")
+            s_press_hpa = st.number_input("Surface Pressure (hPa)", 800.0, 1080.0, 1013.25, 5.0, key="met_s_press")
+            s_wind_spd = st.slider("Surface Wind Speed (m/s)", 0.0, 30.0, 6.0, 0.5, key="met_s_wspd")
+            s_wind_dir = st.slider("Surface Wind Direction (° from North)", 0.0, 360.0, 240.0, 5.0, key="met_s_wdir")
+            pbl_alpha = st.slider("PBL Shear Exponent α", 0.10, 0.45, 0.28, 0.02, key="met_pbl_alpha")
+            ekman_veer = st.slider("Ekman Spiral Veering (°)", 0.0, 60.0, 30.0, 5.0, key="met_ekman_veer")
+            st.markdown("**Jet Stream Core & Inversion**")
+            jet_peak = st.slider("Jet Stream Core Peak (m/s)", 0.0, 80.0, 42.0, 2.0, key="met_jet_peak")
+            jet_alt = st.slider("Jet Stream Altitude (m)", 6000.0, 15000.0, 10500.0, 500.0, key="met_jet_alt")
+            enable_inversion = st.checkbox("Thermal Inversion Layer", value=True, key="met_inv_on")
+            inv_base = st.number_input("Inversion Base (m)", 200.0, 3000.0, 800.0, 100.0, key="met_inv_base")
+            inv_top = st.number_input("Inversion Top (m)", 300.0, 4000.0, 1400.0, 100.0, key="met_inv_top")
+            inv_dt = st.slider("Inversion ΔT (K)", 1.0, 15.0, 5.0, 0.5, key="met_inv_dt")
+            st.markdown("**Trajectory, Aero & Mass Properties**")
+            m_v0 = st.slider("Muzzle Velocity V₀ (m/s)", 200.0, 1200.0, float(ft_ammo.launch.mv.mu), 10.0, key="met_v0")
+            m_qe = st.slider("Firing Elevation QE (°)", 5.0, 75.0, 38.0, 1.0, key="met_qe")
+            m_az = st.slider("Azimuth of Fire (° from North)", 0.0, 360.0, 90.0, 5.0, key="met_az")
+            m_dt = st.select_slider("Integration Time Step dt (s)", options=[0.02, 0.04, 0.08, 0.10], value=0.08, key="met_dt")
+            m_cal = st.number_input("Caliber (m)", 0.020, 0.500, float(ft_ammo.calibre_m), 0.005, format="%.3f", key="met_cal")
+            m_mass = st.number_input("Projectile Mass (kg)", 0.5, 200.0, float(ft_ammo.mass_kg), 1.0, key="met_mass")
+            st.info(f"Using aerodynamic reference drag curve for `{ft_ammo.aero.drag_ref or 'G7'}`.")
+
+    qe_max_clamped = max(float(qe_max_ft), float(qe_min_ft) + 1.0)
     with st.spinner("Computing Ballistic Firing Table & Finite-Difference Unit-Effect Sensitivities..."):
         ft_rows = generate_ballistic_firing_table(
             v0_mps=max(float(ft_ammo.launch.mv.mu), 40.0),
@@ -5288,7 +6214,7 @@ def tab_firing_tables() -> None:
             form_factor=float(ft_ammo.aero.form_factor.mu),
             drag_ref=str(ft_ammo.aero.drag_ref if ft_ammo.aero.drag_ref in ("G1", "G7") else "G7"),
             qe_min_deg=float(qe_min_ft),
-            qe_max_deg=float(qe_max_ft),
+            qe_max_deg=qe_max_clamped,
             n_elevations=int(n_steps_ft),
             rocket_burn_time_s=float(ft_ammo.launch.rocket_burn_s),
             rocket_mdot_kg_s=float(ft_ammo.launch.rocket_mdot_kg_s),
@@ -5325,7 +6251,7 @@ def tab_firing_tables() -> None:
         fig_ft_qe.update_yaxes(title_text="Range (m)", secondary_y=False)
         fig_ft_qe.update_yaxes(title_text="Time of Flight (s)", secondary_y=True)
         fig_ft_qe.update_layout(title=f"Firing Table Range & Time of Flight vs Elevation ({ft_ammo.name})", height=390)
-        st.plotly_chart(fig_ft_qe, use_container_width=True)
+        st.plotly_chart(fig_ft_qe, width="stretch")
 
     with ft_c2:
         fig_ft_met = go.Figure()
@@ -5371,9 +6297,9 @@ def tab_firing_tables() -> None:
             yaxis_title="Unit Sensitivity (m per unit perturbation)",
             height=390,
         )
-        st.plotly_chart(fig_ft_met, use_container_width=True)
+        st.plotly_chart(fig_ft_met, width="stretch")
 
-    st.dataframe(ft_df, use_container_width=True)
+    st.dataframe(ft_df, width="stretch")
     ft_csv = ft_df.to_csv(index=False).encode("utf-8")
     st.download_button(
         "📥 Download Tabular Firing Table & Met Unit-Effects (.csv)",
@@ -5388,38 +6314,8 @@ def tab_firing_tables() -> None:
         "Exterior ballistic trajectories integrated through a **20-zone upper atmospheric sounding** "
         "(`STANAG 4082 METCM`), incorporating **Planetary Boundary Layer (PBL) power-law shear**, "
         "**Ekman spiral veering**, **Jet Stream Gaussian core velocity**, and **low-level thermal inversions** "
-        "compared to standard International Standard Atmosphere (ISA) baseline."
+        "compared to standard International Standard Atmosphere (ISA) baseline. Configure sounding inputs in the left sidebar."
     )
-
-    with st.expander("⚙️ Atmospheric Sounding & Fire Control Parameters", expanded=True):
-        mcol1, mcol2, mcol3, mcol4 = st.columns(4)
-        with mcol1:
-            st.markdown("**Surface & Boundary Layer**")
-            s_temp_c = st.slider("Surface Temperature (°C)", -30.0, 50.0, 15.0, 1.0)
-            s_press_hpa = st.number_input("Surface Pressure (hPa)", 800.0, 1080.0, 1013.25, 5.0)
-            s_wind_spd = st.slider("Surface Wind Speed (m/s)", 0.0, 30.0, 6.0, 0.5)
-            s_wind_dir = st.slider("Surface Wind Direction (° from North)", 0.0, 360.0, 240.0, 5.0)
-            pbl_alpha = st.slider("PBL Shear Exponent α", 0.10, 0.45, 0.28, 0.02)
-            ekman_veer = st.slider("Ekman Spiral Veering (°)", 0.0, 60.0, 30.0, 5.0)
-        with mcol2:
-            st.markdown("**Jet Stream Core & Inversion**")
-            jet_peak = st.slider("Jet Stream Core Peak (m/s)", 0.0, 80.0, 42.0, 2.0)
-            jet_alt = st.slider("Jet Stream Altitude (m)", 6000.0, 15000.0, 10500.0, 500.0)
-            enable_inversion = st.checkbox("Thermal Inversion Layer", value=True)
-            inv_base = st.number_input("Inversion Base (m)", 200.0, 3000.0, 800.0, 100.0)
-            inv_top = st.number_input("Inversion Top (m)", 300.0, 4000.0, 1400.0, 100.0)
-            inv_dt = st.slider("Inversion ΔT (K)", 1.0, 15.0, 5.0, 0.5)
-        with mcol3:
-            st.markdown("**Trajectory & Weapon Parameters**")
-            m_v0 = st.slider("Muzzle Velocity V₀ (m/s)", 200.0, 1200.0, float(ft_ammo.launch.mv.mu), 10.0)
-            m_qe = st.slider("Firing Elevation QE (°)", 5.0, 75.0, 38.0, 1.0)
-            m_az = st.slider("Azimuth of Fire (° from North)", 0.0, 360.0, 90.0, 5.0)
-            m_dt = st.select_slider("Integration Time Step dt (s)", options=[0.02, 0.04, 0.08, 0.10], value=0.08)
-        with mcol4:
-            st.markdown("**Aero & Mass Properties**")
-            m_cal = st.number_input("Caliber (m)", 0.020, 0.500, float(ft_ammo.calibre_m), 0.005, format="%.3f")
-            m_mass = st.number_input("Projectile Mass (kg)", 0.5, 200.0, float(ft_ammo.mass_kg), 1.0)
-            st.info(f"Using aerodynamic reference drag curve for `{ft_ammo.aero.drag_ref or 'G7'}`.")
 
     with st.spinner("Generating STANAG 4082 METCM Sounding & Integrating Atmospheric Shear Trajectory..."):
         sounding_prof = generate_stanag_4082_profile(
@@ -5457,11 +6353,11 @@ def tab_firing_tables() -> None:
     mk4.metric("Crosswind Drift Deflection", f"{cross_drift:+,.1f} m", delta=f"TOF: {met_traj_res['tof_with_met_s']:.1f} s")
 
     fig_shear_3d = create_3d_atmospheric_shear_figure(met_traj_res, sounding_prof)
-    st.plotly_chart(fig_shear_3d, use_container_width=True)
+    st.plotly_chart(fig_shear_3d, width="stretch")
 
     st.markdown("##### 📊 NATO STANAG 4082 Standard 20-Zone Sounding Profile (METCM Format)")
     zones_df = pd.DataFrame(sounding_prof["zones"])
-    st.dataframe(zones_df, use_container_width=True)
+    st.dataframe(zones_df, width="stretch")
     csv_zones = zones_df.to_csv(index=False).encode("utf-8")
     st.download_button(
         "📥 Download STANAG 4082 METCM Sounding Dataset (.csv)",
@@ -5479,47 +6375,100 @@ def tab_validation() -> None:
         "workbook cells and authoritative reference literature (IATG 01.80, STANAG 4355, BRL, McCoy 1974)."
     )
 
-    if "validation_results" not in st.session_state or st.button("🔄 Run Full 22-Case Validation Suite", type="primary"):
+    with st.sidebar:
+        _render_sidebar_header("✅ Validation Suite", "22-case Knowledge Base regression harness")
+        run_val_btn = st.button("🔄 Run Full 22-Case Validation Suite", type="primary", width="stretch", key="val_run_btn")
+        val_n_mc = st.select_slider(
+            "V-08 Monte Carlo Samples",
+            options=[10_000, 25_000, 50_000, 100_000],
+            value=50_000,
+            key="val_n_mc",
+        )
+
+    if (
+        "validation_results" not in st.session_state
+        or run_val_btn
+        or st.session_state.get("_val_last_n_mc") != val_n_mc
+    ):
         with st.spinner("Executing 22 analytical and stochastic verification cases..."):
-            val_results = run_validation_suite(seed=42, n_mc_v08=50_000)
+            val_results = run_validation_suite(seed=42, n_mc_v08=int(val_n_mc))
             st.session_state["validation_results"] = val_results
+            st.session_state["_val_last_n_mc"] = int(val_n_mc)
 
     v_df = pd.DataFrame(st.session_state["validation_results"])
+
+    with st.sidebar:
+        st.divider()
+        st.subheader("🔎 Filter & Export")
+        status_filter = st.radio(
+            "Filter by Status",
+            ["All Cases", "PASS Only", "Non-PASS Only"],
+            key="val_status_filter",
+        )
+        formula_opts = sorted(v_df["formula"].astype(str).unique().tolist())
+        formula_filter = st.multiselect(
+            "Filter by Formula ID",
+            formula_opts,
+            default=[],
+            key="val_formula_filter",
+        )
+        st.download_button(
+            "📥 Download Validation Results (.csv)",
+            v_df.to_csv(index=False).encode("utf-8"),
+            "kb_validation_suite_results.csv",
+            "text/csv",
+            key="val_dl_csv_btn",
+            width="stretch",
+        )
+
+    filtered_df = v_df.copy()
+    if status_filter == "PASS Only":
+        filtered_df = filtered_df[filtered_df["status"].astype(str).str.contains("PASS")]
+    elif status_filter == "Non-PASS Only":
+        filtered_df = filtered_df[~filtered_df["status"].astype(str).str.contains("PASS")]
+    if formula_filter:
+        filtered_df = filtered_df[filtered_df["formula"].astype(str).isin(formula_filter)]
+
     n_pass = sum(1 for s in v_df["status"] if "PASS" in str(s))
     max_err_excel = float(v_df["rel_err_vs_excel"].max())
 
     vc1, vc2, vc3 = st.columns(3)
-    vc1.metric("Validation Cases Passed", f"{n_pass} / {len(v_df)}", delta="100% Pass Rate")
+    vc1.metric("Validation Cases Passed", f"{n_pass} / {len(v_df)}", delta="100% Pass Rate" if n_pass == len(v_df) else f"{len(v_df) - n_pass} Flagged")
     vc2.metric("Max Relative Deviation vs Excel", f"{max_err_excel * 100:.4f} %")
     vc3.metric("Registered Formula Functions", "96 / 96", delta="All Verified")
 
-    fig_val = px.bar(
-        v_df,
-        x="test_id",
-        y="rel_err_vs_expected",
-        color="formula",
-        labels={"test_id": "Validation Test ID", "rel_err_vs_expected": "Relative Error vs Expected"},
-        title="Relative Deviation Across All 22 Knowledge Base Validation Cases",
-    )
-    fig_val.update_layout(height=340, margin=dict(l=20, r=20, t=40, b=20))
-    st.plotly_chart(fig_val, use_container_width=True)
+    if filtered_df.empty:
+        st.info("No validation cases match the selected sidebar filters.")
+    else:
+        if len(filtered_df) != len(v_df):
+            st.caption(f"Showing {len(filtered_df)} of {len(v_df)} validation cases based on sidebar filters.")
+        fig_val = px.bar(
+            filtered_df,
+            x="test_id",
+            y="rel_err_vs_expected",
+            color="formula",
+            labels={"test_id": "Validation Test ID", "rel_err_vs_expected": "Relative Error vs Expected"},
+            title="Relative Deviation Across Knowledge Base Validation Cases",
+        )
+        fig_val.update_layout(height=340, margin=dict(l=20, r=20, t=40, b=20))
+        st.plotly_chart(fig_val, width="stretch")
 
-    st.dataframe(
-        v_df[
-            [
-                "test_id",
-                "formula",
-                "status",
-                "computed",
-                "excel_value",
-                "expected",
-                "rel_err_vs_excel",
-                "rel_err_vs_expected",
-                "case",
-            ]
-        ],
-        use_container_width=True,
-    )
+        st.dataframe(
+            filtered_df[
+                [
+                    "test_id",
+                    "formula",
+                    "status",
+                    "computed",
+                    "excel_value",
+                    "expected",
+                    "rel_err_vs_excel",
+                    "rel_err_vs_expected",
+                    "case",
+                ]
+            ],
+            width="stretch",
+        )
 
 
 def main() -> None:
@@ -5527,36 +6476,36 @@ def main() -> None:
     if not require_password():
         return
     render_header()
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(
-        [
-            "🎯 Monte Carlo Simulator",
-            "🌐 3D Simulations",
-            "🚀 McCoy MCDRAG & 3D CAD",
-            "🔬 Interior Ballistics & Lab",
-            "🏛️ UNODA IATG Safety & QD",
-            "📋 Firing Tables & Met Effects",
-            "✅ Validation Suite",
-        ]
-    )
 
-    with tab1:
+    with st.container(border=True):
+        active_wb = st.radio(
+            "Select Active Workbench",
+            _WORKBENCH_OPTIONS,
+            horizontal=True,
+            label_visibility="collapsed",
+            key="active_workbench",
+        )
+
+    if active_wb == "🎯 Monte Carlo Simulator":
         tab_simulator()
-    with tab2:
+    elif active_wb == "🛸 C-UAS & Small Arms":
+        tab_cuas_and_small_arms()
+    elif active_wb == "🌐 3D Simulations":
         tab_3d_simulation()
-    with tab3:
+    elif active_wb == "🚀 MCDRAG & 3D CAD":
         tab_mcdrag()
-    with tab4:
+    elif active_wb == "🔬 Physics & Ballistics Labs":
         tab_calculators()
-    with tab5:
+    elif active_wb == "🏛️ UNODA IATG Safety":
         tab_iatg()
-    with tab6:
+    elif active_wb == "📋 Firing Tables & Met":
         tab_firing_tables()
-    with tab7:
+    elif active_wb == "✅ Validation Suite":
         tab_validation()
 
     with st.sidebar:
         st.divider()
-        if st.button("🔒 Lock Workbench", use_container_width=True, key="lock_workbench_btn"):
+        if st.button("🔒 Lock Workbench", width="stretch", key="lock_workbench_btn"):
             st.session_state["authenticated"] = False
             st.rerun()
 

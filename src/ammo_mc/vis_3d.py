@@ -4791,3 +4791,9 @@ from ammo_mc.vis_cuas import (  # noqa: E402,F401
     create_swarm_doctrine_tradeoff_figure,
     create_turret_recoil_dynamics_figure,
 )
+from ammo_mc.vis_cuas_mission import (  # noqa: E402,F401
+    create_3d_animated_intercept_figure,
+    create_kill_chain_timeline_figure,
+    create_logistics_thermal_and_cost_figure,
+    create_multiturret_site_map_figure,
+)
