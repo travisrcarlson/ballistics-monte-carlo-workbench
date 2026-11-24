@@ -258,6 +258,7 @@ from ammo_mc.ui.common import (
     _render_sidebar_header,
     _set_active_workbench,
     _set_cuas_module,
+    is_expert_mode,
 )
 
 
@@ -295,10 +296,11 @@ def tab_3d_simulation() -> None:
     p3d_keys = list(p3d_map.keys())
     cur_p3d_idx = next((i for i, k in enumerate(p3d_keys) if p3d_map[k] == cur_ammo.id), 0)
 
+    expert = is_expert_mode()
     with st.sidebar:
         _render_sidebar_header("🌐 3D Simulations", "Interactive WebGL trajectories, terrain & terminal scenes")
         view_mode = st.radio("3D Simulation Mode", _3d_modes, key="sim3d_view_mode")
-        with st.expander("🎯 Active 3D Baseline Munition", expanded=False):
+        with st.expander("🎯 Active 3D Baseline Munition", expanded=expert):
             st.caption(f"**Loaded:** `{cur_ammo.id}` — {cur_ammo.name}")
             sel_3d_label = st.selectbox("Switch Baseline Preset", p3d_keys, index=cur_p3d_idx, key="sim3d_preset_sel")
             if st.button("🔄 Simulate & Load in 3D", width="stretch", key="sim3d_reload_btn"):
@@ -322,19 +324,20 @@ def tab_3d_simulation() -> None:
                 ["Speed (m/s)", "Mach Number (-)", "Altitude (m)", "Trajectory Index"],
                 index=0,
             )
-            terr_style_label = st.selectbox(
-                "3D Terrain DEM Style",
-                ["Scenario Default", "Rolling Hills DEM", "Canyon Valley", "Transverse Ridge"],
-                index=0,
-            )
             n_paths = st.slider("3D Trajectories in Bundle", 1, 20, 12, 1)
-            cam_preset = st.selectbox(
-                "Camera Perspective", ["Perspective Overview", "Top-Down Map", "Side Profile", "Launcher View"]
-            )
-            show_terr = st.checkbox("Show 3D Terrain Surface", value=True)
-            show_tgt = st.checkbox("Show 3D Target Volume", value=True)
-            show_poi = st.checkbox("Show Ground Impact POI", value=True)
-            show_cep = st.checkbox("Show 3D CEP50 & CEP95 Rings", value=True)
+            with st.expander("Camera, Terrain Style & Display Layers", expanded=expert):
+                terr_style_label = st.selectbox(
+                    "3D Terrain DEM Style",
+                    ["Scenario Default", "Rolling Hills DEM", "Canyon Valley", "Transverse Ridge"],
+                    index=0,
+                )
+                cam_preset = st.selectbox(
+                    "Camera Perspective", ["Perspective Overview", "Top-Down Map", "Side Profile", "Launcher View"]
+                )
+                show_terr = st.checkbox("Show 3D Terrain Surface", value=True)
+                show_tgt = st.checkbox("Show 3D Target Volume", value=True)
+                show_poi = st.checkbox("Show Ground Impact POI", value=True)
+                show_cep = st.checkbox("Show 3D CEP50 & CEP95 Rings", value=True)
         elif view_mode == "🎬 Animated 3D Salvo Flight Replay":
             anim_paths = st.slider("Animated Trajectories", 2, 12, 8, 1)
             anim_frames = st.slider("Time Resolution (Keyframes)", 12, 40, 24, 2)

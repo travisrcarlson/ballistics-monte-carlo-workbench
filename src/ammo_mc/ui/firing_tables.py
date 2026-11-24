@@ -258,6 +258,7 @@ from ammo_mc.ui.common import (
     _render_sidebar_header,
     _set_active_workbench,
     _set_cuas_module,
+    is_expert_mode,
 )
 
 
@@ -275,6 +276,7 @@ def tab_firing_tables() -> None:
     gun_presets = [p for p in presets if p["class_id"].startswith(("AR-", "RK-", "MS-", "MO-", "NV-", "CN-", "SA-", "GR-"))]
     ft_dict = {f"{p['preset_id']} — {p['ammo_name']}": p["preset_id"] for p in gun_presets}
 
+    expert = is_expert_mode()
     with st.sidebar:
         _render_sidebar_header("📋 Firing Tables & Met", "FM 6-40 / STANAG 4119 tables & STANAG 4082 METCM")
         with st.expander("📋 Firing Table Sweep", expanded=True):
@@ -285,7 +287,7 @@ def tab_firing_tables() -> None:
             qe_max_ft = st.number_input("Maximum Elevation QE (deg)", 10.0, 75.0, 65.0, 5.0, key="ft_qe_max")
             n_steps_ft = st.slider("Elevation Increments", 5, 20, 13, 1, key="ft_n_steps")
 
-        with st.expander("🌐 STANAG 4082 METCM Sounding", expanded=False):
+        with st.expander("🌐 STANAG 4082 METCM Sounding", expanded=expert):
             st.markdown("**Surface & Boundary Layer**")
             s_temp_c = st.slider("Surface Temperature (°C)", -30.0, 50.0, 15.0, 1.0, key="met_s_temp")
             s_press_hpa = st.number_input("Surface Pressure (hPa)", 800.0, 1080.0, 1013.25, 5.0, key="met_s_press")

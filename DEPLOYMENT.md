@@ -22,13 +22,20 @@ This workbench is packaged cleanly for zero-DevOps cloud deployment on **Streaml
 
 ### Deep-Linkable Views
 
-Share direct links into any workbench or C-UAS module via query parameters:
-- `?wb=literature` — Scientific Literature & Formula Provenance Explorer (`68` primary sources, `96` formulas)
+Share direct links into any consolidated workbench or C-UAS stage module via query parameters:
+- `?wb=home` — Task-First Quick-Start Home & Scenario Presets
+- `?wb=cuas&mod=array` — Stage 1 Multi-Shotgun Array Designer, Custom Drone/Shell Builders, $R_{80}$ Envelope & `.html`/`.pdf` Spec Sheets
+- `?wb=cuas&mod=fcs` — Stage 2 Closed-Loop FCS & Evasive Drones (with Stage 1 Profile Sync)
+- `?wb=cuas&mod=sdz` — Stage 3 Elevated Pellet Fallout & Surface Danger Zone (with Stage 1 Profile Sync)
 - `?wb=cuas&mod=raid` — Unified 3D Cooperative Multi-Turret Raid Simulator
 - `?wb=cuas&mod=calibration` — Field-Test Calibration & Residual Diagnostics Lab
 - `?wb=cuas&mod=site_defense` — Custom Site Builder, DEM LOS Masking & Real-World OSM GIS Map
 - `?wb=cuas&mod=comparator` — A/B Turret Architecture Comparator & Layered Defense
 - `?wb=cuas&mod=sensitivity` — Automated OAT Sensitivity & Bottleneck Tornado
+- `?wb=sim` / `?wb=3d` / `?wb=firing` — Ballistics & 3D Trajectory Simulation Domain
+- `?wb=physics` / `?wb=mcdrag` — Physics & Aero Labs + McCoy MCDRAG 3D CAD
+- `?wb=iatg` — UNODA IATG 01.80 / 02.20 Safety & Quantity-Distance Workbench
+- `?wb=validation` / `?wb=literature` — Automated V&V Suite (`40` checks & certificates) and Scientific Literature Provenance (`80` primary sources, `96` formulas)
 
 ---
 

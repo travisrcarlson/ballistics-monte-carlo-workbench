@@ -19,6 +19,8 @@ from ammo_mc.cuas_defense import (
     evaluate_evasive_drone_state,
 )
 from ammo_mc.small_arms import (
+    build_custom_drone_spec,
+    build_custom_shell_spec,
     compute_balanced_pair_fire_times,
     compute_drone_projected_geometry,
     configure_array_pointing_vectors,
@@ -1568,16 +1570,79 @@ def validate_cuas_scenario_config(raw_json: str) -> tuple[bool, dict[str, Any], 
     choke_defs = get_choke_definitions()
     sg_presets = get_shotgun_presets()
 
-    if "drone_model" in cfg and str(cfg["drone_model"]) in drone_specs:
-        cleaned["drone_model"] = str(cfg["drone_model"])
+    if "drone_model" in cfg:
+        dm = str(cfg["drone_model"])
+        if dm in drone_specs or dm == "CUSTOM_DRONE":
+            cleaned["drone_model"] = dm
     if "aspect_mode" in cfg and str(cfg["aspect_mode"]) in aspect_presets:
         cleaned["aspect_mode"] = str(cfg["aspect_mode"])
     if "choke" in cfg and str(cfg["choke"]) in choke_defs:
         cleaned["choke"] = str(cfg["choke"])
-    if "ammunition_preset" in cfg and str(cfg["ammunition_preset"]) in sg_presets:
-        cleaned["ammunition_preset"] = str(cfg["ammunition_preset"])
+    if "ammunition_preset" in cfg:
+        ap = str(cfg["ammunition_preset"])
+        if ap in sg_presets or ap == "CUSTOM_SHELL":
+            cleaned["ammunition_preset"] = ap
     if "custom_coords_text" in cfg and isinstance(cfg["custom_coords_text"], str):
         cleaned["custom_coords_text"] = cfg["custom_coords_text"]
+
+    if "custom_drone_enabled" in cfg:
+        cleaned["custom_drone_enabled"] = bool(cfg["custom_drone_enabled"])
+    if "custom_shell_enabled" in cfg:
+        cleaned["custom_shell_enabled"] = bool(cfg["custom_shell_enabled"])
+
+    if "custom_drone_spec" in cfg and cfg["custom_drone_spec"] is not None:
+        raw_d = cfg["custom_drone_spec"]
+        if not isinstance(raw_d, dict):
+            return False, {}, "custom_drone_spec must be a dictionary."
+        try:
+            cleaned["custom_drone_spec"] = build_custom_drone_spec(
+                name=str(raw_d.get("name", "Custom Threat UAS")),
+                drone_type=str(raw_d.get("drone_type", "quadcopter")),
+                span_m=float(raw_d.get("span_m", 0.45)),
+                fuselage_l_m=float(raw_d.get("fuselage_l_m", 0.22)),
+                fuselage_w_m=float(raw_d.get("fuselage_w_m", 0.12)),
+                fuselage_h_m=float(raw_d.get("fuselage_h_m", 0.10)),
+                rotor_radius_m=float(raw_d.get("rotor_radius_m", 0.11)),
+                lethal_energy_rotor_j=float(raw_d.get("lethal_energy_rotor_j", 10.0)),
+                lethal_energy_core_j=float(raw_d.get("lethal_energy_core_j", 24.0)),
+                lethal_energy_arm_j=float(raw_d.get("lethal_energy_arm_j", 35.0)),
+                critical_hits_for_kill=(
+                    int(raw_d["critical_hits_for_kill"])
+                    if raw_d.get("critical_hits_for_kill") is not None
+                    else None
+                ),
+                wing_chord_m=float(raw_d.get("wing_chord_m", 0.22)),
+                arm_d_m=float(raw_d.get("arm_d_m", 0.020)),
+            )
+        except (TypeError, ValueError) as exc:
+            return False, {}, f"Invalid custom_drone_spec: {exc}"
+
+    if "custom_shell_spec" in cfg and cfg["custom_shell_spec"] is not None:
+        raw_s = cfg["custom_shell_spec"]
+        if not isinstance(raw_s, dict):
+            return False, {}, "custom_shell_spec must be a dictionary."
+        try:
+            cleaned["custom_shell_spec"] = build_custom_shell_spec(
+                name=str(raw_s.get("name", "Custom 12G C-UAS Load")),
+                pellet_material=str(raw_s.get("pellet_material", "Tungsten Super-Shot (TSS 18 g/cm³)")),
+                pellet_diameter_mm=float(raw_s.get("pellet_diameter_mm", 3.81)),
+                pellets_per_shot=int(raw_s.get("pellets_per_shot", 70)),
+                v0_mps=float(raw_s.get("v0_mps", 415.0)),
+                effective_cd=float(raw_s.get("effective_cd", 0.44)),
+                default_choke=str(raw_s.get("default_choke", "Full")),
+                pellet_mass_g=(
+                    float(raw_s["pellet_mass_g"])
+                    if raw_s.get("pellet_mass_g") is not None
+                    else None
+                ),
+                custom_pattern_40yd_30in_pct=(
+                    float(raw_s["custom_pattern_40yd_30in_pct"])
+                    if raw_s.get("custom_pattern_40yd_30in_pct") is not None
+                    else None
+                ),
+            )
+        except (TypeError, ValueError) as exc:
+            return False, {}, f"Invalid custom_shell_spec: {exc}"
 
     return True, cleaned, f"Validated {len(cleaned)} C-UAS configuration fields."
 
@@ -1686,6 +1751,149 @@ def generate_cuas_trade_study_html(
   </div>
   <div class="kpi-grid">{kpi_html}</div>
   {''.join(sections)}
+</body>
+</html>
+"""
+
+
+def generate_cuas_array_spec_sheet_html(
+    array_config: dict[str, Any],
+    sim_result: dict[str, Any],
+    range_envelope: dict[str, Any] | None = None,
+    aspect_benchmark: dict[str, Any] | None = None,
+    scenario_name: str = "C-UAS Multi-Shotgun Array Engineering Spec Sheet",
+) -> str:
+    """Generate a self-contained HTML engineering spec sheet for Stage 1 Multi-Shotgun Array runs."""
+    safe_name = html.escape(scenario_name or "C-UAS Multi-Shotgun Array Engineering Spec Sheet")
+    sm = sim_result.get("summary", {})
+    barrels = sim_result.get("barrel_stats", [])
+    env_sm = range_envelope.get("summary", {}) if range_envelope else {}
+
+    kpis: list[tuple[str, str]] = [
+        ("Intercept P_kill", f"{sm.get('kill_probability_pct', 0.0):.1f}%"),
+        ("Effective Range R80", f"{env_sm.get('r80_label', 'Run Range Tab')}"),
+        ("Effective Range R50", f"{env_sm.get('r50_label', 'Run Range Tab')}"),
+        ("Mean Hits / Lethal", f"{sm.get('mean_hits_on_drone', 0.0):.1f} / {sm.get('mean_lethal_hits', 0.0):.1f}"),
+        ("Mean Energy on Drone", f"{sm.get('mean_energy_on_drone_j', 0.0):.1f} J"),
+        ("Cloud Diameter (D90)", f"{sm.get('cloud_diameter_90_m', 0.0):.2f} m"),
+        ("Striking Velocity", f"{sm.get('mean_v_impact_nominal_mps', 0.0):.1f} m/s"),
+        ("Presented Area", f"{sm.get('presented_area_cm2', 0.0):.1f} cm²"),
+    ]
+    kpi_html = "".join(
+        f'<div class="kpi"><div class="kpi-lbl">{html.escape(lbl)}</div><div class="kpi-val">{html.escape(val)}</div></div>'
+        for lbl, val in kpis
+    )
+
+    cfg_rows = [
+        {"param": k, "value": v}
+        for k, v in sorted(array_config.items())
+        if not isinstance(v, (dict, list))
+    ]
+    if array_config.get("custom_drone_spec"):
+        ds = array_config["custom_drone_spec"]
+        cfg_rows.append({"param": "custom_drone_spec", "value": f"{ds.get('name')} ({ds.get('drone_type')}, span={ds.get('span_m')} m)"})
+    if array_config.get("custom_shell_spec"):
+        ss = array_config["custom_shell_spec"]
+        cfg_rows.append({"param": "custom_shell_spec", "value": f"{ss.get('name')} ({ss.get('pellets_per_shot')} x {ss.get('pellet_diameter_mm')} mm @ {ss.get('v0_mps')} m/s)"})
+
+    sections: list[str] = [
+        f"<h2>1. Array Geometry, Target &amp; Ammunition Configuration</h2>{_html_table(cfg_rows, [('param', 'Parameter'), ('value', 'Configured Value')])}"
+    ]
+
+    if barrels:
+        b_rows = [
+            {
+                "barrel_id": b.get("barrel_id", ""),
+                "mount_cm": f"Y={b.get('y_m', 0.0)*100:+.1f} cm, Z={b.get('z_m', 0.0)*100:+.1f} cm",
+                "choke": b.get("choke", ""),
+                "ammo": b.get("ammunition_preset", ""),
+                "fire_time_ms": f"{b.get('fire_time_ms', 0.0):.1f}",
+                "hits_on_drone": b.get("hits_on_drone", 0),
+                "lethal_hits": b.get("lethal_hits", 0),
+                "contribution_pct": f"{b.get('contribution_pct', 0.0):.1f}%",
+            }
+            for b in barrels
+        ]
+        sections.append(
+            "<h2>2. Per-Barrel Mounting &amp; Intercept Contribution</h2>"
+            + _html_table(
+                b_rows,
+                [
+                    ("barrel_id", "Barrel"),
+                    ("mount_cm", "Mount Offset"),
+                    ("choke", "Choke"),
+                    ("ammo", "Loadout"),
+                    ("fire_time_ms", "Fire Delay (ms)"),
+                    ("hits_on_drone", "Hits"),
+                    ("lethal_hits", "Lethal Hits"),
+                    ("contribution_pct", "Hit Share"),
+                ],
+            )
+        )
+
+    if range_envelope and range_envelope.get("records"):
+        sections.append(
+            "<h2>3. Effective Range Envelope (P_kill vs Slant Range)</h2>"
+            + _html_table(
+                range_envelope["records"],
+                [
+                    ("distance_m", "Slant Range (m)"),
+                    ("kill_probability_pct", "P_kill (%)"),
+                    ("mean_hits_on_drone", "Mean Hits"),
+                    ("mean_lethal_hits", "Mean Lethal Hits"),
+                    ("mean_v_impact_mps", "Impact Vel (m/s)"),
+                    ("cloud_diameter_90_m", "Cloud D90 (m)"),
+                ],
+            )
+        )
+
+    if aspect_benchmark and aspect_benchmark.get("aspect_results"):
+        sections.append(
+            "<h2>4. 3D Aspect-Angle Vulnerability Profile</h2>"
+            + _html_table(
+                aspect_benchmark["aspect_results"],
+                [
+                    ("name", "Aspect Presentation"),
+                    ("presented_area_cm2", "Presented Area (cm²)"),
+                    ("cross_section_ratio_pct", "Planform %"),
+                    ("kill_probability_pct", "P_kill (%)"),
+                    ("mean_hits", "Mean Hits"),
+                    ("mean_lethal_hits", "Lethal Hits"),
+                ],
+            )
+        )
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>{safe_name}</title>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 32px auto; max-width: 980px; color: #0f172a; line-height: 1.5; }}
+  h1 {{ color: #1e3a8a; border-bottom: 2px solid #cbd5e1; padding-bottom: 8px; }}
+  h2 {{ color: #1e293b; margin-top: 26px; font-size: 1.15rem; }}
+  .notice {{ background: #fef3c7; border-left: 5px solid #f59e0b; padding: 10px 14px; font-size: 0.9rem; margin: 14px 0; }}
+  .kpi-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); gap: 10px; margin: 16px 0; }}
+  .kpi {{ border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px 12px; background: #f8fafc; }}
+  .kpi-lbl {{ font-size: 0.78rem; color: #475569; }}
+  .kpi-val {{ font-size: 1.25rem; font-weight: 700; color: #0f172a; }}
+  table {{ width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 0.88rem; }}
+  th, td {{ border: 1px solid #cbd5e1; padding: 6px 9px; text-align: left; }}
+  th {{ background: #f1f5f9; font-weight: 600; }}
+  .prov {{ margin-top: 28px; font-size: 0.82rem; color: #475569; border-top: 1px solid #cbd5e1; padding-top: 10px; }}
+  @media print {{ body {{ margin: 12mm; }} }}
+</style>
+</head>
+<body>
+  <h1>{safe_name}</h1>
+  <div class="notice">
+    <strong>ENGINEERING USE NOTICE:</strong> Stochastic ballistic estimate derived from unclassified peer-reviewed models (Journée, Lowry, Morrison, McCoy, NATO AEP-4715 / IATG 01.80). Not a substitute for certified live-fire range clearance.
+  </div>
+  <div class="kpi-grid">{kpi_html}</div>
+  {''.join(sections)}
+  <div class="prov">
+    <strong>Model &amp; Provenance:</strong> Exact quadratic drag w/ compressible sphere Cd (Morrison 2016), bivariate normal choke patterning calibrated to 40-yd 30-in pattern % (Journée 1992; Lowry 1988), 3D Euler target cross-section &amp; component lethality thresholds (NATO AEP-4715 / IATG 01.80).
+  </div>
 </body>
 </html>
 """

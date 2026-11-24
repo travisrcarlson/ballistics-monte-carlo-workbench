@@ -837,3 +837,168 @@ def create_2d_cuas_fallout_safety_map_figure(
     )
     fig.update_annotations(font_size=12)
     return fig
+
+
+def create_antidrone_effective_range_figure(env_res: dict[str, Any]) -> go.Figure:
+    """Create 2-panel visualization of P_kill(R) envelope (with R80/R50 thresholds) and lethality vs range."""
+    recs = env_res.get("records", [])
+    comp = env_res.get("comparison_curves", [])
+    sm = env_res.get("summary", {})
+
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        horizontal_spacing=0.11,
+        specs=[[{"secondary_y": False}, {"secondary_y": True}]],
+        subplot_titles=[
+            "Effective Range Curve: P_kill(R) & Thresholds",
+            "Terminal Lethality & Velocity Decay vs Range",
+        ],
+    )
+
+    if recs:
+        dists = [r["distance_m"] for r in recs]
+        pks = [r["kill_probability_pct"] for r in recs]
+        mean_hits = [r["mean_hits_on_drone"] for r in recs]
+        mean_let = [r["mean_lethal_hits"] for r in recs]
+        vels = [r["mean_v_impact_mps"] for r in recs]
+
+        fig.add_trace(
+            go.Scatter(
+                x=dists,
+                y=pks,
+                mode="lines+markers",
+                name=f"Active ({sm.get('ammunition_name', 'Active Load')})",
+                line=dict(color="#10B981", width=3.5),
+                marker=dict(size=8, color="#10B981"),
+            ),
+            row=1,
+            col=1,
+        )
+
+        palette = ["#3B82F6", "#F59E0B", "#EC4899", "#8B5CF6"]
+        for c_idx, c_item in enumerate(comp):
+            c_recs = c_item.get("records", [])
+            if c_recs:
+                fig.add_trace(
+                    go.Scatter(
+                        x=[r["distance_m"] for r in c_recs],
+                        y=[r["kill_probability_pct"] for r in c_recs],
+                        mode="lines+markers",
+                        name=f"{c_item.get('ammunition_name', c_item.get('ammunition_preset', 'Alt'))} (R80={c_item.get('r80_label', 'N/A')})",
+                        line=dict(color=palette[c_idx % len(palette)], width=2.2, dash="dot"),
+                        marker=dict(size=6),
+                    ),
+                    row=1,
+                    col=1,
+                )
+
+        fig.add_hline(y=80.0, line_dash="dash", line_color="#EF4444", annotation_text="R80 (80%)", row=1, col=1)
+        fig.add_hline(y=50.0, line_dash="dot", line_color="#F59E0B", annotation_text="R50 (50%)", row=1, col=1)
+
+        r80_m = sm.get("r80_m")
+        if r80_m is not None:
+            fig.add_vline(
+                x=float(r80_m),
+                line_dash="dash",
+                line_color="#10B981",
+                annotation_text=f"R80={sm.get('r80_label', f'{r80_m:.1f} m')}",
+                annotation_position="top right",
+                row=1,
+                col=1,
+            )
+
+        fig.add_trace(
+            go.Scatter(
+                x=dists,
+                y=mean_hits,
+                mode="lines+markers",
+                name="Mean Total Hits",
+                line=dict(color="#38BDF8", width=2.2),
+            ),
+            row=1,
+            col=2,
+            secondary_y=False,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=dists,
+                y=mean_let,
+                mode="lines+markers",
+                name="Mean Lethal Hits",
+                line=dict(color="#EF4444", width=2.8),
+            ),
+            row=1,
+            col=2,
+            secondary_y=False,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=dists,
+                y=vels,
+                mode="lines+markers",
+                name="Striking Velocity (m/s)",
+                line=dict(color="#F59E0B", width=2.0, dash="dash"),
+            ),
+            row=1,
+            col=2,
+            secondary_y=True,
+        )
+
+    fig.update_xaxes(title_text="Slant Range (m)", row=1, col=1)
+    fig.update_yaxes(title_text="Kill Probability P_kill (%)", range=[0, 105], row=1, col=1)
+    fig.update_xaxes(title_text="Slant Range (m)", row=1, col=2)
+    fig.update_yaxes(title_text="Mean Hits per Volley", row=1, col=2, secondary_y=False)
+    fig.update_yaxes(title_text="Striking Velocity (m/s)", row=1, col=2, secondary_y=True)
+    fig.update_layout(
+        title=(
+            f"Effective Engagement Envelope — R80: {sm.get('r80_label', 'N/A')} | "
+            f"R50: {sm.get('r50_label', 'N/A')} ({sm.get('drone_name', 'UAS')})"
+        ),
+        margin=dict(l=30, r=40, t=80, b=40),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.26, x=0.0, font=dict(size=10)),
+        height=480,
+    )
+    fig.update_annotations(font_size=12)
+    return fig
+
+
+def create_antidrone_range_speed_heatmap_figure(hm_res: dict[str, Any]) -> go.Figure:
+    """Create 2D Speed x Range P_kill (%) engagement contour heatmap with R80 overlay."""
+    d_vals = hm_res.get("distance_stations_m", [])
+    v_vals = hm_res.get("speed_stations_mps", [])
+    z_mat = hm_res.get("pk_matrix", [])
+    r80_rows = hm_res.get("r80_by_speed_m", [])
+    sm = hm_res.get("summary", {})
+
+    fig = go.Figure()
+    if d_vals and v_vals and z_mat:
+        text_mat = [[f"{val:.0f}%" for val in row] for row in z_mat]
+        fig.add_trace(
+            go.Heatmap(
+                x=[f"{d:.0f} m" for d in d_vals],
+                y=[f"{v:.0f} m/s" for v in v_vals],
+                z=z_mat,
+                text=text_mat,
+                texttemplate="%{text}",
+                textfont=dict(size=11, color="#111827"),
+                colorscale="RdYlGn",
+                zmin=0,
+                zmax=100,
+                colorbar=dict(title="P_kill (%)"),
+                hovertemplate="Range: %{x}<br>Drone Speed: %{y}<br>P_kill: %{z:.1f}%<extra></extra>",
+            )
+        )
+
+    r80_note = ", ".join(f"{r['drone_velocity_mps']:.0f} m/s→{r['r80_label']}" for r in r80_rows[:4])
+    fig.update_layout(
+        title=(
+            f"Speed x Range Engagement Envelope — {sm.get('viable_80pct_share', 0.0):.0f}% Cells >= 80% P_kill"
+            + (f" ({r80_note})" if r80_note else "")
+        ),
+        xaxis_title="Target Slant Range (m)",
+        yaxis_title="Crossing Drone Speed (m/s)",
+        margin=dict(l=40, r=30, t=70, b=40),
+        height=440,
+    )
+    return fig

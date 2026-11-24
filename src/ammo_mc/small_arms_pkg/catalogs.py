@@ -579,3 +579,175 @@ def get_standard_barrel_lengths() -> dict[str, dict[str, Any]]:
     return STANDARD_BARREL_LENGTHS
 
 
+PELLET_MATERIAL_DENSITIES_G_CM3: dict[str, float] = {
+    "Lead (Chilled/Antimonial)": 11.15,
+    "Bismuth-Tin Alloy": 9.70,
+    "Steel (Soft Iron)": 7.85,
+    "Tungsten-Iron / Hevi-Shot": 12.00,
+    "Tungsten Super-Shot (TSS 18 g/cm³)": 18.00,
+    "Depleted Tungsten Alloy": 17.50,
+}
+
+
+def build_custom_shell_spec(
+    name: str = "Custom 12G C-UAS Load",
+    pellet_material: str = "Tungsten Super-Shot (TSS 18 g/cm³)",
+    pellet_diameter_mm: float = 3.81,
+    pellets_per_shot: int = 70,
+    v0_mps: float = 415.0,
+    effective_cd: float = 0.44,
+    default_choke: str = "Full",
+    gauge: str = "12_gauge",
+    pellet_mass_g: float | None = None,
+    custom_pattern_40yd_30in_pct: float | None = None,
+    description: str = "User-defined custom shotgun payload specification.",
+) -> dict[str, Any]:
+    """Construct a complete ballistic specification dict for a custom shotgun shell."""
+    rho_g_cm3 = float(PELLET_MATERIAL_DENSITIES_G_CM3.get(pellet_material, 11.15))
+    d_mm = max(1.0, min(12.0, float(pellet_diameter_mm)))
+    n_pel = max(1, min(1000, int(pellets_per_shot)))
+
+    if pellet_mass_g is None or float(pellet_mass_g) <= 0.0:
+        d_cm = d_mm / 10.0
+        pel_vol_cm3 = (math.pi / 6.0) * (d_cm ** 3)
+        calc_mass_g = round(pel_vol_cm3 * rho_g_cm3, 3)
+    else:
+        calc_mass_g = round(float(pellet_mass_g), 3)
+
+    payload_mass_g = round(calc_mass_g * n_pel, 2)
+
+    pat_frac: float | None = None
+    if custom_pattern_40yd_30in_pct is not None:
+        raw_pat = float(custom_pattern_40yd_30in_pct)
+        # Accept percentages (e.g., 15..100+) or fractional decimals (e.g., 0.15..1.05).
+        if raw_pat > 2.0:
+            raw_pat /= 100.0
+        pat_frac = round(max(0.15, min(0.99, raw_pat)), 4)
+
+    return {
+        "name": str(name).strip() or "Custom C-UAS Load",
+        "gauge": gauge,
+        "pellet_type": f"Custom ({pellet_material})",
+        "pellet_material": pellet_material,
+        "material_density_g_cm3": rho_g_cm3,
+        "pellets_per_shot": n_pel,
+        "pellet_diameter_mm": round(d_mm, 3),
+        "pellet_mass_g": calc_mass_g,
+        "payload_mass_g": payload_mass_g,
+        "v0_mps": round(max(150.0, min(900.0, float(v0_mps))), 1),
+        "default_choke": default_choke if default_choke in CHOKE_DEFINITIONS else "Modified",
+        "effective_cd": round(max(0.10, min(1.20, float(effective_cd))), 3),
+        "custom_pattern_40yd_30in_pct": pat_frac,
+        "description": str(description).strip() or "User-defined custom shotgun shell.",
+        "is_custom": True,
+    }
+
+
+def build_custom_drone_spec(
+    name: str = "Custom Threat UAS",
+    drone_type: str = "quadcopter",
+    span_m: float = 0.45,
+    fuselage_l_m: float = 0.22,
+    fuselage_w_m: float = 0.12,
+    fuselage_h_m: float = 0.10,
+    rotor_radius_m: float = 0.11,
+    lethal_energy_rotor_j: float = 10.0,
+    lethal_energy_core_j: float = 24.0,
+    lethal_energy_arm_j: float = 35.0,
+    critical_hits_for_kill: int | None = None,
+    wing_chord_m: float = 0.22,
+    arm_d_m: float = 0.020,
+    description: str = "User-defined custom UAS target geometry and vulnerability profile.",
+) -> dict[str, Any]:
+    """Construct a geometry- and vulnerability-complete drone target spec for Monte Carlo impact checks."""
+    d_type = str(drone_type).lower().strip()
+    if d_type not in {"quadcopter", "hexacopter", "octocopter", "fixed_wing"}:
+        d_type = "quadcopter"
+
+    sp = max(0.15, min(5.0, float(span_m)))
+    fl = max(0.06, min(3.0, float(fuselage_l_m)))
+    fw = max(0.04, min(1.5, float(fuselage_w_m)))
+    fh = max(0.04, min(1.0, float(fuselage_h_m)))
+    rr = max(0.03, min(0.8, float(rotor_radius_m)))
+    ad = max(0.008, min(0.10, float(arm_d_m)))
+
+    if critical_hits_for_kill is None:
+        crit_req = 4 if d_type in {"hexacopter", "fixed_wing"} else (5 if d_type == "octocopter" else 3)
+    else:
+        crit_req = max(1, min(20, int(critical_hits_for_kill)))
+
+    rotors: list[dict[str, Any]] = []
+    if d_type == "fixed_wing":
+        rotors.append({
+            "id": "Prop",
+            "x_m": round(-0.5 * fl, 3),
+            "y_m": 0.0,
+            "z_m_vert": 0.0,
+            "z_m": round(-0.5 * fl, 3),
+            "radius_m": round(rr, 3),
+        })
+        length_tot = round(max(fl * 1.15, sp * 0.65), 3)
+        height_tot = round(max(fh * 1.9, 0.18), 3)
+    else:
+        n_rot = 8 if d_type == "octocopter" else (6 if d_type == "hexacopter" else 4)
+        arm_reach = max(0.06, 0.44 * sp)
+        angle_offset = (math.pi / 4.0) if n_rot == 4 else 0.0
+        labels_4 = ["FR", "FL", "RL", "RR"]
+        for i in range(n_rot):
+            ang = angle_offset + i * (2.0 * math.pi / n_rot)
+            rx = round(arm_reach * math.cos(ang), 3)
+            ry = round(arm_reach * math.sin(ang), 3)
+            r_id = labels_4[i] if n_rot == 4 else f"R{i + 1}"
+            rotors.append({
+                "id": r_id,
+                "x_m": rx,
+                "y_m": ry,
+                "z_m_vert": 0.020,
+                "z_m": rx,
+                "radius_m": round(rr, 3),
+            })
+        length_tot = round(sp, 3)
+        height_tot = round(max(fh * 2.2, 0.14), 3)
+
+    spec: dict[str, Any] = {
+        "name": str(name).strip() or "Custom Threat UAS",
+        "drone_type": d_type,
+        "span_m": round(sp, 3),
+        "width_m": round(sp, 3),
+        "length_m": length_tot,
+        "height_m": height_tot,
+        "hub_radius_m": round(max(0.04, 0.45 * fl), 3),
+        "rotor_radius_m": round(rr, 3),
+        "rotor_thickness_m": 0.025,
+        "motor_d_m": round(max(0.025, min(0.10, rr * 0.38)), 3),
+        "motor_h_m": round(max(0.020, min(0.08, rr * 0.32)), 3),
+        "arm_d_m": round(ad, 3),
+        "rotors": rotors,
+        "fuselage_l_m": round(fl, 3),
+        "fuselage_w_m": round(fw, 3),
+        "fuselage_h_m": round(fh, 3),
+        "battery_l_m": round(fl * 0.62, 3),
+        "battery_w_m": round(fw * 0.62, 3),
+        "battery_h_m": round(fh * 0.55, 3),
+        "battery_offset_z_m": round(-0.55 * fh, 3),
+        "lethal_energy_rotor_j": round(max(1.0, float(lethal_energy_rotor_j)), 1),
+        "lethal_energy_core_j": round(max(2.0, float(lethal_energy_core_j)), 1),
+        "lethal_energy_arm_j": round(max(2.0, float(lethal_energy_arm_j)), 1),
+        "critical_hits_for_kill": crit_req,
+        "description": str(description).strip() or "User-defined custom drone geometry.",
+        "is_custom": True,
+    }
+    if d_type == "fixed_wing":
+        wc = max(0.08, min(1.0, float(wing_chord_m)))
+        spec.update({
+            "wingspan_m": round(sp, 3),
+            "wing_chord_m": round(wc, 3),
+            "wing_thickness_m": 0.035,
+            "fin_h_m": round(max(0.14, fh * 1.3), 3),
+            "fin_chord_m": round(max(0.12, wc * 0.8), 3),
+            "pusher_prop_radius_m": round(rr, 3),
+            "prop_thickness_m": 0.025,
+        })
+    return spec
+
+

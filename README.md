@@ -2,7 +2,7 @@
 
 ![CI](https://github.com/travisrcarlson/ballistics-monte-carlo-workbench/actions/workflows/ci.yml/badge.svg)
 
-A physics-grounded stochastic Monte Carlo simulation engine and Streamlit workbench for **artillery/small-arms ballistics**, **multi-barrel & shotgun dispersion**, **3D target drone vulnerability**, **scientific model provenance**, and a **13-module Counter-UAS (C-UAS) Multi-Shotgun Turret Engineering Suite**.
+A physics-grounded stochastic Monte Carlo simulation engine and Streamlit workbench for **artillery/small-arms ballistics**, **multi-barrel & shotgun dispersion**, **3D target drone vulnerability**, **verified scientific provenance**, and a **4-Stage Counter-UAS (C-UAS) Multi-Shotgun Turret Engineering Suite**.
 
 > **GOVERNANCE & USE LIMITATION NOTICE:**
 > Models and estimators herein are for engineering analysis, range safety planning, and academic research based strictly on unclassified, peer-reviewed literature and standards (IATG, STANAG, McCoy, Lowry-Journée, BRL). All bundled munition presets represent NOTIONAL generic class archetypes.
@@ -11,24 +11,28 @@ A physics-grounded stochastic Monte Carlo simulation engine and Streamlit workbe
 
 ## 🌟 Key Capabilities
 
-### 1. Contextual Per-Workbench UX, Scientific Literature Tab & Counter-UAS Defense
-- **Contextual Per-Workbench Popout Sidebar & URL Deep-Linking**: Stateful 9-workbench switcher (`Monte Carlo Simulator`, `C-UAS & Small Arms`, `3D Simulations`, `MCDRAG & 3D CAD`, `Physics & Ballistics Labs`, `UNODA IATG Safety`, `Firing Tables & Met`, `Validation Suite`, `📚 Literature & Sources`) executes only the active workbench, populates the left sidebar exclusively with relevant controls, and syncs shareable URL query params (e.g., `?wb=literature`, `?wb=cuas&mod=raid`, `?wb=cuas&mod=calibration`).
-- **Scientific Literature & Provenance Database (`📚 Literature & Sources`)**: Full module-by-module traceability mapping **68 verified references (`S01`–`S68`)**, **96 governed equations** (3 explicit `FLAG` equations), **12 empirical tables/catalogs**, and **46 application modules**, with BibTeX/CSV/JSON exports (`GET /literature`, `ammo-mc literature`).
-- **Flexible Spatial Barrel Placement & 3D Target Cross-Section (Modes 4 & 5)**: Circular ring, matrix grid, concentric dual-ring, hexagonal honeycomb, curtain, chevron V, and custom $(Y, Z)$ coordinates with convergent/parallel/splay/staggered pointing and exact 3-axis Euler projection ($\psi, \theta, \phi$).
-- **Complete 13-Module C-UAS Turret Engineering Suite**:
-  1. **Closed-Loop FCS & Evasive Drones**: Radar / EO-IR / Fused $\alpha\text{-}\beta\text{-}\gamma$ Kalman lead prediction, servo slew/acceleration limits, and sinusoidal/corkscrew/pop-up jink evasion.
-  2. **Multi-Drone Swarm Saturation**: Timeline budgets, priority policies, sub-salvo allocation, and reload endurance.
-  3. **Advanced Payloads & Programmable Airburst**: Lead #4 Buckshot, Steel T-Shot, Bismuth BB, Tungsten Super-Shot (TSS), Duplex, Saboted Flechettes, and time-fuzed electronic airburst canisters.
-  4. **Turret Recoil, Gimbal Loads & Constrained Pareto Optimizer**: 2nd-order recoil buffers, 2-axis gimbal walk ODEs, and structural-limit-constrained optimization.
-  5. **Elevated-Fire Pellet Fallout & SDZ Safety Zone**: Vectorized 3-DoF missed-pellet ballistics with ISA 1976 atmosphere, 1/7 wind shear, ocular ($0.06\;\text{J/mm}^2$), skin, and IATG $79\;\text{J}$ footprints.
-  6. **Multi-Sensor Acquisition & Kill-Chain Timeline**: Aspect-RCS Ku-band radar, weather-attenuated EO/IR, acoustic array, and passive RF/C2 ESM (`0 m` vs fiber-optic threats).
-  7. **Multi-Turret Site Defense, DEM Terrain LOS Masking & GIS Map**: Custom turret/obstacle/NFZ builder, synthetic/uploaded CSV & `.asc` / live Open-Meteo SRTM DEM ridge masking, terrain-adjusted Fallout SDZs, OpenStreetMap overlay, and GeoJSON/KML export.
-  8. **3D Animated Intercept Replay**: Time-scrubbed WebGL animation showing evasive drone attitude, ripple shot-stringing, and component impacts.
-  9. **Sustained Logistics, Scenario Library & Briefings (`.html`, `.pdf`, `.pptx`)**: Multi-wave thermal heating ($220^\circ\text{C}$ cook-off), magazine reloads, `$/Kill` comparison, SQLite Scenario Library save/diff, and presentation-grade multi-page PDF + 16:9 PowerPoint deck exports.
-  10. **A/B Turret Comparator & Layered Defense**: Side-by-side multi-metric scorecard + paired Outer Soft/Hard-Kill vs Inner Multi-Shotgun waves.
-  11. **Automated Sensitivity & Bottleneck Tornado**: One-at-a-time $\pm\%$ Tornado sweeps across C-UAS Kill Chain and Artillery `CEP50`.
-  12. **Unified Dynamic 3D Tactical Raid Simulator (`?wb=cuas&mod=raid`)**: Time-stepped 3D cooperative multi-turret battlespace unifying sensors, evasive RF/fiber-optic swarms, Weapon-Target Assignment handoff, DEM/building LOS masking, reloads, and barrel heating.
-  13. **Field-Test Calibration & Residual Diagnostics (`?wb=cuas&mod=calibration`)**: Upload range CSVs to fit Rayleigh shotgun pattern spread factors, chronograph MV & FM 6-40 $dMV/dT$, and exterior drag form factors via SciPy nonlinear least squares and apply directly to the simulator.
+### 1. Consolidated 6-Domain Focus Mode UX & Counter-UAS 4-Stage Workflow
+- **Task-First Navigation, Focus Mode & URL Deep-Linking**: Streamlined 6-domain workbench switcher (`Home`, `C-UAS & Multi-Barrel`, `Ballistics & 3D Sim`, `Physics & Aero Labs`, `Safety & IATG`, `Audit & Sources`) paired with a global **Standard / Expert Mode (`Focus Mode`)** toggle so engineers start cleanly with essential inputs while keeping full mathematical depth one click away. Supports shareable URL query parameters (`?wb=home`, `?wb=cuas&mod=array`, `?wb=cuas&mod=raid`, `?wb=validation`, `?wb=literature`).
+- **Scientific Literature, V&V Certificates & Model Provenance (`Audit & Sources`)**: Full module-by-module traceability mapping **80 verified primary sources (`S01`–`S80`)**, **96 governed equations**, empirical catalogs, and **40 automated V&V checks** with exportable V&V audit certificates and BibTeX/CSV/JSON exports (`GET /literature`, `ammo-mc literature`).
+- **Stage 1 — Multi-Shotgun Array Designer, Custom Builders & Effective Range Envelopes (`?wb=cuas&mod=array`)**:
+  - Flexible muzzle mount geometries (`circular`, `grid`, `concentric`, `honeycomb`, `fan_horizontal`, `fan_vertical`, `v_shape`, and custom `(Y, Z, choke)` coordinates), convergent/parallel/splay/staggered pointing, ripple schedules, and 3-axis Euler drone cross-section projection ($\psi, \theta, \phi$).
+  - **Custom Drone & Custom Shell Builders**: Define custom quadcopter, hexacopter, octocopter, or fixed-wing threat geometries/lethality thresholds and custom pellet materials/diameters/charges/40-yd pattern percentages with JSON preset round-tripping.
+  - **Effective Range ($R_{80}$ / $R_{50}$) & Speed $\times$ Range Engagement Heatmap**: Compute single-load and multi-load $P_{\text{kill}}(R)$ curves alongside on-demand 2D crossing-speed $\times$ slant-range contour heatmaps.
+  - **1-Click Stage 1 Spec Sheets & Shared Profile Sync**: Cached `@st.cache_data` execution, standalone `.html`/`.pdf` engineering spec sheets, and automatic/1-click syncing of the active array & drone profile across Stages 1–4.
+- **Stage 2 — Tracking, Swarms, Airburst & Structural Recoil**:
+  - **Closed-Loop FCS & Evasive Drones (`?wb=cuas&mod=fcs`)**: Radar / EO-IR / Fused $\alpha\text{-}\beta\text{-}\gamma$ Kalman lead prediction, servo slew/acceleration limits, and sinusoidal/corkscrew/pop-up jink evasion.
+  - **Multi-Drone Swarm Saturation (`?wb=cuas&mod=swarm`)**: Timeline budgets, priority policies, sub-salvo allocation, and reload endurance.
+  - **Advanced Payloads & Programmable Airburst (`?wb=cuas&mod=payloads`)**: Lead #4 Buckshot, Steel T-Shot, Bismuth BB, Tungsten Super-Shot (TSS), Duplex, Saboted Flechettes, and time-fuzed airburst canisters.
+  - **Turret Recoil, Gimbal Loads & Constrained Pareto Optimizer (`?wb=cuas&mod=recoil`)**: 2nd-order recoil buffers, 2-axis gimbal walk ODEs, and structural-limit-constrained optimization.
+- **Stage 3 — Safety Envelopes, Kill Chain, Site Defense & 3D Raid**:
+  - **Elevated-Fire Pellet Fallout & SDZ (`?wb=cuas&mod=sdz`)**: Vectorized 3-DoF missed-pellet ballistics with ISA 1976 atmosphere, 1/7 wind shear, ocular ($0.06\;\text{J/mm}^2$), skin, and IATG $79\;\text{J}$ footprints.
+  - **Multi-Sensor Acquisition & Kill-Chain Timeline (`?wb=cuas&mod=kill_chain`)**: Aspect-RCS Ku-band radar, weather-attenuated EO/IR, acoustic array, and passive RF/C2 ESM (`0 m` vs fiber-optic threats).
+  - **Multi-Turret Site Defense, DEM Terrain LOS Masking & GIS Map (`?wb=cuas&mod=site_defense`)**: Custom turret/obstacle/NFZ builder, synthetic/uploaded CSV & `.asc` / live Open-Meteo SRTM DEM ridge masking, terrain-adjusted Fallout SDZs, and GeoJSON/KML export.
+  - **Unified Dynamic 3D Tactical Raid & Intercept Replay (`?wb=cuas&mod=raid`)**: Time-stepped 3D cooperative multi-turret battlespace and animated 3D ripple shot-stringing replay.
+- **Stage 4 — Trade Studies, Calibration & Briefings**:
+  - **A/B Comparator, Layered Defense & Sensitivity Tornado (`?wb=cuas&mod=comparator`, `sensitivity`)**: Multi-criteria scorecard, paired Outer Soft/Hard-Kill vs Inner Multi-Shotgun waves, and one-at-a-time Tornado sweeps.
+  - **Sustained Logistics, Scenario Library & Briefings (`.html`, `.pdf`, `.pptx`)**: Thermal cook-off margins, `$/Kill`, SQLite Scenario Library save/diff, multi-page PDF + 16:9 PowerPoint decks.
+  - **Field-Test Calibration & Residual Diagnostics (`?wb=cuas&mod=calibration`)**: Upload range CSVs to fit Rayleigh shotgun pattern spread factors, chronograph MV & FM 6-40 $dMV/dT$, and exterior drag form factors via SciPy nonlinear least squares.
 
 ### 2. Multi-Stage Exterior, Interior & IATG Safety Engine (Dedicated Workbenches)
 - **Stages 0–8 Ballistics Pipeline**: Lumped-parameter STANAG 4367 interior ballistics, L0–L3 exterior trajectories (3-DoF + STANAG 4355 Modified Point Mass with spin/Coriolis drift + terrain), McCoy MCDRAG (Mach 0.5–5.0), fuze reliability & Beta epistemic UXO estimation, Kingery-Bulmash blast, Gurney/Mott fragmentation, Carleton SSPK, and two-loop epistemic/aleatory UQ (LHS, Sobol, MC).
@@ -101,22 +105,22 @@ GitHub Actions (`.github/workflows/ci.yml`) runs syntax verification and `pytest
 ├── pyproject.toml              # Package metadata and dependencies
 ├── Ammunition Monte Carlo Knowledge Base.xlsx
 ├── src/ammo_mc/
-│   ├── data_tables/            # Knowledge Base JSON tables (68 sources, 96 formulas, provenance map)
+│   ├── data_tables/            # Knowledge Base JSON tables (80 sources, 96 formulas, provenance map)
 │   ├── auth.py                 # Rate-limited password verification (Secrets / Env / PBKDF2)
 │   ├── literature.py           # Scientific Literature Catalog, Provenance & BibTeX/CSV Engine
 │   ├── terrain_dem.py          # DEM Terrain Grids, 3D Ridge LOS Masking & Slope Fallout SDZ
 │   ├── cuas_defense.py         # 5-module C-UAS FCS, swarms, airburst, recoil & SDZ
-│   ├── cuas_mission.py         # Kill chain, multi-turret site/NFZ, 3D replay, logistics & reports
+│   ├── cuas_mission.py         # Kill chain, site defense, 3D replay, logistics, JSON & HTML reports
 │   ├── cuas_analytics.py       # A/B comparator, layered defense, GeoJSON/KML & Tornado sensitivity
 │   ├── cuas_raid.py            # Unified Dynamic 3D Cooperative Multi-Turret Raid Simulator
 │   ├── calibration.py          # Field-Test Pattern, Chronograph & Exterior Drag Form-Factor Fitting
 │   ├── scenario_library.py     # SQLite Persistent Scenario Library (Save / Load / Diff / JSON Sync)
-│   ├── briefing_export.py      # Multi-Page Landscape PDF & 16:9 PowerPoint (.pptx) Briefing Engine
-│   ├── small_arms_pkg/         # Modular small-arms, shotgun pattern & anti-drone engines (+ facade small_arms.py)
+│   ├── briefing_export.py      # Multi-Page Landscape PDF, Stage 1 Spec Sheet PDF & 16:9 PPTX Engine
+│   ├── small_arms_pkg/         # Modular small-arms, custom builders, range/speed envelopes (+ small_arms.py)
 │   ├── vis_3d_pkg/             # Modular 3D/2D WebGL Plotly builders (+ facade vis_3d.py)
-│   ├── vis_cuas*.py            # C-UAS mission, analytics, raid & calibration visualizations
-│   ├── streamlit_app.py        # Contextual workbench router & URL deep-link entrypoint
-│   ├── ui/                     # Modular workbench UI views (9 workbenches incl. literature.py)
-│   └── ...                     # Core Stages 0–8 ballistics, IATG, API & CLI modules
+│   ├── vis_cuas*.py            # C-UAS mission, analytics, range/heatmap, raid & calibration visualizations
+│   ├── streamlit_app.py        # Contextual 6-domain workbench router & URL deep-link entrypoint
+│   ├── ui/                     # Consolidated 6-domain workbench views with Focus Mode & @st.cache_data
+│   └── ...                     # Core Stages 0–8 ballistics, IATG, V&V certificates, API & CLI modules
 └── tests/                      # Automated pytest verification suites
 ```

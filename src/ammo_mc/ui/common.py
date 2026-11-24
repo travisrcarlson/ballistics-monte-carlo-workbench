@@ -19,6 +19,9 @@ from ammo_mc.cuas_defense import (
     compare_cuas_fallout_across_loads,
     compare_cuas_payload_families,
     optimize_antidrone_array_configuration,
+    simulate_closed_loop_fcs_engagement_mc,
+    simulate_cuas_pellet_fallout_hazard,
+    simulate_drone_swarm_saturation_mc,
 )
 from ammo_mc.cuas_mission import (
     generate_3d_intercept_replay_data,
@@ -32,6 +35,9 @@ from ammo_mc.small_arms import (
     benchmark_drone_aspect_angles_mc,
     benchmark_multibarrel_aspect_angles_mc,
     compare_anti_drone_layouts,
+    evaluate_antidrone_effective_range_envelope,
+    evaluate_antidrone_range_speed_heatmap,
+    simulate_anti_drone_multishotgun_mc,
 )
 
 # -------------------------------------------------------------------------
@@ -300,6 +306,341 @@ def _cached_benchmark_multibarrel_aspect(
 
 
 @st.cache_data(ttl=600, show_spinner=False)
+def _cached_antidrone_array_mc(
+    layout_type: str,
+    n_barrels: int,
+    mount_radius_m: float,
+    spacing_y_m: float,
+    spacing_z_m: float,
+    n_cols: int,
+    n_rows: int,
+    pointing_mode: str,
+    splay_angle_mrad: float,
+    firing_mode: str,
+    ripple_delay_ms: float,
+    custom_barrel_specs_json: str,
+    ammunition_preset: str,
+    default_choke: str,
+    default_barrel_length_in: float,
+    target_distance_m: float,
+    drone_model: str,
+    drone_velocity_mps: float,
+    drone_heading_deg: float,
+    aspect_mode: str,
+    drone_pitch_deg: float,
+    drone_yaw_deg: float,
+    drone_roll_deg: float,
+    aim_error_mrad: float,
+    crosswind_mps: float,
+    n_volleys: int = 25,
+    seed: int = 42,
+    inner_ammunition_preset: str | None = None,
+    outer_ammunition_preset: str | None = None,
+    inner_choke: str | None = None,
+    custom_drone_spec_json: str = "",
+    custom_shell_spec_json: str = "",
+) -> dict[str, Any]:
+    custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
+    custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
+    custom_shell = json.loads(custom_shell_spec_json) if custom_shell_spec_json else None
+    return simulate_anti_drone_multishotgun_mc(
+        layout_type=layout_type,
+        n_barrels=n_barrels,
+        mount_radius_m=mount_radius_m,
+        spacing_y_m=spacing_y_m,
+        spacing_z_m=spacing_z_m,
+        n_cols=n_cols,
+        n_rows=n_rows,
+        pointing_mode=pointing_mode,
+        splay_angle_mrad=splay_angle_mrad,
+        firing_mode=firing_mode,
+        ripple_delay_ms=ripple_delay_ms,
+        custom_barrel_specs=custom_specs,
+        ammunition_preset=ammunition_preset,
+        default_choke=default_choke,
+        default_barrel_length_in=default_barrel_length_in,
+        target_distance_m=target_distance_m,
+        drone_model=drone_model,
+        drone_velocity_mps=drone_velocity_mps,
+        drone_heading_deg=drone_heading_deg,
+        aspect_mode=aspect_mode,
+        drone_pitch_deg=drone_pitch_deg,
+        drone_yaw_deg=drone_yaw_deg,
+        drone_roll_deg=drone_roll_deg,
+        aim_error_mrad=aim_error_mrad,
+        crosswind_mps=crosswind_mps,
+        n_volleys=n_volleys,
+        seed=seed,
+        inner_ammunition_preset=inner_ammunition_preset,
+        outer_ammunition_preset=outer_ammunition_preset,
+        inner_choke=inner_choke,
+        custom_drone_spec=custom_drone,
+        custom_shell_spec=custom_shell,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_antidrone_range_envelope(
+    distance_stations_m: tuple[float, ...],
+    layout_type: str,
+    n_barrels: int,
+    mount_radius_m: float,
+    spacing_y_m: float,
+    spacing_z_m: float,
+    n_cols: int,
+    n_rows: int,
+    pointing_mode: str,
+    splay_angle_mrad: float,
+    firing_mode: str,
+    ripple_delay_ms: float,
+    custom_barrel_specs_json: str,
+    ammunition_preset: str,
+    default_choke: str,
+    default_barrel_length_in: float,
+    drone_model: str,
+    drone_velocity_mps: float,
+    drone_heading_deg: float,
+    aspect_mode: str,
+    drone_pitch_deg: float,
+    drone_yaw_deg: float,
+    drone_roll_deg: float,
+    aim_error_mrad: float,
+    crosswind_mps: float,
+    n_volleys: int = 12,
+    seed: int = 42,
+    inner_ammunition_preset: str | None = None,
+    outer_ammunition_preset: str | None = None,
+    inner_choke: str | None = None,
+    custom_drone_spec_json: str = "",
+    custom_shell_spec_json: str = "",
+    compare_ammo_presets: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
+    custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
+    custom_shell = json.loads(custom_shell_spec_json) if custom_shell_spec_json else None
+    return evaluate_antidrone_effective_range_envelope(
+        distance_stations_m=list(distance_stations_m),
+        layout_type=layout_type,
+        n_barrels=n_barrels,
+        mount_radius_m=mount_radius_m,
+        spacing_y_m=spacing_y_m,
+        spacing_z_m=spacing_z_m,
+        n_cols=n_cols,
+        n_rows=n_rows,
+        pointing_mode=pointing_mode,
+        splay_angle_mrad=splay_angle_mrad,
+        firing_mode=firing_mode,
+        ripple_delay_ms=ripple_delay_ms,
+        custom_barrel_specs=custom_specs,
+        ammunition_preset=ammunition_preset,
+        default_choke=default_choke,
+        default_barrel_length_in=default_barrel_length_in,
+        drone_model=drone_model,
+        drone_velocity_mps=drone_velocity_mps,
+        drone_heading_deg=drone_heading_deg,
+        aspect_mode=aspect_mode,
+        drone_pitch_deg=drone_pitch_deg,
+        drone_yaw_deg=drone_yaw_deg,
+        drone_roll_deg=drone_roll_deg,
+        aim_error_mrad=aim_error_mrad,
+        crosswind_mps=crosswind_mps,
+        n_volleys=n_volleys,
+        seed=seed,
+        inner_ammunition_preset=inner_ammunition_preset,
+        outer_ammunition_preset=outer_ammunition_preset,
+        inner_choke=inner_choke,
+        custom_drone_spec=custom_drone,
+        custom_shell_spec=custom_shell,
+        compare_ammo_presets=list(compare_ammo_presets) if compare_ammo_presets else None,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_antidrone_range_speed_heatmap(
+    distance_stations_m: tuple[float, ...],
+    speed_stations_mps: tuple[float, ...],
+    layout_type: str,
+    n_barrels: int,
+    mount_radius_m: float,
+    spacing_y_m: float,
+    spacing_z_m: float,
+    n_cols: int,
+    n_rows: int,
+    pointing_mode: str,
+    splay_angle_mrad: float,
+    firing_mode: str,
+    ripple_delay_ms: float,
+    custom_barrel_specs_json: str,
+    ammunition_preset: str,
+    default_choke: str,
+    default_barrel_length_in: float,
+    drone_model: str,
+    drone_heading_deg: float,
+    aspect_mode: str,
+    drone_pitch_deg: float,
+    drone_yaw_deg: float,
+    drone_roll_deg: float,
+    aim_error_mrad: float,
+    crosswind_mps: float,
+    n_volleys: int = 10,
+    seed: int = 42,
+    inner_ammunition_preset: str | None = None,
+    outer_ammunition_preset: str | None = None,
+    inner_choke: str | None = None,
+    custom_drone_spec_json: str = "",
+    custom_shell_spec_json: str = "",
+) -> dict[str, Any]:
+    custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
+    custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
+    custom_shell = json.loads(custom_shell_spec_json) if custom_shell_spec_json else None
+    return evaluate_antidrone_range_speed_heatmap(
+        distance_stations_m=list(distance_stations_m),
+        speed_stations_mps=list(speed_stations_mps),
+        layout_type=layout_type,
+        n_barrels=n_barrels,
+        mount_radius_m=mount_radius_m,
+        spacing_y_m=spacing_y_m,
+        spacing_z_m=spacing_z_m,
+        n_cols=n_cols,
+        n_rows=n_rows,
+        pointing_mode=pointing_mode,
+        splay_angle_mrad=splay_angle_mrad,
+        firing_mode=firing_mode,
+        ripple_delay_ms=ripple_delay_ms,
+        custom_barrel_specs=custom_specs,
+        ammunition_preset=ammunition_preset,
+        default_choke=default_choke,
+        default_barrel_length_in=default_barrel_length_in,
+        drone_model=drone_model,
+        drone_heading_deg=drone_heading_deg,
+        aspect_mode=aspect_mode,
+        drone_pitch_deg=drone_pitch_deg,
+        drone_yaw_deg=drone_yaw_deg,
+        drone_roll_deg=drone_roll_deg,
+        aim_error_mrad=aim_error_mrad,
+        crosswind_mps=crosswind_mps,
+        n_volleys=n_volleys,
+        seed=seed,
+        inner_ammunition_preset=inner_ammunition_preset,
+        outer_ammunition_preset=outer_ammunition_preset,
+        inner_choke=inner_choke,
+        custom_drone_spec=custom_drone,
+        custom_shell_spec=custom_shell,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_closed_loop_fcs(
+    sensor_preset: str,
+    predictor_mode: str,
+    maneuver_profile: str,
+    max_maneuver_g: float,
+    servo_max_rate_deg_s: float,
+    servo_max_accel_deg_s2: float,
+    layout_type: str,
+    n_barrels: int,
+    pointing_mode: str,
+    splay_angle_mrad: float,
+    firing_mode: str,
+    ammunition_preset: str,
+    target_distance_m: float,
+    drone_model: str,
+    drone_velocity_mps: float,
+    aspect_mode: str,
+    n_volleys: int = 25,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return simulate_closed_loop_fcs_engagement_mc(
+        sensor_preset=sensor_preset,
+        predictor_mode=predictor_mode,
+        maneuver_profile=maneuver_profile,
+        max_maneuver_g=max_maneuver_g,
+        servo_max_rate_deg_s=servo_max_rate_deg_s,
+        servo_max_accel_deg_s2=servo_max_accel_deg_s2,
+        layout_type=layout_type,
+        n_barrels=n_barrels,
+        pointing_mode=pointing_mode,
+        splay_angle_mrad=splay_angle_mrad,
+        firing_mode=firing_mode,
+        ammunition_preset=ammunition_preset,
+        target_distance_m=target_distance_m,
+        drone_model=drone_model,
+        drone_velocity_mps=drone_velocity_mps,
+        aspect_mode=aspect_mode,
+        n_volleys=n_volleys,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_swarm_saturation(
+    swarm_size: int,
+    attack_tactic: str,
+    priority_policy: str,
+    n_barrels: int,
+    barrels_per_burst: int,
+    reload_time_s: float,
+    slew_rate_deg_s: float,
+    max_engagement_range_m: float,
+    breach_keepout_radius_m: float,
+    ammunition_preset: str,
+    drone_model: str,
+    mean_drone_speed_mps: float,
+    aspect_mode: str,
+    n_waves: int = 30,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return simulate_drone_swarm_saturation_mc(
+        swarm_size=swarm_size,
+        attack_tactic=attack_tactic,
+        priority_policy=priority_policy,
+        n_barrels=n_barrels,
+        barrels_per_burst=barrels_per_burst,
+        reload_time_s=reload_time_s,
+        slew_rate_deg_s=slew_rate_deg_s,
+        max_engagement_range_m=max_engagement_range_m,
+        breach_keepout_radius_m=breach_keepout_radius_m,
+        ammunition_preset=ammunition_preset,
+        drone_model=drone_model,
+        mean_drone_speed_mps=mean_drone_speed_mps,
+        aspect_mode=aspect_mode,
+        n_waves=n_waves,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_pellet_fallout_sdz(
+    layout_type: str,
+    pointing_mode: str,
+    ammunition_preset: str,
+    default_choke: str,
+    firing_elevation_deg: float,
+    firing_azimuth_deg: float,
+    turret_height_m: float,
+    wind_downrange_mps: float,
+    wind_crossrange_mps: float,
+    enable_wind_shear: bool,
+    n_sample_pellets: int = 260,
+    seed: int = 42,
+) -> dict[str, Any]:
+    return simulate_cuas_pellet_fallout_hazard(
+        layout_type=layout_type,
+        pointing_mode=pointing_mode,
+        ammunition_preset=ammunition_preset,
+        default_choke=default_choke,
+        firing_elevation_deg=firing_elevation_deg,
+        firing_azimuth_deg=firing_azimuth_deg,
+        turret_height_m=turret_height_m,
+        wind_downrange_mps=wind_downrange_mps,
+        wind_crossrange_mps=wind_crossrange_mps,
+        enable_wind_shear=enable_wind_shear,
+        n_sample_pellets=n_sample_pellets,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
 def _cached_compare_anti_drone_layouts(
     distance_stations_m: tuple[float, ...],
     ammunition_preset: str,
@@ -309,7 +650,11 @@ def _cached_compare_anti_drone_layouts(
     firing_mode: str,
     n_volleys: int = 12,
     seed: int = 42,
+    custom_drone_spec_json: str = "",
+    custom_shell_spec_json: str = "",
 ) -> dict[str, Any]:
+    custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
+    custom_shell = json.loads(custom_shell_spec_json) if custom_shell_spec_json else None
     return compare_anti_drone_layouts(
         distance_stations_m=list(distance_stations_m),
         ammunition_preset=ammunition_preset,
@@ -319,6 +664,8 @@ def _cached_compare_anti_drone_layouts(
         firing_mode=firing_mode,
         n_volleys=n_volleys,
         seed=seed,
+        custom_drone_spec=custom_drone,
+        custom_shell_spec=custom_shell,
     )
 
 
@@ -346,8 +693,12 @@ def _cached_benchmark_drone_aspect(
     crosswind_mps: float,
     n_volleys: int = 15,
     seed: int = 42,
+    custom_drone_spec_json: str = "",
+    custom_shell_spec_json: str = "",
 ) -> dict[str, Any]:
     custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
+    custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
+    custom_shell = json.loads(custom_shell_spec_json) if custom_shell_spec_json else None
     return benchmark_drone_aspect_angles_mc(
         layout_type=layout_type,
         n_barrels=n_barrels,
@@ -371,6 +722,8 @@ def _cached_benchmark_drone_aspect(
         crosswind_mps=crosswind_mps,
         n_volleys=n_volleys,
         seed=seed,
+        custom_drone_spec=custom_drone,
+        custom_shell_spec=custom_shell,
     )
 
 

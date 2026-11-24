@@ -73,7 +73,7 @@ def test_ui_deeplinks_and_contextual_sidebars(
         assert at.session_state[expected_sub_key] == expected_sub_val
 
 
-@pytest.mark.parametrize(("wb_slug", "mod_slug"), [("cuas", "array"), ("sim", None)])
+@pytest.mark.parametrize(("wb_slug", "mod_slug"), [("cuas", "array"), ("sim", None), ("mcdrag", None), ("3d", None), ("firing", None)])
 def test_ui_expert_mode_toggle_renders_cleanly(wb_slug: str, mod_slug: str | None) -> None:
     at = AppTest.from_file(ROOT_APP, default_timeout=60)
     at.session_state["authenticated"] = True
@@ -87,3 +87,43 @@ def test_ui_expert_mode_toggle_renders_cleanly(wb_slug: str, mod_slug: str | Non
     at.toggle(key="ui_expert_mode").set_value(True).run()
     assert not at.exception
     assert at.session_state["ui_expert_mode"] is True
+
+
+def test_ui_stage1_custom_builders_and_profile_sync() -> None:
+    at = AppTest.from_file(ROOT_APP, default_timeout=60)
+    at.session_state["authenticated"] = True
+    at.query_params["wb"] = "cuas"
+    at.query_params["mod"] = "array"
+    at.run()
+    assert not at.exception
+    assert "_active_cuas_profile" in at.session_state
+    assert "_report_range_envelope" in at.session_state
+
+    # Enable custom drone & custom shell + update distance to 42 m
+    at.checkbox(key="cuas_cust_drone_on").set_value(True)
+    at.checkbox(key="cuas_cust_shell_on").set_value(True)
+    at.slider(key="cuas_dist").set_value(42.0)
+    at.run()
+    assert not at.exception
+    assert at.session_state["_active_cuas_profile"]["target_distance_m"] == 42.0
+
+    # Switch from Stage 1 -> Stage 2 (Closed-Loop FCS, first tool in Stage 2)
+    at.radio(key="cuas_stage").set_value("2. Engagement & Lethality").run()
+    assert not at.exception
+    assert at.session_state["cuas_stage_tool"] == "Closed-Loop FCS & Evasive Drones"
+    assert at.slider(key="cuas18_fcs_dist").value == 42.0
+
+    # Mutate FCS distance, then test 1-click re-sync back to Stage 1's 42 m
+    at.slider(key="cuas18_fcs_dist").set_value(20.0).run()
+    assert not at.exception
+    assert at.slider(key="cuas18_fcs_dist").value == 20.0
+    at.button(key="cuas_sync_btn_fcs").click().run()
+    assert not at.exception
+    assert at.slider(key="cuas18_fcs_dist").value == 42.0
+
+    # Switch to Stage 3 (SDZ, first tool in Stage 3) and test sync button cleanly
+    at.radio(key="cuas_stage").set_value("3. Safety, Site & Mission").run()
+    assert not at.exception
+    assert at.session_state["cuas_stage_tool"] == "Elevated Fallout & Safety Zone (SDZ)"
+    at.button(key="cuas_sync_btn_sdz").click().run()
+    assert not at.exception

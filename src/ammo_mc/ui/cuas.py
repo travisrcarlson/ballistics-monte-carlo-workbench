@@ -56,8 +56,11 @@ from ammo_mc.direct_fire import (
     simulate_direct_fire_engagement,
 )
 from ammo_mc.small_arms import (
+    PELLET_MATERIAL_DENSITIES_G_CM3,
     benchmark_drone_aspect_angles_mc,
     benchmark_multibarrel_aspect_angles_mc,
+    build_custom_drone_spec,
+    build_custom_shell_spec,
     compare_anti_drone_layouts,
     compare_barrel_lengths_dispersion,
     configure_array_pointing_vectors,
@@ -166,6 +169,7 @@ from ammo_mc.cuas_defense import (
 )
 from ammo_mc.cuas_mission import (
     generate_3d_intercept_replay_data,
+    generate_cuas_array_spec_sheet_html,
     generate_cuas_trade_study_html,
     get_cuas_ammo_economics_catalog,
     get_kill_chain_sensor_catalog,
@@ -183,7 +187,9 @@ from ammo_mc.vis_cuas import (
     create_3d_cuas_fallout_footprint_figure,
     create_3d_swarm_hemisphere_figure,
     create_airburst_standoff_cone_figure,
+    create_antidrone_effective_range_figure,
     create_antidrone_optimizer_pareto_figure,
+    create_antidrone_range_speed_heatmap_figure,
     create_cuas_payload_range_comparison_figure,
     create_fcs_tracking_and_evasion_figure,
     create_swarm_doctrine_tradeoff_figure,
@@ -274,6 +280,7 @@ from ammo_mc.vis_calibration import (
     create_pattern_calibration_figure,
 )
 from ammo_mc.briefing_export import (
+    generate_cuas_array_spec_sheet_pdf,
     generate_executive_briefing_pdf,
     generate_executive_briefing_pptx,
 )
@@ -290,8 +297,12 @@ from ammo_mc.ui.common import (
     _PHYSICS_LABS,
     _SMALL_ARMS_MODES,
     _WORKBENCH_OPTIONS,
+    _cached_antidrone_array_mc,
+    _cached_antidrone_range_envelope,
+    _cached_antidrone_range_speed_heatmap,
     _cached_benchmark_drone_aspect,
     _cached_benchmark_multibarrel_aspect,
+    _cached_closed_loop_fcs,
     _cached_compare_anti_drone_layouts,
     _cached_compare_cuas_fallout,
     _cached_compare_cuas_payloads,
@@ -302,8 +313,10 @@ from ammo_mc.ui.common import (
     _cached_kill_chain,
     _cached_layered_defense,
     _cached_optimize_antidrone_array,
+    _cached_pellet_fallout_sdz,
     _cached_site_defense,
     _cached_sustained_logistics,
+    _cached_swarm_saturation,
     _cached_unified_raid,
     _navigate_to,
     _render_sidebar_header,
@@ -317,6 +330,193 @@ _SITE_GEO_ANCHORS: dict[str, tuple[float, float]] = {
     "Coastal Airfield (36.8960°N, -76.2990°W)": (36.8960, -76.2990),
     "European Urban Site (48.8566°N, 2.3522°E)": (48.8566, 2.3522),
 }
+
+
+def _apply_active_cuas_profile(
+    field_map: dict[str, tuple[str, Any]],
+    only_if_missing: bool = False,
+) -> None:
+    """Copy validated parameters from Stage 1 active array profile into downstream widget keys."""
+    prof = st.session_state.get("_active_cuas_profile")
+    if not isinstance(prof, dict):
+        return
+    for prof_key, (widget_key, bounds) in field_map.items():
+        if prof_key not in prof:
+            continue
+        if only_if_missing and widget_key in st.session_state:
+            continue
+        val = prof[prof_key]
+        if isinstance(bounds, (list, tuple)) and bounds and isinstance(bounds[0], str):
+            if val in bounds:
+                st.session_state[widget_key] = val
+        elif isinstance(bounds, tuple) and len(bounds) == 2:
+            lo, hi = bounds
+            try:
+                clamped = max(lo, min(hi, int(round(float(val))) if isinstance(lo, int) else float(val)))
+                st.session_state[widget_key] = clamped
+            except (TypeError, ValueError):
+                pass
+
+
+def _render_cuas_profile_sync_bar(
+    prefix: str,
+    field_map: dict[str, tuple[str, Any]],
+) -> None:
+    """Auto-seed unset downstream widgets once and render a 1-click Stage 1 sync bar."""
+    prof = st.session_state.get("_active_cuas_profile")
+    if not isinstance(prof, dict):
+        return
+    seed_flag = f"_cuas_prof_seeded_{prefix}"
+    if not st.session_state.get(seed_flag):
+        _apply_active_cuas_profile(field_map, only_if_missing=True)
+        st.session_state[seed_flag] = True
+
+    c_info, c_btn = st.columns([3.4, 1.3])
+    c_info.info(f"Stage 1 Active Profile: **{prof.get('label', 'Configured Array')}**")
+    c_btn.button(
+        "Sync Stage 1 Array & Drone",
+        key=f"cuas_sync_btn_{prefix}",
+        on_click=_apply_active_cuas_profile,
+        args=(field_map, False),
+        width="stretch",
+    )
+
+
+def _render_effective_range_tab(
+    *,
+    layout_type: str,
+    n_barrels: int,
+    mount_radius_m: float,
+    spacing_y_m: float,
+    spacing_z_m: float,
+    n_cols: int,
+    n_rows: int,
+    pointing_mode: str,
+    splay_angle_mrad: float,
+    firing_mode: str,
+    ripple_delay_ms: float,
+    custom_barrel_specs_json: str,
+    ammunition_preset: str,
+    default_choke: str,
+    default_barrel_length_in: float,
+    drone_model: str,
+    drone_velocity_mps: float,
+    drone_heading_deg: float,
+    aspect_mode: str,
+    drone_pitch_deg: float,
+    drone_yaw_deg: float,
+    drone_roll_deg: float,
+    aim_error_mrad: float,
+    crosswind_mps: float,
+    inner_ammunition_preset: str | None,
+    outer_ammunition_preset: str | None,
+    inner_choke: str | None,
+    custom_drone_spec_json: str,
+    custom_shell_spec_json: str,
+    sg_presets: dict[str, Any],
+) -> dict[str, Any]:
+    """Render Stage 1 Effective Range Curve (R80 / R50) and optional Speed x Range Heatmap."""
+    st.markdown("##### Effective Engagement Envelope (P_kill vs Slant Range)")
+    alt_candidates = [k for k in sg_presets.keys() if k in {"12G_NO4_BUCK_C_UAS", "12G_TSS_NO2_C_UAS", "12G_DUPLEX_TSS_BUCK_C_UAS", "12G_FLECHETTE_SABOT_C_UAS"}]
+    comp_loads = st.multiselect(
+        "Overlay Comparison Shell Loads (Optional)",
+        alt_candidates,
+        default=[],
+        format_func=lambda k: sg_presets[k]["name"],
+        key="cuas_env_comp_loads",
+    )
+    stations = (15.0, 25.0, 35.0, 45.0, 55.0, 65.0, 75.0, 85.0)
+    with st.spinner("Computing effective range envelope P_kill(R)..."):
+        env_res = _cached_antidrone_range_envelope(
+            distance_stations_m=stations,
+            layout_type=layout_type,
+            n_barrels=n_barrels,
+            mount_radius_m=mount_radius_m,
+            spacing_y_m=spacing_y_m,
+            spacing_z_m=spacing_z_m,
+            n_cols=n_cols,
+            n_rows=n_rows,
+            pointing_mode=pointing_mode,
+            splay_angle_mrad=splay_angle_mrad,
+            firing_mode=firing_mode,
+            ripple_delay_ms=ripple_delay_ms,
+            custom_barrel_specs_json=custom_barrel_specs_json,
+            ammunition_preset=ammunition_preset,
+            default_choke=default_choke,
+            default_barrel_length_in=default_barrel_length_in,
+            drone_model=drone_model,
+            drone_velocity_mps=drone_velocity_mps,
+            drone_heading_deg=drone_heading_deg,
+            aspect_mode=aspect_mode,
+            drone_pitch_deg=drone_pitch_deg,
+            drone_yaw_deg=drone_yaw_deg,
+            drone_roll_deg=drone_roll_deg,
+            aim_error_mrad=aim_error_mrad,
+            crosswind_mps=crosswind_mps,
+            n_volleys=12,
+            seed=42,
+            inner_ammunition_preset=inner_ammunition_preset,
+            outer_ammunition_preset=outer_ammunition_preset,
+            inner_choke=inner_choke,
+            custom_drone_spec_json=custom_drone_spec_json,
+            custom_shell_spec_json=custom_shell_spec_json,
+            compare_ammo_presets=tuple(comp_loads),
+        )
+    st.session_state["_report_range_envelope"] = env_res
+    esm = env_res["summary"]
+    ec1, ec2, ec3 = st.columns(3)
+    ec1.metric("Effective Range R80 (P_kill >= 80%)", esm["r80_label"], delta="Doctrinal intercept ceiling")
+    ec2.metric("Effective Range R50 (P_kill >= 50%)", esm["r50_label"], delta="50% damage / harass limit")
+    ec3.metric("Peak Single-Volley P_kill", f"{esm['max_pk_pct']:.1f} %", delta=esm["ammunition_name"][:34])
+    st.plotly_chart(create_antidrone_effective_range_figure(env_res), width="stretch")
+    st.dataframe(pd.DataFrame(env_res["records"]), width="stretch")
+
+    st.divider()
+    show_hm = st.checkbox(
+        "Compute 2D Speed x Range Heatmap (5x6 Grid)",
+        value=False,
+        key="cuas_show_heatmap",
+        help="Sweeps 5 crossing speeds (5-40 m/s) across 6 slant ranges (15-75 m).",
+    )
+    if show_hm:
+        with st.spinner("Computing 2D Speed x Slant-Range P_kill Heatmap..."):
+            hm_res = _cached_antidrone_range_speed_heatmap(
+                distance_stations_m=(15.0, 25.0, 35.0, 45.0, 60.0, 75.0),
+                speed_stations_mps=(5.0, 12.0, 20.0, 30.0, 40.0),
+                layout_type=layout_type,
+                n_barrels=n_barrels,
+                mount_radius_m=mount_radius_m,
+                spacing_y_m=spacing_y_m,
+                spacing_z_m=spacing_z_m,
+                n_cols=n_cols,
+                n_rows=n_rows,
+                pointing_mode=pointing_mode,
+                splay_angle_mrad=splay_angle_mrad,
+                firing_mode=firing_mode,
+                ripple_delay_ms=ripple_delay_ms,
+                custom_barrel_specs_json=custom_barrel_specs_json,
+                ammunition_preset=ammunition_preset,
+                default_choke=default_choke,
+                default_barrel_length_in=default_barrel_length_in,
+                drone_model=drone_model,
+                drone_heading_deg=drone_heading_deg,
+                aspect_mode=aspect_mode,
+                drone_pitch_deg=drone_pitch_deg,
+                drone_yaw_deg=drone_yaw_deg,
+                drone_roll_deg=drone_roll_deg,
+                aim_error_mrad=aim_error_mrad,
+                crosswind_mps=crosswind_mps,
+                n_volleys=10,
+                seed=42,
+                inner_ammunition_preset=inner_ammunition_preset,
+                outer_ammunition_preset=outer_ammunition_preset,
+                inner_choke=inner_choke,
+                custom_drone_spec_json=custom_drone_spec_json,
+                custom_shell_spec_json=custom_shell_spec_json,
+            )
+        st.plotly_chart(create_antidrone_range_speed_heatmap_figure(hm_res), width="stretch")
+        st.dataframe(pd.DataFrame(hm_res["r80_by_speed_m"]), width="stretch")
+    return env_res
 
 
 def _on_site_anchor_change() -> None:
@@ -498,9 +698,44 @@ def tab_cuas_and_small_arms() -> None:
                             }
                             for cfg_k, ss_k in _key_map.items():
                                 if cfg_k in cleaned_cfg:
-                                    st.session_state[ss_k] = cleaned_cfg[cfg_k]
+                                    val_up = cleaned_cfg[cfg_k]
+                                    if cfg_k == "ammunition_preset" and val_up == "CUSTOM_SHELL":
+                                        st.session_state["cuas_cust_shell_on"] = True
+                                        continue
+                                    if cfg_k == "drone_model" and val_up == "CUSTOM_DRONE":
+                                        st.session_state["cuas_cust_drone_on"] = True
+                                        continue
+                                    st.session_state[ss_k] = val_up
                             if "n_barrels" in cleaned_cfg:
                                 st.session_state["cuas_n_barrels_fan"] = cleaned_cfg["n_barrels"]
+                            if "custom_drone_enabled" in cleaned_cfg:
+                                st.session_state["cuas_cust_drone_on"] = bool(cleaned_cfg["custom_drone_enabled"])
+                            if "custom_shell_enabled" in cleaned_cfg:
+                                st.session_state["cuas_cust_shell_on"] = bool(cleaned_cfg["custom_shell_enabled"])
+                            if isinstance(cleaned_cfg.get("custom_drone_spec"), dict):
+                                cds = cleaned_cfg["custom_drone_spec"]
+                                st.session_state["cuas_cd_name"] = str(cds.get("name", "Custom Threat UAS"))
+                                st.session_state["cuas_cd_type"] = str(cds.get("drone_type", "quadcopter"))
+                                st.session_state["cuas_cd_span"] = float(cds.get("span_m", 0.45))
+                                st.session_state["cuas_cd_fl"] = float(cds.get("fuselage_l_m", 0.22))
+                                st.session_state["cuas_cd_fw"] = float(cds.get("fuselage_w_m", 0.12))
+                                st.session_state["cuas_cd_fh"] = float(cds.get("fuselage_h_m", 0.10))
+                                st.session_state["cuas_cd_rr"] = float(cds.get("rotor_radius_m", 0.11))
+                                st.session_state["cuas_cd_erot"] = float(cds.get("lethal_energy_rotor_j", 10.0))
+                                st.session_state["cuas_cd_ecore"] = float(cds.get("lethal_energy_core_j", 24.0))
+                                st.session_state["cuas_cd_crit"] = int(cds.get("critical_hits_for_kill", 3))
+                            if isinstance(cleaned_cfg.get("custom_shell_spec"), dict):
+                                css = cleaned_cfg["custom_shell_spec"]
+                                st.session_state["cuas_cs_name"] = str(css.get("name", "Custom 12G C-UAS Load"))
+                                if css.get("pellet_material") in PELLET_MATERIAL_DENSITIES_G_CM3:
+                                    st.session_state["cuas_cs_mat"] = str(css["pellet_material"])
+                                st.session_state["cuas_cs_diam"] = float(css.get("pellet_diameter_mm", 3.81))
+                                st.session_state["cuas_cs_n"] = int(css.get("pellets_per_shot", 70))
+                                st.session_state["cuas_cs_v0"] = float(css.get("v0_mps", 415.0))
+                                st.session_state["cuas_cs_cd"] = float(css.get("effective_cd", 0.44))
+                                if css.get("custom_pattern_40yd_30in_pct") is not None:
+                                    st.session_state["cuas_cs_pat_on"] = True
+                                    st.session_state["cuas_cs_pat40"] = round(float(css["custom_pattern_40yd_30in_pct"]) * 100.0, 1)
                             st.session_state["_cuas_last_uploaded_sig"] = sig
                             st.session_state["_cuas_upload_notice"] = msg_cfg
                             st.rerun()
@@ -1137,6 +1372,90 @@ def tab_cuas_and_small_arms() -> None:
                     help="Cross-section presented toward the incoming shot cloud.",
                 )
 
+            with st.expander(
+                "Custom Drone & Custom Shell Builder (Optional)",
+                expanded=bool(st.session_state.get("cuas_cust_drone_on") or st.session_state.get("cuas_cust_shell_on")),
+            ):
+                b_cd, b_cs = st.columns(2)
+                custom_drone_spec: dict[str, Any] | None = None
+                custom_shell_spec: dict[str, Any] | None = None
+                with b_cd:
+                    use_custom_drone = st.checkbox(
+                        "Override Threat with Custom Drone Geometry",
+                        value=False,
+                        key="cuas_cust_drone_on",
+                    )
+                    if use_custom_drone:
+                        cd_name = st.text_input("Custom Drone Name", value="Custom Interceptor Quad", key="cuas_cd_name")
+                        cd_c1, cd_c2 = st.columns(2)
+                        cd_type = cd_c1.selectbox(
+                            "Airframe Architecture",
+                            ["quadcopter", "hexacopter", "octocopter", "fixed_wing"],
+                            key="cuas_cd_type",
+                        )
+                        cd_span = cd_c2.number_input("Rotor Span / Wingspan (m)", 0.20, 4.00, 0.50, 0.05, key="cuas_cd_span")
+                        cd_fl = cd_c1.number_input("Fuselage Length (m)", 0.08, 2.50, 0.24, 0.02, key="cuas_cd_fl")
+                        cd_fw = cd_c2.number_input("Fuselage Width (m)", 0.05, 1.00, 0.13, 0.01, key="cuas_cd_fw")
+                        cd_fh = cd_c1.number_input("Fuselage Height (m)", 0.04, 0.80, 0.10, 0.01, key="cuas_cd_fh")
+                        cd_rr = cd_c2.number_input("Rotor / Prop Radius (m)", 0.04, 0.60, 0.12, 0.01, key="cuas_cd_rr")
+                        cd_erot = cd_c1.number_input("Rotor / Motor Kill Energy (J)", 2.0, 100.0, 10.0, 1.0, key="cuas_cd_erot")
+                        cd_ecore = cd_c2.number_input("Core / Battery Kill Energy (J)", 5.0, 150.0, 24.0, 2.0, key="cuas_cd_ecore")
+                        cd_crit = st.slider("Critical Hits Required for Kill", 1, 10, 3, 1, key="cuas_cd_crit")
+                        custom_drone_spec = build_custom_drone_spec(
+                            name=cd_name,
+                            drone_type=cd_type,
+                            span_m=cd_span,
+                            fuselage_l_m=cd_fl,
+                            fuselage_w_m=cd_fw,
+                            fuselage_h_m=cd_fh,
+                            rotor_radius_m=cd_rr,
+                            lethal_energy_rotor_j=cd_erot,
+                            lethal_energy_core_j=cd_ecore,
+                            critical_hits_for_kill=cd_crit,
+                        )
+                        sel_drone = custom_drone_spec
+                        st.caption(f"Active custom target: **{sel_drone['name']}** ({sel_drone['drone_type']}, {sel_drone['span_m']:.2f} m)")
+
+                with b_cs:
+                    use_custom_shell = st.checkbox(
+                        "Override Load with Custom Shotgun Shell",
+                        value=False,
+                        key="cuas_cust_shell_on",
+                    )
+                    if use_custom_shell:
+                        cs_name = st.text_input("Custom Shell Name", value="Custom 12G TSS Load", key="cuas_cs_name")
+                        cs_c1, cs_c2 = st.columns(2)
+                        cs_mat = cs_c1.selectbox(
+                            "Pellet Material",
+                            list(PELLET_MATERIAL_DENSITIES_G_CM3.keys()),
+                            index=4,
+                            key="cuas_cs_mat",
+                        )
+                        cs_diam = cs_c2.number_input("Pellet Diameter (mm)", 1.50, 10.00, 3.81, 0.05, key="cuas_cs_diam")
+                        cs_n = cs_c1.number_input("Pellets per Shell", 1, 500, 70, 1, key="cuas_cs_n")
+                        cs_v0 = cs_c2.number_input("Muzzle Velocity V0 (m/s)", 200.0, 750.0, 415.0, 5.0, key="cuas_cs_v0")
+                        cs_cd = cs_c1.number_input("Effective Drag Cd", 0.12, 0.90, 0.44, 0.02, key="cuas_cs_cd", help="Use ~0.44 for spheres, ~0.18 for fin-stabilized darts")
+                        cs_pat_on = cs_c2.checkbox("Override 40-yd Pattern %", value=False, key="cuas_cs_pat_on")
+                        cs_pat40 = (
+                            st.slider("Measured 40-yd 30\" Pattern (%)", 25.0, 95.0, 75.0, 1.0, key="cuas_cs_pat40")
+                            if cs_pat_on
+                            else None
+                        )
+                        custom_shell_spec = build_custom_shell_spec(
+                            name=cs_name,
+                            pellet_material=cs_mat,
+                            pellet_diameter_mm=cs_diam,
+                            pellets_per_shot=int(cs_n),
+                            v0_mps=cs_v0,
+                            effective_cd=cs_cd,
+                            default_choke=str(cuas_choke),
+                            custom_pattern_40yd_30in_pct=(cs_pat40 / 100.0 if cs_pat40 is not None else None),
+                        )
+                        st.caption(
+                            f"Computed pellet mass: **{custom_shell_spec['pellet_mass_g']:.3f} g** | "
+                            f"Total shot charge: **{custom_shell_spec['payload_mass_g']:.1f} g**"
+                        )
+
             with st.expander("Advanced Array Geometry, Fire Control & 3D Attitude Options", expanded=expert):
                 adv_c1, adv_c2, adv_c3 = st.columns(3)
                 with adv_c1:
@@ -1244,8 +1563,12 @@ def tab_cuas_and_small_arms() -> None:
                         except ValueError:
                             pass
 
+            custom_barrel_json = json.dumps(parsed_custom, sort_keys=True) if parsed_custom else ""
+            custom_drone_json = json.dumps(custom_drone_spec, sort_keys=True) if custom_drone_spec else ""
+            custom_shell_json = json.dumps(custom_shell_spec, sort_keys=True) if custom_shell_spec else ""
+
             with st.spinner("Simulating Multi-Shotgun Counter-UAS Volley Monte Carlo..."):
-                cuas_sim = simulate_anti_drone_multishotgun_mc(
+                cuas_sim = _cached_antidrone_array_mc(
                     layout_type=str(cuas_layout),
                     n_barrels=int(cuas_n_barrels),
                     mount_radius_m=float(cuas_mount_r),
@@ -1257,12 +1580,12 @@ def tab_cuas_and_small_arms() -> None:
                     splay_angle_mrad=float(cuas_splay),
                     firing_mode=str(cuas_fire_mode),
                     ripple_delay_ms=float(cuas_ripple_dt),
-                    custom_barrel_specs=parsed_custom,
-                    ammunition_preset=str(cuas_ammo),
+                    custom_barrel_specs_json=custom_barrel_json,
+                    ammunition_preset="CUSTOM_SHELL" if custom_shell_spec else str(cuas_ammo),
                     default_choke=str(cuas_choke),
                     default_barrel_length_in=float(cuas_b_len),
                     target_distance_m=float(cuas_dist),
-                    drone_model=str(cuas_drone_model),
+                    drone_model="CUSTOM_DRONE" if custom_drone_spec else str(cuas_drone_model),
                     drone_velocity_mps=float(cuas_speed),
                     drone_heading_deg=float(cuas_heading),
                     aspect_mode=str(cuas_aspect_mode),
@@ -1273,9 +1596,11 @@ def tab_cuas_and_small_arms() -> None:
                     crosswind_mps=float(cuas_wind),
                     n_volleys=int(cuas_n_volleys),
                     seed=42,
-                    inner_ammunition_preset=cuas_inner_ammo,
-                    outer_ammunition_preset=str(cuas_ammo) if cuas_mixed_loadout else None,
+                    inner_ammunition_preset=cuas_inner_ammo if not custom_shell_spec else None,
+                    outer_ammunition_preset=str(cuas_ammo) if (cuas_mixed_loadout and not custom_shell_spec) else None,
                     inner_choke=cuas_inner_choke,
+                    custom_drone_spec_json=custom_drone_json,
+                    custom_shell_spec_json=custom_shell_json,
                 )
 
             cu_sm = cuas_sim["summary"]
@@ -1291,8 +1616,8 @@ def tab_cuas_and_small_arms() -> None:
                 "splay_angle_mrad": float(cuas_splay),
                 "firing_mode": str(cuas_fire_mode),
                 "ripple_delay_ms": float(cuas_ripple_dt),
-                "ammunition_preset": str(cuas_ammo),
-                "drone_model": str(cuas_drone_model),
+                "ammunition_preset": "CUSTOM_SHELL" if custom_shell_spec else str(cuas_ammo),
+                "drone_model": "CUSTOM_DRONE" if custom_drone_spec else str(cuas_drone_model),
                 "aspect_mode": str(cuas_aspect_mode),
                 "drone_pitch_deg": float(cuas_pitch_tilt),
                 "drone_yaw_deg": float(cuas_yaw_angle),
@@ -1300,9 +1625,30 @@ def tab_cuas_and_small_arms() -> None:
                 "target_distance_m": float(cuas_dist),
                 "drone_speed_mps": float(cuas_speed),
                 "drone_heading_deg": float(cuas_heading),
+                "custom_drone_enabled": bool(custom_drone_spec is not None),
+                "custom_shell_enabled": bool(custom_shell_spec is not None),
             }
+            if custom_drone_spec is not None:
+                current_cuas_cfg["custom_drone_spec"] = custom_drone_spec
+            if custom_shell_spec is not None:
+                current_cuas_cfg["custom_shell_spec"] = custom_shell_spec
             st.session_state["_report_cuas_config"] = current_cuas_cfg
             st.session_state["_report_array_summary"] = cu_sm
+            st.session_state["_active_cuas_profile"] = {
+                "layout_type": str(cuas_layout if cuas_layout in ["circular", "concentric", "honeycomb", "grid", "fan_horizontal"] else "circular"),
+                "n_barrels": int(cuas_n_barrels),
+                "pointing_mode": str(cuas_pointing),
+                "splay_angle_mrad": float(cuas_splay),
+                "firing_mode": str(cuas_fire_mode),
+                "ripple_delay_ms": float(cuas_ripple_dt),
+                "choke": str(cuas_choke),
+                "ammunition_preset": str(cuas_ammo),
+                "drone_model": str(cuas_drone_model),
+                "aspect_mode": str(cuas_aspect_mode),
+                "target_distance_m": float(cuas_dist),
+                "drone_speed_mps": float(cuas_speed),
+                "label": f"{int(cuas_n_barrels)}-bbl {cuas_layout} | {sel_drone.get('name', cuas_drone_model)} @ {cuas_dist:.0f} m",
+            }
 
             pk_val = cu_sm["kill_probability_pct"]
             pres_area_cm2 = cu_sm.get("presented_area_cm2", 0.0)
@@ -1348,7 +1694,7 @@ def tab_cuas_and_small_arms() -> None:
                     delta=f"{cs_ratio:.1f}% of planform ({cu_sm.get('aspect_mode', 'head_on')})",
                     delta_color="normal",
                 )
-                ck4, ck5, ck6 = st.columns([1.2, 1.2, 1.0])
+                ck4, ck5, ck6 = st.columns(3)
                 ck4.metric(
                     "Volley Payload Energy",
                     f"{cu_sm['mean_energy_on_drone_j']:.0f} J on drone",
@@ -1359,27 +1705,58 @@ def tab_cuas_and_small_arms() -> None:
                     f"{cu_sm['cloud_diameter_90_m']:.2f} m diam",
                     delta=f"CEP50: {cu_sm['cloud_cep_50_m']:.2f} m @ {cu_sm['target_distance_m']:.0f}m",
                 )
-                with ck6:
-                    st.download_button(
-                        "💾 Save Scenario Preset (.json)",
-                        serialize_cuas_scenario_config(current_cuas_cfg).encode("utf-8"),
-                        "cuas_turret_scenario.json",
-                        "application/json",
-                        key="dl_cuas_scenario_json",
-                        width="stretch",
-                    )
+                ck6.metric(
+                    "Striking Velocity",
+                    f"{cu_sm['mean_v_impact_nominal_mps']:.0f} m/s",
+                    delta=f"V0: {cu_sm['v0_nominal_mps']:.0f} m/s | {cu_sm['ammunition_name'][:22]}",
+                )
 
             nx1, nx2, nx3 = st.columns(3)
             nx1.button("Next: Elevated Fallout SDZ", on_click=_navigate_to, args=("cuas", None, "sdz"), width="stretch", key="arr_next_sdz")
             nx2.button("Compare A/B Architectures", on_click=_navigate_to, args=("cuas", None, "comparator"), width="stretch", key="arr_next_comp")
             nx3.button("Optimize Recoil & Pareto", on_click=_navigate_to, args=("cuas", None, "recoil"), width="stretch", key="arr_next_recoil")
 
+            stage1_env_res: dict[str, Any] | None = None
+            env_kwargs = dict(
+                layout_type=str(cuas_layout),
+                n_barrels=int(cuas_n_barrels),
+                mount_radius_m=float(cuas_mount_r),
+                spacing_y_m=float(cuas_sp_y),
+                spacing_z_m=float(cuas_sp_z),
+                n_cols=int(cuas_cols),
+                n_rows=int(cuas_rows),
+                pointing_mode=str(cuas_pointing),
+                splay_angle_mrad=float(cuas_splay),
+                firing_mode=str(cuas_fire_mode),
+                ripple_delay_ms=float(cuas_ripple_dt),
+                custom_barrel_specs_json=custom_barrel_json,
+                ammunition_preset="CUSTOM_SHELL" if custom_shell_spec else str(cuas_ammo),
+                default_choke=str(cuas_choke),
+                default_barrel_length_in=float(cuas_b_len),
+                drone_model="CUSTOM_DRONE" if custom_drone_spec else str(cuas_drone_model),
+                drone_velocity_mps=float(cuas_speed),
+                drone_heading_deg=float(cuas_heading),
+                aspect_mode=str(cuas_aspect_mode),
+                drone_pitch_deg=float(cuas_pitch_tilt),
+                drone_yaw_deg=float(cuas_yaw_angle),
+                drone_roll_deg=float(cuas_roll_angle),
+                aim_error_mrad=float(cuas_aim_jitter),
+                crosswind_mps=float(cuas_wind),
+                inner_ammunition_preset=cuas_inner_ammo if not custom_shell_spec else None,
+                outer_ammunition_preset=str(cuas_ammo) if (cuas_mixed_loadout and not custom_shell_spec) else None,
+                inner_choke=cuas_inner_choke,
+                custom_drone_spec_json=custom_drone_json,
+                custom_shell_spec_json=custom_shell_json,
+                sg_presets=sg_presets,
+            )
+
             if not expert:
                 st.session_state.setdefault("_report_aspect_table", [])
-                s_tab1, s_tab2, s_tab3 = st.tabs(
+                s_tab1, s_tab2, s_tab_env, s_tab3 = st.tabs(
                     [
                         "2D Drone Intercept & Silhouette",
                         "3D Intercept Volume",
+                        "Effective Range (R80) & Heatmap",
                         "Layout, Aspect & Barrel Breakdown",
                     ]
                 )
@@ -1387,6 +1764,8 @@ def tab_cuas_and_small_arms() -> None:
                     st.plotly_chart(create_2d_antidrone_intercept_figure(cuas_sim), width="stretch")
                 with s_tab2:
                     st.plotly_chart(create_3d_antidrone_defense_figure(cuas_sim), width="stretch")
+                with s_tab_env:
+                    stage1_env_res = _render_effective_range_tab(**env_kwargs)
                 with s_tab3:
                     b_stats = cuas_sim.get("barrel_stats", [])
                     if b_stats:
@@ -1400,24 +1779,19 @@ def tab_cuas_and_small_arms() -> None:
                             "text/csv",
                             key="dl_cuas_b_csv",
                         )
-                    st.download_button(
-                        "Save Scenario Preset (.json)",
-                        serialize_cuas_scenario_config(current_cuas_cfg).encode("utf-8"),
-                        "cuas_turret_scenario.json",
-                        "application/json",
-                        key="dl_cuas_scenario_json",
-                    )
                     with st.expander("Multi-Layout Range Benchmark (15 m to 65 m)", expanded=False):
                         with st.spinner("Running Multi-Layout Array Benchmark..."):
                             bench_res = _cached_compare_anti_drone_layouts(
                                 distance_stations_m=(15.0, 25.0, 35.0, 50.0, 65.0),
-                                ammunition_preset=str(cuas_ammo),
-                                drone_model=str(cuas_drone_model),
+                                ammunition_preset="CUSTOM_SHELL" if custom_shell_spec else str(cuas_ammo),
+                                drone_model="CUSTOM_DRONE" if custom_drone_spec else str(cuas_drone_model),
                                 drone_velocity_mps=float(cuas_speed),
                                 pointing_mode=str(cuas_pointing),
                                 firing_mode=str(cuas_fire_mode),
                                 n_volleys=12,
                                 seed=42,
+                                custom_drone_spec_json=custom_drone_json,
+                                custom_shell_spec_json=custom_shell_json,
                             )
                             st.plotly_chart(create_antidrone_layout_comparison_figure(bench_res), width="stretch")
                             st.dataframe(pd.DataFrame(bench_res["comparison_table"]), width="stretch")
@@ -1435,25 +1809,29 @@ def tab_cuas_and_small_arms() -> None:
                                 splay_angle_mrad=float(cuas_splay),
                                 firing_mode=str(cuas_fire_mode),
                                 ripple_delay_ms=float(cuas_ripple_dt),
-                                custom_barrel_specs_json=json.dumps(parsed_custom) if parsed_custom else "",
-                                ammunition_preset=str(cuas_ammo),
+                                custom_barrel_specs_json=custom_barrel_json,
+                                ammunition_preset="CUSTOM_SHELL" if custom_shell_spec else str(cuas_ammo),
                                 default_choke=str(cuas_choke),
                                 default_barrel_length_in=float(cuas_b_len),
                                 target_distance_m=float(cuas_dist),
-                                drone_model=str(cuas_drone_model),
+                                drone_model="CUSTOM_DRONE" if custom_drone_spec else str(cuas_drone_model),
                                 drone_velocity_mps=float(cuas_speed),
                                 aim_error_mrad=float(cuas_aim_jitter),
                                 crosswind_mps=float(cuas_wind),
                                 n_volleys=15,
                                 seed=42,
+                                custom_drone_spec_json=custom_drone_json,
+                                custom_shell_spec_json=custom_shell_json,
                             )
                             st.session_state["_report_aspect_table"] = aspect_bench["comparison_table"]
+                            st.session_state["_report_aspect_bench"] = aspect_bench
                             st.plotly_chart(create_drone_aspect_radar_figure(aspect_bench), width="stretch")
                             st.dataframe(pd.DataFrame(aspect_bench["comparison_table"]), width="stretch")
             else:
-                cuas_tab1, cuas_tab2, cuas_tab3, cuas_tab4, cuas_tab5, cuas_tab6 = st.tabs([
+                cuas_tab1, cuas_tab2, cuas_tab_env, cuas_tab3, cuas_tab4, cuas_tab5, cuas_tab6 = st.tabs([
                     "🎯 2D Drone Intercept & Damage Silhouette",
                     "🛸 3D Muzzle Array & Intercept Volume",
+                    "📏 Effective Range (R80) & Heatmap",
                     "📊 Per-Barrel Efficiency & Hit Contributions",
                     "📈 Array Architecture Benchmark (Geometry Comparison)",
                     "🌐 Aspect Angle Benchmark (Cross-Section Sweep)",
@@ -1467,6 +1845,9 @@ def tab_cuas_and_small_arms() -> None:
                 with cuas_tab2:
                     fig_3d_cuas = create_3d_antidrone_defense_figure(cuas_sim)
                     st.plotly_chart(fig_3d_cuas, width="stretch")
+
+                with cuas_tab_env:
+                    stage1_env_res = _render_effective_range_tab(**env_kwargs)
 
                 with cuas_tab3:
                     st.markdown("##### Per-Barrel Telemetry & Contribution Breakdown")
@@ -1489,13 +1870,15 @@ def tab_cuas_and_small_arms() -> None:
                     with st.spinner("Running Multi-Layout Array Benchmark..."):
                         bench_res = _cached_compare_anti_drone_layouts(
                             distance_stations_m=(15.0, 25.0, 35.0, 50.0, 65.0),
-                            ammunition_preset=str(cuas_ammo),
-                            drone_model=str(cuas_drone_model),
+                            ammunition_preset="CUSTOM_SHELL" if custom_shell_spec else str(cuas_ammo),
+                            drone_model="CUSTOM_DRONE" if custom_drone_spec else str(cuas_drone_model),
                             drone_velocity_mps=float(cuas_speed),
                             pointing_mode=str(cuas_pointing),
                             firing_mode=str(cuas_fire_mode),
                             n_volleys=12,
                             seed=42,
+                            custom_drone_spec_json=custom_drone_json,
+                            custom_shell_spec_json=custom_shell_json,
                         )
                         fig_bench = create_antidrone_layout_comparison_figure(bench_res)
                         st.plotly_chart(fig_bench, width="stretch")
@@ -1523,19 +1906,22 @@ def tab_cuas_and_small_arms() -> None:
                             splay_angle_mrad=float(cuas_splay),
                             firing_mode=str(cuas_fire_mode),
                             ripple_delay_ms=float(cuas_ripple_dt),
-                            custom_barrel_specs_json=json.dumps(parsed_custom) if parsed_custom else "",
-                            ammunition_preset=str(cuas_ammo),
+                            custom_barrel_specs_json=custom_barrel_json,
+                            ammunition_preset="CUSTOM_SHELL" if custom_shell_spec else str(cuas_ammo),
                             default_choke=str(cuas_choke),
                             default_barrel_length_in=float(cuas_b_len),
                             target_distance_m=float(cuas_dist),
-                            drone_model=str(cuas_drone_model),
+                            drone_model="CUSTOM_DRONE" if custom_drone_spec else str(cuas_drone_model),
                             drone_velocity_mps=float(cuas_speed),
                             aim_error_mrad=float(cuas_aim_jitter),
                             crosswind_mps=float(cuas_wind),
                             n_volleys=15,
                             seed=42,
+                            custom_drone_spec_json=custom_drone_json,
+                            custom_shell_spec_json=custom_shell_json,
                         )
                         st.session_state["_report_aspect_table"] = aspect_bench["comparison_table"]
+                        st.session_state["_report_aspect_bench"] = aspect_bench
                         fig_aspect = create_drone_aspect_radar_figure(aspect_bench)
                         st.plotly_chart(fig_aspect, width="stretch")
 
@@ -1578,6 +1964,46 @@ def tab_cuas_and_small_arms() -> None:
                     rk_c.metric("Replay Horizon", f"{r_sm['t_end_ms']:.0f} ms", delta="NEUTRALIZED" if r_sm["drone_neutralized"] else "TRACKING")
                     st.plotly_chart(create_3d_animated_intercept_figure(cuas_replay), width="stretch")
 
+            st.divider()
+            st.markdown("##### 1-Click Stage 1 Engineering Spec Sheet & Preset Export")
+            ex1, ex2, ex3 = st.columns(3)
+            spec_html = generate_cuas_array_spec_sheet_html(
+                array_config=current_cuas_cfg,
+                sim_result=cuas_sim,
+                range_envelope=stage1_env_res,
+                aspect_benchmark=st.session_state.get("_report_aspect_bench"),
+            )
+            spec_pdf = generate_cuas_array_spec_sheet_pdf(
+                array_config=current_cuas_cfg,
+                sim_result=cuas_sim,
+                range_envelope=stage1_env_res,
+                aspect_benchmark=st.session_state.get("_report_aspect_bench"),
+            )
+            ex1.download_button(
+                "Download Array Spec Sheet (.html)",
+                spec_html.encode("utf-8"),
+                "cuas_array_spec_sheet.html",
+                "text/html",
+                key="dl_stage1_spec_html",
+                width="stretch",
+            )
+            ex2.download_button(
+                "Download Array Spec Sheet (.pdf)",
+                spec_pdf,
+                "cuas_array_spec_sheet.pdf",
+                "application/pdf",
+                key="dl_stage1_spec_pdf",
+                width="stretch",
+            )
+            ex3.download_button(
+                "Save Scenario Preset (.json)",
+                serialize_cuas_scenario_config(current_cuas_cfg).encode("utf-8"),
+                "cuas_turret_scenario.json",
+                "application/json",
+                key="dl_cuas_scenario_json",
+                width="stretch",
+            )
+
     # --- SUB-LAB 18: COMPLETE C-UAS TURRET ENGINEERING SUITE (13 MODULES) ---
     else:
         st.subheader("C-UAS Turret Engineering & Mission Effectiveness")
@@ -1601,6 +2027,21 @@ def tab_cuas_and_small_arms() -> None:
 
         # --- TAB 18.1: CLOSED-LOOP FCS & EVASIVE DRONES ---
         if active_cuas_mod == _CUAS18_MODULES[0]:
+            _render_cuas_profile_sync_bar(
+                "fcs",
+                {
+                    "drone_model": ("cuas18_fcs_drone", list(drone_specs_18.keys())),
+                    "aspect_mode": ("cuas18_fcs_aspect", list(aspect_presets_18.keys())),
+                    "drone_speed_mps": ("cuas18_fcs_spd", (5.0, 40.0)),
+                    "target_distance_m": ("cuas18_fcs_dist", (15.0, 70.0)),
+                    "layout_type": ("cuas18_fcs_lay", ["circular", "concentric", "honeycomb", "grid", "fan_horizontal"]),
+                    "n_barrels": ("cuas18_fcs_nb", (2, 12)),
+                    "pointing_mode": ("cuas18_fcs_pt", ["divergent_curtain", "convergent", "staggered_tiling", "parallel"]),
+                    "splay_angle_mrad": ("cuas18_fcs_sp", (0.0, 12.0)),
+                    "firing_mode": ("cuas18_fcs_fire", ["balanced_pair_ripple", "simultaneous_volley", "sequential_ripple"]),
+                    "ammunition_preset": ("cuas18_fcs_ammo", list(sg_presets_18.keys())),
+                },
+            )
             fc1, fc2, fc3 = st.columns(3)
             with fc1:
                 st.markdown("**Tracking Sensor & Predictor Filter**")
@@ -1623,8 +2064,6 @@ def tab_cuas_and_small_arms() -> None:
                     index=0,
                     key="cuas18_fcs_pred",
                 )
-                fcs_servo_rate = st.slider("Gimbal Max Slew Rate (°/s)", 30.0, 180.0, 90.0, 10.0, key="cuas18_fcs_rate")
-                fcs_servo_accel = st.slider("Gimbal Max Accel (°/s²)", 60.0, 500.0, 250.0, 20.0, key="cuas18_fcs_accel")
 
             with fc2:
                 st.markdown("**Evasive Drone Kinematics**")
@@ -1634,14 +2073,6 @@ def tab_cuas_and_small_arms() -> None:
                     format_func=lambda k: drone_specs_18[k]["name"],
                     index=0,
                     key="cuas18_fcs_drone",
-                )
-                fcs_aspect = st.selectbox(
-                    "Target Presentation Aspect",
-                    list(aspect_presets_18.keys()),
-                    format_func=lambda k: aspect_presets_18[k]["name"],
-                    index=0,
-                    key="cuas18_fcs_aspect",
-                    help="Ingress angle presented toward FCS radar/optical line-of-sight.",
                 )
                 fcs_maneuver = st.selectbox(
                     "Evasive Maneuver Profile",
@@ -1655,21 +2086,37 @@ def tab_cuas_and_small_arms() -> None:
                     index=0,
                     key="cuas18_fcs_man",
                 )
-                fcs_g = st.slider("Peak Evasive Maneuver Load (g)", 0.0, 5.0, 2.5, 0.25, key="cuas18_fcs_g")
                 fcs_spd = st.slider("Drone Speed (m/s)", 5.0, 40.0, 22.0, 1.0, key="cuas18_fcs_spd")
-                fcs_dist = st.slider("Intercept Distance (m)", 15.0, 70.0, 35.0, 1.0, key="cuas18_fcs_dist")
 
             with fc3:
-                st.markdown("**Turret Array & Pattern Curtain**")
-                fcs_layout = st.selectbox("Array Geometry", ["circular", "concentric", "honeycomb", "grid", "fan_horizontal"], index=0, key="cuas18_fcs_lay")
-                fcs_n_b = st.slider("Barrel Count", 2, 12, 6, 1, key="cuas18_fcs_nb")
-                fcs_point = st.selectbox("Pointing Mode", ["divergent_curtain", "convergent", "staggered_tiling", "parallel"], index=0, key="cuas18_fcs_pt")
-                fcs_splay = st.slider("Curtain Splay Angle (mrad)", 0.0, 12.0, 4.5, 0.5, key="cuas18_fcs_sp")
-                fcs_fire = st.selectbox("Firing Sequence", ["balanced_pair_ripple", "simultaneous_volley", "sequential_ripple"], index=0, key="cuas18_fcs_fire")
+                st.markdown("**Engagement Geometry & Loadout**")
+                fcs_dist = st.slider("Intercept Distance (m)", 15.0, 70.0, 35.0, 1.0, key="cuas18_fcs_dist")
                 fcs_ammo = st.selectbox("Shell Preset", list(sg_presets_18.keys()), format_func=lambda k: sg_presets_18[k]["name"], index=list(sg_presets_18.keys()).index("12G_NO4_BUCK_C_UAS") if "12G_NO4_BUCK_C_UAS" in sg_presets_18 else 0, key="cuas18_fcs_ammo")
 
+            with st.expander("Servo Limits, Array Pointing & Target Aspect", expanded=expert):
+                fa1, fa2, fa3 = st.columns(3)
+                with fa1:
+                    fcs_servo_rate = st.slider("Gimbal Max Slew Rate (°/s)", 30.0, 180.0, 90.0, 10.0, key="cuas18_fcs_rate")
+                    fcs_servo_accel = st.slider("Gimbal Max Accel (°/s²)", 60.0, 500.0, 250.0, 20.0, key="cuas18_fcs_accel")
+                with fa2:
+                    fcs_aspect = st.selectbox(
+                        "Target Presentation Aspect",
+                        list(aspect_presets_18.keys()),
+                        format_func=lambda k: aspect_presets_18[k]["name"],
+                        index=0,
+                        key="cuas18_fcs_aspect",
+                        help="Ingress angle presented toward FCS radar/optical line-of-sight.",
+                    )
+                    fcs_g = st.slider("Peak Evasive Maneuver Load (g)", 0.0, 5.0, 2.5, 0.25, key="cuas18_fcs_g")
+                with fa3:
+                    fcs_layout = st.selectbox("Array Geometry", ["circular", "concentric", "honeycomb", "grid", "fan_horizontal"], index=0, key="cuas18_fcs_lay")
+                    fcs_n_b = st.slider("Barrel Count", 2, 12, 6, 1, key="cuas18_fcs_nb")
+                    fcs_point = st.selectbox("Pointing Mode", ["divergent_curtain", "convergent", "staggered_tiling", "parallel"], index=0, key="cuas18_fcs_pt")
+                    fcs_splay = st.slider("Curtain Splay Angle (mrad)", 0.0, 12.0, 4.5, 0.5, key="cuas18_fcs_sp")
+                    fcs_fire = st.selectbox("Firing Sequence", ["balanced_pair_ripple", "simultaneous_volley", "sequential_ripple"], index=0, key="cuas18_fcs_fire")
+
             with st.spinner("Running Closed-Loop FCS & Evasive Intercept Monte Carlo..."):
-                fcs_res = simulate_closed_loop_fcs_engagement_mc(
+                fcs_res = _cached_closed_loop_fcs(
                     sensor_preset=str(fcs_sensor),
                     predictor_mode=str(fcs_predictor),
                     maneuver_profile=str(fcs_maneuver),
@@ -1702,9 +2149,19 @@ def tab_cuas_and_small_arms() -> None:
 
         # --- TAB 18.2: MULTI-DRONE SWARM SATURATION ---
         elif active_cuas_mod == _CUAS18_MODULES[1]:
+            _render_cuas_profile_sync_bar(
+                "swarm",
+                {
+                    "drone_speed_mps": ("cuas18_sw_spd", (8.0, 40.0)),
+                    "drone_model": ("cuas18_sw_dr", list(drone_specs_18.keys())),
+                    "aspect_mode": ("cuas18_sw_aspect", list(aspect_presets_18.keys())),
+                    "n_barrels": ("cuas18_sw_nb", (2, 16)),
+                    "ammunition_preset": ("cuas18_sw_ammo", list(sg_presets_18.keys())),
+                },
+            )
             sc1, sc2, sc3 = st.columns(3)
             with sc1:
-                st.markdown("**Coordinated Swarm Attack Wave**")
+                st.markdown("**Coordinated Swarm Wave**")
                 sw_size = st.slider("Simultaneous Swarm Size (Drones)", 2, 18, 8, 1, key="cuas18_sw_n")
                 sw_tactic = st.selectbox(
                     "Swarm Approach Tactic",
@@ -1717,43 +2174,47 @@ def tab_cuas_and_small_arms() -> None:
                     index=0,
                     key="cuas18_sw_tac",
                 )
-                sw_speed = st.slider("Mean Drone Speed (m/s)", 8.0, 40.0, 22.0, 1.0, key="cuas18_sw_spd")
-                sw_drone = st.selectbox("Drone Target Model", list(drone_specs_18.keys()), format_func=lambda k: drone_specs_18[k]["name"], index=0, key="cuas18_sw_dr")
-                sw_aspect = st.selectbox(
-                    "Swarm Ingress Aspect",
-                    list(aspect_presets_18.keys()),
-                    format_func=lambda k: aspect_presets_18[k]["name"],
-                    index=0,
-                    key="cuas18_sw_aspect",
-                    help="Default: Head-on Frontal for ingressing swarm waves.",
-                )
-
             with sc2:
-                st.markdown("**Magazine Allocation & Engagement Rules**")
+                st.markdown("**Threat Profile & Speed**")
+                sw_drone = st.selectbox("Drone Target Model", list(drone_specs_18.keys()), format_func=lambda k: drone_specs_18[k]["name"], index=0, key="cuas18_sw_dr")
+                sw_speed = st.slider("Mean Drone Speed (m/s)", 8.0, 40.0, 22.0, 1.0, key="cuas18_sw_spd")
+            with sc3:
+                st.markdown("**Ready Magazine & Ammo**")
                 sw_barrels = st.slider("Ready Shotgun Barrels in Turret", 2, 16, 8, 1, key="cuas18_sw_nb")
                 sw_bpb = st.slider("Sub-Salvo Barrels Fired per Burst", 1, 8, 2, 1, key="cuas18_sw_bpb", help="Firing fewer barrels per drone increases capacity before reload")
-                sw_reload = st.slider("Full Turret Reload Downtime (s)", 1.0, 12.0, 4.5, 0.5, key="cuas18_sw_rel")
-                sw_policy = st.selectbox(
-                    "Target Priority Policy",
-                    ["minimum_time_to_breach", "nearest_slant_range", "minimum_slew_angle"],
-                    format_func=lambda k: {
-                        "minimum_time_to_breach": "⏱️ Shortest Time-to-Breach (Optimal Threat Sort)",
-                        "nearest_slant_range": "📏 Nearest Slant Range First",
-                        "minimum_slew_angle": "🔄 Minimum Turret Slew Angle Next",
-                    }.get(k, k),
-                    index=0,
-                    key="cuas18_sw_pol",
-                )
-
-            with sc3:
-                st.markdown("**Turret Agility & Defense Perimeter**")
-                sw_rmax = st.slider("Max Engagement Envelope (m)", 30.0, 90.0, 55.0, 5.0, key="cuas18_sw_rmax")
-                sw_rmin = st.slider("Protected Asset Keep-Out Perimeter (m)", 5.0, 25.0, 12.0, 1.0, key="cuas18_sw_rmin")
-                sw_slew = st.slider("Turret Slew Rate (°/s)", 40.0, 200.0, 110.0, 10.0, key="cuas18_sw_slew")
                 sw_ammo = st.selectbox("Swarm Defense Load", list(sg_presets_18.keys()), format_func=lambda k: sg_presets_18[k]["name"], index=list(sg_presets_18.keys()).index("12G_NO4_BUCK_C_UAS") if "12G_NO4_BUCK_C_UAS" in sg_presets_18 else 0, key="cuas18_sw_ammo")
 
+            with st.expander("Engagement Doctrine, Reload & Perimeter Settings", expanded=expert):
+                sa1, sa2, sa3 = st.columns(3)
+                with sa1:
+                    sw_aspect = st.selectbox(
+                        "Swarm Ingress Aspect",
+                        list(aspect_presets_18.keys()),
+                        format_func=lambda k: aspect_presets_18[k]["name"],
+                        index=0,
+                        key="cuas18_sw_aspect",
+                        help="Default: Head-on Frontal for ingressing swarm waves.",
+                    )
+                    sw_reload = st.slider("Full Turret Reload Downtime (s)", 1.0, 12.0, 4.5, 0.5, key="cuas18_sw_rel")
+                with sa2:
+                    sw_policy = st.selectbox(
+                        "Target Priority Policy",
+                        ["minimum_time_to_breach", "nearest_slant_range", "minimum_slew_angle"],
+                        format_func=lambda k: {
+                            "minimum_time_to_breach": "⏱️ Shortest Time-to-Breach (Optimal Threat Sort)",
+                            "nearest_slant_range": "📏 Nearest Slant Range First",
+                            "minimum_slew_angle": "🔄 Minimum Turret Slew Angle Next",
+                        }.get(k, k),
+                        index=0,
+                        key="cuas18_sw_pol",
+                    )
+                    sw_slew = st.slider("Turret Slew Rate (°/s)", 40.0, 200.0, 110.0, 10.0, key="cuas18_sw_slew")
+                with sa3:
+                    sw_rmax = st.slider("Max Engagement Envelope (m)", 30.0, 90.0, 55.0, 5.0, key="cuas18_sw_rmax")
+                    sw_rmin = st.slider("Protected Asset Keep-Out Perimeter (m)", 5.0, 25.0, 12.0, 1.0, key="cuas18_sw_rmin")
+
             with st.spinner("Simulating Multi-Wave Drone Swarm Timeline..."):
-                sw_res = simulate_drone_swarm_saturation_mc(
+                sw_res = _cached_swarm_saturation(
                     swarm_size=int(sw_size),
                     attack_tactic=str(sw_tactic),
                     priority_policy=str(sw_policy),
@@ -1852,28 +2313,46 @@ def tab_cuas_and_small_arms() -> None:
 
         # --- TAB 18.4: TURRET RECOIL, GIMBAL LOADS & PARETO ARRAY OPTIMIZER ---
         elif active_cuas_mod == _CUAS18_MODULES[3]:
+            _render_cuas_profile_sync_bar(
+                "recoil",
+                {
+                    "layout_type": ("cuas18_rec_lay", ["circular", "concentric", "honeycomb", "grid", "fan_horizontal"]),
+                    "n_barrels": ("cuas18_rec_nb", (3, 12)),
+                    "ammunition_preset": ("cuas18_rec_ammo", list(sg_presets_18.keys())),
+                    "firing_mode": ("cuas18_rec_fm", ["balanced_pair_ripple", "simultaneous_volley", "sequential_ripple"]),
+                    "ripple_delay_ms": ("cuas18_rec_dt", (0.0, 30.0)),
+                    "drone_model": ("cuas18_rec_dr", list(drone_specs_18.keys())),
+                    "target_distance_m": ("cuas18_rec_dist", (15.0, 65.0)),
+                    "drone_speed_mps": ("cuas18_rec_dspd", (0.0, 35.0)),
+                },
+            )
             rc1, rc2, rc3 = st.columns(3)
             with rc1:
-                st.markdown("**Salvo Firing & Mixed Loadout**")
+                st.markdown("**Array Architecture & Loadout**")
                 rec_layout = st.selectbox("Array Architecture", ["circular", "concentric", "honeycomb", "grid", "fan_horizontal"], index=0, key="cuas18_rec_lay")
                 rec_nb = st.slider("Barrel Count (N)", 3, 12, 6, 1, key="cuas18_rec_nb")
                 rec_ammo = st.selectbox("Primary Ammunition", list(sg_presets_18.keys()), format_func=lambda k: sg_presets_18[k]["name"], index=list(sg_presets_18.keys()).index("12G_NO4_BUCK_C_UAS") if "12G_NO4_BUCK_C_UAS" in sg_presets_18 else 0, key="cuas18_rec_ammo")
-                rec_mixed = st.checkbox("Mix Core TSS + Perimeter Buckshot", value=True, key="cuas18_rec_mix")
-                rec_fmode = st.selectbox("Salvo Firing Sequence", ["balanced_pair_ripple", "simultaneous_volley", "sequential_ripple"], index=0, key="cuas18_rec_fm")
-                rec_dt = st.slider("Ripple Micro-Delay (ms)", 0.0, 30.0, 10.0, 1.0, key="cuas18_rec_dt")
 
             with rc2:
-                st.markdown("**Turret Structural Buffer & Gimbal Inertia**")
-                rec_mass = st.slider("Recoiling Assembly Mass (kg)", 15.0, 150.0, 45.0, 5.0, key="cuas18_rec_mass")
-                rec_stiff = st.slider("Buffer Spring Stiffness (kN/m)", 40.0, 400.0, 120.0, 10.0, key="cuas18_rec_k") * 1000.0
+                st.markdown("**Mount Reaction Limit**")
                 rec_limit = st.slider("Mount Structural Reaction Limit (kN)", 5.0, 50.0, 18.0, 1.0, key="cuas18_rec_lim")
-                rec_ztr = st.slider("Vertical Trunnion Offset (m)", 0.05, 0.45, 0.18, 0.01, key="cuas18_rec_ztr")
+                rec_drone = st.selectbox("Design Threat Drone", list(drone_specs_18.keys()), format_func=lambda k: drone_specs_18[k]["name"], index=1, key="cuas18_rec_dr")
 
             with rc3:
-                st.markdown("**Constrained Trade-Study Optimizer Target**")
-                rec_drone = st.selectbox("Design Threat Drone", list(drone_specs_18.keys()), format_func=lambda k: drone_specs_18[k]["name"], index=1, key="cuas18_rec_dr")
+                st.markdown("**Design Intercept Envelope**")
                 rec_dist = st.slider("Design Intercept Range (m)", 15.0, 65.0, 35.0, 1.0, key="cuas18_rec_dist")
                 rec_dspd = st.slider("Design Drone Speed (m/s)", 0.0, 35.0, 18.0, 1.0, key="cuas18_rec_dspd")
+
+            with st.expander("Buffer Spring, Gimbal Inertia & Firing Sequence", expanded=expert):
+                ra1, ra2 = st.columns(2)
+                with ra1:
+                    rec_mixed = st.checkbox("Mix Core TSS + Perimeter Buckshot", value=True, key="cuas18_rec_mix")
+                    rec_fmode = st.selectbox("Salvo Firing Sequence", ["balanced_pair_ripple", "simultaneous_volley", "sequential_ripple"], index=0, key="cuas18_rec_fm")
+                    rec_dt = st.slider("Ripple Micro-Delay (ms)", 0.0, 30.0, 10.0, 1.0, key="cuas18_rec_dt")
+                with ra2:
+                    rec_mass = st.slider("Recoiling Assembly Mass (kg)", 15.0, 150.0, 45.0, 5.0, key="cuas18_rec_mass")
+                    rec_stiff = st.slider("Buffer Spring Stiffness (kN/m)", 40.0, 400.0, 120.0, 10.0, key="cuas18_rec_k") * 1000.0
+                    rec_ztr = st.slider("Vertical Trunnion Offset (m)", 0.05, 0.45, 0.18, 0.01, key="cuas18_rec_ztr")
 
             with st.spinner("Solving 2-Axis Gimbal ODEs & Constrained Pareto Array Optimizer..."):
                 rec_barrels = generate_multishotgun_array_layout(
@@ -1948,29 +2427,41 @@ def tab_cuas_and_small_arms() -> None:
 
         # --- TAB 18.5: ELEVATED-FIRE PELLET FALLOUT & SURFACE DANGER ZONE (SDZ) ---
         elif active_cuas_mod == _CUAS18_MODULES[4]:
-            sd1, sd2, sd3 = st.columns(3)
+            _render_cuas_profile_sync_bar(
+                "sdz",
+                {
+                    "ammunition_preset": ("cuas18_sd_ammo", list(sg_presets_18.keys())),
+                    "choke": ("cuas18_sd_choke", list(choke_defs_18.keys())),
+                    "layout_type": ("cuas18_sd_lay", ["circular", "grid", "fan_horizontal", "honeycomb"]),
+                    "pointing_mode": ("cuas18_sd_pt", ["convergent", "divergent_curtain", "parallel"]),
+                },
+            )
+            sd1, sd2 = st.columns(2)
             with sd1:
                 st.markdown("**Elevated Turret Engagement Geometry**")
                 sd_el = st.slider("Turret Firing Elevation Angle (°)", 10.0, 85.0, 35.0, 5.0, key="cuas18_sd_el")
                 sd_az = st.slider("Turret Firing Azimuth (°)", -90.0, 90.0, 0.0, 5.0, key="cuas18_sd_az")
-                sd_h = st.slider("Turret Height Above Ground (m)", 0.5, 10.0, 2.0, 0.5, key="cuas18_sd_h")
-                sd_n_p = st.slider("Monte Carlo Missed Pellets Tracked", 150, 450, 260, 20, key="cuas18_sd_np")
 
             with sd2:
                 st.markdown("**Shotgun Ammunition & Choke**")
                 sd_ammo = st.selectbox("Fired Shotgun Load", list(sg_presets_18.keys()), format_func=lambda k: sg_presets_18[k]["name"], index=0, key="cuas18_sd_ammo")
                 sd_choke = st.selectbox("Choke Tube", list(choke_defs_18.keys()), index=3, key="cuas18_sd_choke")
-                sd_lay = st.selectbox("Turret Array Geometry", ["circular", "grid", "fan_horizontal", "honeycomb"], index=0, key="cuas18_sd_lay")
-                sd_point = st.selectbox("Array Pointing Mode", ["convergent", "divergent_curtain", "parallel"], index=0, key="cuas18_sd_pt")
 
-            with sd3:
-                st.markdown("**3D Wind & Boundary-Layer Shear**")
-                sd_w_down = st.slider("Downrange Tailwind (+) / Headwind (-) (m/s)", -15.0, 15.0, 4.0, 1.0, key="cuas18_sd_wd")
-                sd_w_cross = st.slider("Crosswind Drift (m/s)", -15.0, 15.0, 2.0, 1.0, key="cuas18_sd_wc")
-                sd_shear = st.checkbox("Apply 1/7 Power-Law Boundary Layer Wind Shear", value=True, key="cuas18_sd_sh")
+            with st.expander("Array Mount & Atmospheric Wind Shear Options", expanded=expert):
+                sa1, sa2, sa3 = st.columns(3)
+                with sa1:
+                    sd_h = st.slider("Turret Height Above Ground (m)", 0.5, 10.0, 2.0, 0.5, key="cuas18_sd_h")
+                    sd_n_p = st.slider("Monte Carlo Missed Pellets Tracked", 150, 450, 260, 20, key="cuas18_sd_np")
+                with sa2:
+                    sd_lay = st.selectbox("Turret Array Geometry", ["circular", "grid", "fan_horizontal", "honeycomb"], index=0, key="cuas18_sd_lay")
+                    sd_point = st.selectbox("Array Pointing Mode", ["convergent", "divergent_curtain", "parallel"], index=0, key="cuas18_sd_pt")
+                with sa3:
+                    sd_w_down = st.slider("Downrange Tailwind (+) / Headwind (-) (m/s)", -15.0, 15.0, 4.0, 1.0, key="cuas18_sd_wd")
+                    sd_w_cross = st.slider("Crosswind Drift (m/s)", -15.0, 15.0, 2.0, 1.0, key="cuas18_sd_wc")
+                    sd_shear = st.checkbox("Apply 1/7 Power-Law Boundary Layer Wind Shear", value=True, key="cuas18_sd_sh")
 
             with st.spinner("Integrating Vectorized 3-DoF Ballistic Pellet Fallout..."):
-                sd_res = simulate_cuas_pellet_fallout_hazard(
+                sd_res = _cached_pellet_fallout_sdz(
                     layout_type=str(sd_lay),
                     pointing_mode=str(sd_point),
                     ammunition_preset=str(sd_ammo),
@@ -2015,12 +2506,20 @@ def tab_cuas_and_small_arms() -> None:
         # --- TAB 18.6: MULTI-SENSOR DETECTION, CLASSIFICATION & KILL-CHAIN TIMELINE ---
         elif active_cuas_mod == _CUAS18_MODULES[5]:
             st.markdown("#### 🛰️ Multi-Sensor Detection, Human-in-the-Loop & Engagement Kill-Chain Timeline")
+            _render_cuas_profile_sync_bar(
+                "kill_chain",
+                {
+                    "drone_model": ("cuas18_kc_dr", list(drone_specs_18.keys())),
+                    "aspect_mode": ("cuas18_kc_asp", list(aspect_presets_18.keys())),
+                    "drone_speed_mps": ("cuas18_kc_spd", (8.0, 50.0)),
+                    "ammunition_preset": ("cuas18_kc_ammo", list(sg_presets_18.keys())),
+                },
+            )
             sensor_cat = get_kill_chain_sensor_catalog()
             kc1, kc2, kc3 = st.columns(3)
             with kc1:
                 st.markdown("**Threat & Environment**")
                 kc_drone = st.selectbox("Threat Drone Class", list(drone_specs_18.keys()), format_func=lambda k: drone_specs_18[k]["name"], index=0, key="cuas18_kc_dr")
-                kc_aspect = st.selectbox("Approach Aspect", list(aspect_presets_18.keys()), format_func=lambda k: aspect_presets_18[k]["name"], index=0, key="cuas18_kc_asp")
                 kc_speed = st.slider("Threat Approach Speed (m/s)", 8.0, 50.0, 28.0, 1.0, key="cuas18_kc_spd")
                 kc_weather = st.selectbox(
                     "Atmospheric Visibility / Weather",
@@ -2034,10 +2533,9 @@ def tab_cuas_and_small_arms() -> None:
                     index=0,
                     key="cuas18_kc_wx",
                 )
-                kc_wind = st.slider("Ambient Wind Noise (m/s)", 0.0, 20.0, 5.0, 1.0, key="cuas18_kc_wind")
 
             with kc2:
-                st.markdown("**Sensor Suite & Dark-Drone Countermeasures**")
+                st.markdown("**Sensor Suite & Release Gate**")
                 kc_sensors = st.multiselect(
                     "Active Acquisition Modalities",
                     list(sensor_cat.keys()),
@@ -2045,23 +2543,35 @@ def tab_cuas_and_small_arms() -> None:
                     format_func=lambda k: sensor_cat[k]["short_label"],
                     key="cuas18_kc_sens",
                 )
-                kc_fiber = st.checkbox(
-                    "Fiber-Optic / Autonomous Inertial Threat (RF Silent)",
-                    value=False,
-                    key="cuas18_kc_fiber",
-                    help="Drops passive RF / C2 ESM range to 0 m.",
-                )
-                kc_ai_t = st.slider("AI Track Classification Delay (s)", 0.1, 2.5, 0.6, 0.1, key="cuas18_kc_ai")
                 kc_hitl = st.checkbox("Require Human-in-the-Loop Release Auth", value=True, key="cuas18_kc_hitl")
-                kc_auth_t = st.slider("Operator Authorization Latency (s)", 0.2, 4.0, 1.2, 0.1, key="cuas18_kc_auth", disabled=not kc_hitl)
 
             with kc3:
-                st.markdown("**Turret Agility & Fire Envelope**")
-                kc_slew_ang = st.slider("Initial Off-Boresight Slew Angle (°)", 0.0, 180.0, 60.0, 10.0, key="cuas18_kc_sang")
-                kc_slew_rate = st.slider("Turret Slew Rate (°/s)", 30.0, 220.0, 120.0, 10.0, key="cuas18_kc_sr")
-                kc_rmax = st.slider("Max Weapon Intercept Range (m)", 30.0, 100.0, 55.0, 5.0, key="cuas18_kc_rmax")
-                kc_rmin = st.slider("Asset Keep-Out Breach Radius (m)", 5.0, 30.0, 15.0, 1.0, key="cuas18_kc_rmin")
+                st.markdown("**Turret Effector Loadout**")
                 kc_ammo = st.selectbox("Shotgun Payload", list(sg_presets_18.keys()), format_func=lambda k: sg_presets_18[k]["name"], index=list(sg_presets_18.keys()).index("12G_NO4_BUCK_C_UAS") if "12G_NO4_BUCK_C_UAS" in sg_presets_18 else 0, key="cuas18_kc_ammo")
+
+            with st.expander("C2 Delays, Turret Slew & Stealth Threat Options", expanded=expert):
+                ka1, ka2, ka3 = st.columns(3)
+                with ka1:
+                    kc_aspect = st.selectbox("Approach Aspect", list(aspect_presets_18.keys()), format_func=lambda k: aspect_presets_18[k]["name"], index=0, key="cuas18_kc_asp")
+                    kc_wind = st.slider("Ambient Wind Noise (m/s)", 0.0, 20.0, 5.0, 1.0, key="cuas18_kc_wind")
+                with ka2:
+                    kc_fiber = st.checkbox(
+                        "Fiber-Optic / Autonomous Inertial Threat (RF Silent)",
+                        value=False,
+                        key="cuas18_kc_fiber",
+                        help="Drops passive RF / C2 ESM range to 0 m.",
+                    )
+                    kc_ai_t = st.slider("AI Track Classification Delay (s)", 0.1, 2.5, 0.6, 0.1, key="cuas18_kc_ai")
+                    kc_auth_t = st.slider("Operator Authorization Latency (s)", 0.2, 4.0, 1.2, 0.1, key="cuas18_kc_auth", disabled=not kc_hitl)
+                with ka3:
+                    kc_slew_ang = st.slider("Initial Off-Boresight Slew Angle (°)", 0.0, 180.0, 60.0, 10.0, key="cuas18_kc_sang")
+                    kc_slew_rate = st.slider("Turret Slew Rate (°/s)", 30.0, 220.0, 120.0, 10.0, key="cuas18_kc_sr")
+                    kc_rmax = st.slider("Max Weapon Intercept Range (m)", 30.0, 100.0, 55.0, 5.0, key="cuas18_kc_rmax")
+                    kc_rmin = st.slider("Asset Keep-Out Breach Radius (m)", 5.0, 30.0, 15.0, 1.0, key="cuas18_kc_rmin")
+
+            _prof_kc = st.session_state.get("_active_cuas_profile", {})
+            kc_n_b = int(_prof_kc.get("n_barrels", 6)) if isinstance(_prof_kc, dict) else 6
+            kc_choke_eff = str(_prof_kc.get("choke", "Modified")) if isinstance(_prof_kc, dict) else "Modified"
 
             with st.spinner("Simulating Multi-Sensor Acquisition & Kill-Chain Timeline..."):
                 kc_res = _cached_kill_chain(
@@ -2080,9 +2590,9 @@ def tab_cuas_and_small_arms() -> None:
                     turret_slew_rate_deg_s=float(kc_slew_rate),
                     max_weapon_range_m=float(kc_rmax),
                     keepout_breach_radius_m=float(kc_rmin),
-                    n_barrels=6,
+                    n_barrels=kc_n_b,
                     ammunition_preset=str(kc_ammo),
-                    choke="Modified",
+                    choke=kc_choke_eff,
                     salvo_cycle_time_s=0.85,
                     n_trials=100,
                     seed=42,

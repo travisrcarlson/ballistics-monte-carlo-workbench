@@ -265,6 +265,7 @@ from ammo_mc.ui.common import (
     _render_sidebar_header,
     _set_active_workbench,
     _set_cuas_module,
+    is_expert_mode,
 )
 
 
@@ -289,6 +290,7 @@ def tab_mcdrag() -> None:
         "across Mach 0.5 to 5.0 alongside a real-time 3D axisymmetric projectile mesh."
     )
 
+    expert = is_expert_mode()
     with st.sidebar:
         _render_sidebar_header("🚀 MCDRAG & 3D CAD", "McCoy (1974) axisymmetric drag & 3D shell designer")
         st.selectbox(
@@ -303,12 +305,13 @@ def tab_mcdrag() -> None:
         cal_mm = st.number_input("Reference Diameter / Calibre (mm)", min_value=5.56, max_value=400.0, value=155.0, step=5.0, key="mcdrag_cal")
         tot_len_cal = st.slider("Total Length (calibres)", 2.0, 10.0, 5.2, 0.1, key="mcdrag_tot")
         nose_len_cal = st.slider("Nose / Ogive Length (calibres)", 1.0, 6.0, 2.8, 0.1, key="mcdrag_nose")
-        bt_len_cal = st.slider("Boattail Length (calibres)", 0.0, 2.0, 0.6, 0.05, key="mcdrag_bt")
-        base_dia_cal = st.slider("Base Diameter (calibres)", 0.5, 1.0, 0.84, 0.02, key="mcdrag_base")
-        meplat_dia_cal = st.slider("Meplat Flat Diameter (calibres)", 0.0, 0.5, 0.12, 0.02, key="mcdrag_meplat")
-        band_dia_cal = st.slider("Rotating Band Diameter (calibres)", 1.0, 1.1, 1.02, 0.01, key="mcdrag_band")
-        rt_r = st.slider("Ogive Tangency Ratio R_t/R (0=cone, 1=tangent)", 0.0, 1.0, 0.65, 0.05, key="mcdrag_rt")
-        bl_code = st.selectbox("Boundary Layer Condition", ["L/T", "T/T", "L/L"], index=0, key="mcdrag_bl")
+        with st.expander("Advanced Ogive, Boattail & Boundary Layer", expanded=expert):
+            bt_len_cal = st.slider("Boattail Length (calibres)", 0.0, 2.0, 0.6, 0.05, key="mcdrag_bt")
+            base_dia_cal = st.slider("Base Diameter (calibres)", 0.5, 1.0, 0.84, 0.02, key="mcdrag_base")
+            meplat_dia_cal = st.slider("Meplat Flat Diameter (calibres)", 0.0, 0.5, 0.12, 0.02, key="mcdrag_meplat")
+            band_dia_cal = st.slider("Rotating Band Diameter (calibres)", 1.0, 1.1, 1.02, 0.01, key="mcdrag_band")
+            rt_r = st.slider("Ogive Tangency Ratio R_t/R (0=cone, 1=tangent)", 0.0, 1.0, 0.65, 0.05, key="mcdrag_rt")
+            bl_code = st.selectbox("Boundary Layer Condition", ["L/T", "T/T", "L/L"], index=0, key="mcdrag_bl")
 
     inp = McDragInputs(
         d_ref_mm=float(cal_mm),

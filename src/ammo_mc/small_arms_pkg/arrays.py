@@ -404,6 +404,8 @@ def simulate_anti_drone_multishotgun_mc(
     drone_pitch_deg: float = -15.0,
     drone_yaw_deg: float = 0.0,
     drone_roll_deg: float = 0.0,
+    custom_drone_spec: dict[str, Any] | None = None,
+    custom_shell_spec: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute Monte Carlo simulation of an anti-drone defense volley using a multi-shotgun array.
 
@@ -423,6 +425,19 @@ def simulate_anti_drone_multishotgun_mc(
     presets = get_shotgun_presets()
 
     def _resolve_barrel_ammo(preset_key: str) -> dict[str, Any]:
+        use_custom_shell = (
+            custom_shell_spec is not None
+            and (preset_key == ammunition_preset or preset_key == "CUSTOM_SHELL" or preset_key not in presets)
+        )
+        if use_custom_shell and custom_shell_spec is not None:
+            return {
+                "pellets": int(pellets_per_shot or custom_shell_spec.get("pellets_per_shot", 27)),
+                "d_mm": float(pellet_diameter_mm or custom_shell_spec.get("pellet_diameter_mm", 6.10)),
+                "m_g": float(pellet_mass_g or custom_shell_spec.get("pellet_mass_g", 1.34)),
+                "v0": float(v0_mps or custom_shell_spec.get("v0_mps", 415.0)),
+                "effective_cd": float(custom_shell_spec.get("effective_cd", 0.47)),
+                "custom_pattern_40yd_30in_pct": custom_shell_spec.get("custom_pattern_40yd_30in_pct"),
+            }
         if preset_key in presets:
             a = presets[preset_key]
             return {
@@ -431,6 +446,7 @@ def simulate_anti_drone_multishotgun_mc(
                 "m_g": float(pellet_mass_g or a["pellet_mass_g"]),
                 "v0": float(v0_mps or a["v0_mps"]),
                 "effective_cd": float(a.get("effective_cd", 0.47)),
+                "custom_pattern_40yd_30in_pct": None,
             }
         return {
             "pellets": int(pellets_per_shot or 27),
@@ -438,6 +454,7 @@ def simulate_anti_drone_multishotgun_mc(
             "m_g": float(pellet_mass_g or 1.34),
             "v0": float(v0_mps or 415.0),
             "effective_cd": 0.47,
+            "custom_pattern_40yd_30in_pct": None,
         }
 
     nom_ammo = _resolve_barrel_ammo(ammunition_preset)
@@ -448,7 +465,10 @@ def simulate_anti_drone_multishotgun_mc(
 
     # 2. Resolve Drone Specs & 3D Projected Cross-Section Geometry
     drone_specs_cat = get_drone_target_specs()
-    drone_spec = drone_specs_cat.get(drone_model, drone_specs_cat["commercial_quad_medium"])
+    if custom_drone_spec is not None:
+        drone_spec = dict(custom_drone_spec)
+    else:
+        drone_spec = drone_specs_cat.get(drone_model, drone_specs_cat["commercial_quad_medium"])
     crit_hits_req = int(drone_spec.get("critical_hits_for_kill", 3))
 
     aspect_geom = compute_drone_projected_geometry(
@@ -600,7 +620,9 @@ def simulate_anti_drone_multishotgun_mc(
 
             # Choke radial spread parameter
             c_info = choke_defs.get(b_choke, choke_defs["Modified"])
-            p_bench = float(c_info["benchmark_40yd_30in_pct"])
+            custom_pat = b_spec.get("custom_pattern_40yd_30in_pct")
+            raw_p_bench = float(custom_pat) if custom_pat is not None else float(c_info["benchmark_40yd_30in_pct"])
+            p_bench = max(0.15, min(0.99, raw_p_bench))
             r_bench = 0.381
             sigma_ref = r_bench / math.sqrt(-2.0 * math.log(1.0 - p_bench))
             theta_choke = sigma_ref / 36.58
@@ -753,6 +775,12 @@ def simulate_anti_drone_multishotgun_mc(
             "target_distance_m": target_distance_m,
             "drone_model": drone_model,
             "drone_name": drone_spec.get("name", drone_model),
+            "ammunition_preset": ammunition_preset,
+            "ammunition_name": (
+                str(custom_shell_spec.get("name", ammunition_preset))
+                if custom_shell_spec is not None
+                else str(presets.get(ammunition_preset, {}).get("name", ammunition_preset))
+            ),
             "drone_velocity_mps": drone_velocity_mps,
             "v0_nominal_mps": eff_v0,
             "mean_v_impact_nominal_mps": round(v_impact_nominal, 1),
@@ -801,6 +829,8 @@ def benchmark_drone_aspect_angles_mc(
     default_choke: str = "Full",
     n_volleys: int = 25,
     seed: int = 42,
+    custom_drone_spec: dict[str, Any] | None = None,
+    custom_shell_spec: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Benchmark anti-drone interception effectiveness across all 6 standard presentation aspect angles."""
@@ -838,6 +868,8 @@ def benchmark_drone_aspect_angles_mc(
             aspect_mode=asp,
             n_volleys=n_volleys,
             seed=seed,
+            custom_drone_spec=custom_drone_spec,
+            custom_shell_spec=custom_shell_spec,
             **kwargs,
         )
         sm = sim["summary"]
@@ -873,6 +905,9 @@ def compare_anti_drone_layouts(
     firing_mode: str = "simultaneous_volley",
     n_volleys: int = 15,
     seed: int = 42,
+    custom_drone_spec: dict[str, Any] | None = None,
+    custom_shell_spec: dict[str, Any] | None = None,
+    **kwargs: Any,
 ) -> dict[str, Any]:
     """Compare multiple multi-shotgun array placement configurations across engagement ranges."""
     if layout_configs is None:
@@ -918,6 +953,9 @@ def compare_anti_drone_layouts(
                 drone_velocity_mps=drone_velocity_mps,
                 n_volleys=n_volleys,
                 seed=seed + l_idx * 17,
+                custom_drone_spec=custom_drone_spec,
+                custom_shell_spec=custom_shell_spec,
+                **kwargs,
             )
             sm = sim["summary"]
             layout_curves[c_name]["pk_pct"].append(sm["kill_probability_pct"])
@@ -945,6 +983,298 @@ def compare_anti_drone_layouts(
         "ammunition_preset": ammunition_preset,
         "comparison_table": comparison_table,
         "layout_curves": layout_curves,
+    }
+
+
+def _interpolate_pk_range_threshold(
+    distances_m: list[float],
+    pk_pcts: list[float],
+    threshold_pct: float,
+) -> tuple[float | None, str]:
+    """Interpolate effective maximum range where P_kill stays >= threshold_pct."""
+    if not distances_m or not pk_pcts or len(distances_m) != len(pk_pcts):
+        return None, "N/A"
+    pairs = sorted(zip(distances_m, pk_pcts), key=lambda p: p[0])
+    d_vals = [float(p[0]) for p in pairs]
+    p_vals = [float(p[1]) for p in pairs]
+
+    if all(p >= threshold_pct for p in p_vals):
+        return d_vals[-1], f">{d_vals[-1]:.0f} m"
+    if all(p < threshold_pct for p in p_vals):
+        return None, f"<{d_vals[0]:.0f} m"
+
+    # Scan from the farthest station above threshold to the next falling crossing
+    for idx in range(len(d_vals) - 2, -1, -1):
+        p_hi, p_lo = p_vals[idx], p_vals[idx + 1]
+        d_lo, d_hi = d_vals[idx], d_vals[idx + 1]
+        if p_hi >= threshold_pct and p_lo < threshold_pct:
+            denom = max(1e-6, p_hi - p_lo)
+            frac = (p_hi - threshold_pct) / denom
+            r_interp = d_lo + frac * (d_hi - d_lo)
+            return round(r_interp, 1), f"{r_interp:.1f} m"
+
+    # Fallback if it stayed >= threshold up to an interior peak then didn't drop
+    above_idx = [i for i, p in enumerate(p_vals) if p >= threshold_pct]
+    if above_idx:
+        r_best = d_vals[above_idx[-1]]
+        return round(r_best, 1), f"{r_best:.1f} m"
+    return None, f"<{d_vals[0]:.0f} m"
+
+
+def evaluate_antidrone_effective_range_envelope(
+    distance_stations_m: list[float] | None = None,
+    layout_type: str = "circular",
+    n_barrels: int = 6,
+    mount_radius_m: float = 0.20,
+    spacing_y_m: float = 0.12,
+    spacing_z_m: float = 0.12,
+    n_cols: int = 3,
+    n_rows: int = 2,
+    pointing_mode: str = "convergent",
+    splay_angle_mrad: float = 0.0,
+    firing_mode: str = "simultaneous_volley",
+    ripple_delay_ms: float = 10.0,
+    custom_barrel_specs: list[dict[str, Any]] | None = None,
+    ammunition_preset: str = "12G_NO4_BUCK_C_UAS",
+    default_choke: str = "Full",
+    default_barrel_length_in: float = 24.0,
+    drone_model: str = "commercial_quad_medium",
+    drone_velocity_mps: float = 15.0,
+    drone_heading_deg: float = 90.0,
+    aim_error_mrad: float = 1.5,
+    crosswind_mps: float = 0.0,
+    n_volleys: int = 15,
+    seed: int = 42,
+    inner_ammunition_preset: str | None = None,
+    outer_ammunition_preset: str | None = None,
+    inner_choke: str | None = None,
+    aspect_mode: str = "head_on_frontal",
+    drone_pitch_deg: float = -15.0,
+    drone_yaw_deg: float = 0.0,
+    drone_roll_deg: float = 0.0,
+    custom_drone_spec: dict[str, Any] | None = None,
+    custom_shell_spec: dict[str, Any] | None = None,
+    compare_ammo_presets: list[str] | None = None,
+) -> dict[str, Any]:
+    """Sweep slant range for an anti-drone array to derive P_kill(R), R80, and R50 thresholds."""
+    stations = sorted(float(d) for d in (distance_stations_m or [15.0, 25.0, 35.0, 45.0, 55.0, 65.0, 75.0, 85.0]))
+
+    def _run_curve(ammo_key: str, custom_sh: dict[str, Any] | None, curve_seed: int) -> dict[str, Any]:
+        records: list[dict[str, Any]] = []
+        for idx, d_m in enumerate(stations):
+            sim = simulate_anti_drone_multishotgun_mc(
+                layout_type=layout_type,
+                n_barrels=n_barrels,
+                mount_radius_m=mount_radius_m,
+                spacing_y_m=spacing_y_m,
+                spacing_z_m=spacing_z_m,
+                n_cols=n_cols,
+                n_rows=n_rows,
+                pointing_mode=pointing_mode,
+                splay_angle_mrad=splay_angle_mrad,
+                firing_mode=firing_mode,
+                ripple_delay_ms=ripple_delay_ms,
+                custom_barrel_specs=custom_barrel_specs,
+                ammunition_preset=ammo_key,
+                default_choke=default_choke,
+                default_barrel_length_in=default_barrel_length_in,
+                target_distance_m=d_m,
+                drone_model=drone_model,
+                drone_velocity_mps=drone_velocity_mps,
+                drone_heading_deg=drone_heading_deg,
+                aim_error_mrad=aim_error_mrad,
+                crosswind_mps=crosswind_mps,
+                n_volleys=n_volleys,
+                seed=curve_seed + idx * 7,
+                inner_ammunition_preset=inner_ammunition_preset if custom_sh is None else None,
+                outer_ammunition_preset=outer_ammunition_preset if custom_sh is None else None,
+                inner_choke=inner_choke,
+                aspect_mode=aspect_mode,
+                drone_pitch_deg=drone_pitch_deg,
+                drone_yaw_deg=drone_yaw_deg,
+                drone_roll_deg=drone_roll_deg,
+                custom_drone_spec=custom_drone_spec,
+                custom_shell_spec=custom_sh,
+            )
+            sm = sim["summary"]
+            records.append({
+                "distance_m": d_m,
+                "kill_probability_pct": sm["kill_probability_pct"],
+                "mean_hits_on_drone": sm["mean_hits_on_drone"],
+                "mean_lethal_hits": sm["mean_lethal_hits"],
+                "mean_energy_on_drone_j": sm["mean_energy_on_drone_j"],
+                "mean_v_impact_mps": sm["mean_v_impact_nominal_mps"],
+                "cloud_diameter_90_m": sm["cloud_diameter_90_m"],
+                "ammunition_name": sm.get("ammunition_name", ammo_key),
+                "drone_name": sm.get("drone_name", drone_model),
+            })
+
+        pks = [r["kill_probability_pct"] for r in records]
+        r80_m, r80_label = _interpolate_pk_range_threshold(stations, pks, 80.0)
+        r50_m, r50_label = _interpolate_pk_range_threshold(stations, pks, 50.0)
+        return {
+            "ammunition_preset": ammo_key,
+            "ammunition_name": records[0]["ammunition_name"] if records else ammo_key,
+            "records": records,
+            "r80_m": r80_m,
+            "r80_label": r80_label,
+            "r50_m": r50_m,
+            "r50_label": r50_label,
+            "max_pk_pct": max(pks) if pks else 0.0,
+            "min_pk_pct": min(pks) if pks else 0.0,
+        }
+
+    primary = _run_curve(ammunition_preset, custom_shell_spec, seed)
+    comp_curves: list[dict[str, Any]] = []
+    if compare_ammo_presets:
+        for c_idx, alt_key in enumerate(compare_ammo_presets):
+            if alt_key == ammunition_preset and custom_shell_spec is None:
+                continue
+            comp_curves.append(_run_curve(alt_key, None, seed + 101 * (c_idx + 1)))
+
+    return {
+        "distance_stations_m": stations,
+        "records": primary["records"],
+        "comparison_curves": comp_curves,
+        "summary": {
+            "r80_m": primary["r80_m"],
+            "r80_label": primary["r80_label"],
+            "r50_m": primary["r50_m"],
+            "r50_label": primary["r50_label"],
+            "max_pk_pct": primary["max_pk_pct"],
+            "min_pk_pct": primary["min_pk_pct"],
+            "ammunition_preset": ammunition_preset,
+            "ammunition_name": primary["ammunition_name"],
+            "drone_name": primary["records"][0]["drone_name"] if primary["records"] else drone_model,
+            "n_barrels": n_barrels,
+            "layout_type": layout_type,
+        },
+    }
+
+
+def evaluate_antidrone_range_speed_heatmap(
+    distance_stations_m: list[float] | None = None,
+    speed_stations_mps: list[float] | None = None,
+    layout_type: str = "circular",
+    n_barrels: int = 6,
+    mount_radius_m: float = 0.20,
+    spacing_y_m: float = 0.12,
+    spacing_z_m: float = 0.12,
+    n_cols: int = 3,
+    n_rows: int = 2,
+    pointing_mode: str = "convergent",
+    splay_angle_mrad: float = 0.0,
+    firing_mode: str = "simultaneous_volley",
+    ripple_delay_ms: float = 10.0,
+    custom_barrel_specs: list[dict[str, Any]] | None = None,
+    ammunition_preset: str = "12G_NO4_BUCK_C_UAS",
+    default_choke: str = "Full",
+    default_barrel_length_in: float = 24.0,
+    drone_model: str = "commercial_quad_medium",
+    drone_heading_deg: float = 90.0,
+    aim_error_mrad: float = 1.5,
+    crosswind_mps: float = 0.0,
+    n_volleys: int = 12,
+    seed: int = 42,
+    inner_ammunition_preset: str | None = None,
+    outer_ammunition_preset: str | None = None,
+    inner_choke: str | None = None,
+    aspect_mode: str = "head_on_frontal",
+    drone_pitch_deg: float = -15.0,
+    drone_yaw_deg: float = 0.0,
+    drone_roll_deg: float = 0.0,
+    custom_drone_spec: dict[str, Any] | None = None,
+    custom_shell_spec: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compute a 2D Speed x Slant-Range P_kill engagement envelope heatmap."""
+    d_stations = sorted(float(d) for d in (distance_stations_m or [15.0, 25.0, 35.0, 45.0, 60.0, 75.0]))
+    v_stations = sorted(float(v) for v in (speed_stations_mps or [5.0, 12.0, 20.0, 30.0, 40.0]))
+
+    pk_matrix: list[list[float]] = []
+    mean_hits_matrix: list[list[float]] = []
+    mean_lethal_matrix: list[list[float]] = []
+    grid_records: list[dict[str, Any]] = []
+    r80_by_speed_m: list[dict[str, Any]] = []
+
+    for v_idx, v_mps in enumerate(v_stations):
+        pk_row: list[float] = []
+        hits_row: list[float] = []
+        lethal_row: list[float] = []
+        for d_idx, d_m in enumerate(d_stations):
+            sim = simulate_anti_drone_multishotgun_mc(
+                layout_type=layout_type,
+                n_barrels=n_barrels,
+                mount_radius_m=mount_radius_m,
+                spacing_y_m=spacing_y_m,
+                spacing_z_m=spacing_z_m,
+                n_cols=n_cols,
+                n_rows=n_rows,
+                pointing_mode=pointing_mode,
+                splay_angle_mrad=splay_angle_mrad,
+                firing_mode=firing_mode,
+                ripple_delay_ms=ripple_delay_ms,
+                custom_barrel_specs=custom_barrel_specs,
+                ammunition_preset=ammunition_preset,
+                default_choke=default_choke,
+                default_barrel_length_in=default_barrel_length_in,
+                target_distance_m=d_m,
+                drone_model=drone_model,
+                drone_velocity_mps=v_mps,
+                drone_heading_deg=drone_heading_deg,
+                aim_error_mrad=aim_error_mrad,
+                crosswind_mps=crosswind_mps,
+                n_volleys=n_volleys,
+                seed=seed + v_idx * 31 + d_idx * 7,
+                inner_ammunition_preset=inner_ammunition_preset if custom_shell_spec is None else None,
+                outer_ammunition_preset=outer_ammunition_preset if custom_shell_spec is None else None,
+                inner_choke=inner_choke,
+                aspect_mode=aspect_mode,
+                drone_pitch_deg=drone_pitch_deg,
+                drone_yaw_deg=drone_yaw_deg,
+                drone_roll_deg=drone_roll_deg,
+                custom_drone_spec=custom_drone_spec,
+                custom_shell_spec=custom_shell_spec,
+            )
+            sm = sim["summary"]
+            pk = float(sm["kill_probability_pct"])
+            pk_row.append(pk)
+            hits_row.append(float(sm["mean_hits_on_drone"]))
+            lethal_row.append(float(sm["mean_lethal_hits"]))
+            grid_records.append({
+                "drone_velocity_mps": v_mps,
+                "distance_m": d_m,
+                "kill_probability_pct": pk,
+                "mean_hits_on_drone": sm["mean_hits_on_drone"],
+                "mean_lethal_hits": sm["mean_lethal_hits"],
+                "mean_energy_on_drone_j": sm["mean_energy_on_drone_j"],
+            })
+
+        pk_matrix.append(pk_row)
+        mean_hits_matrix.append(hits_row)
+        mean_lethal_matrix.append(lethal_row)
+        r80_v, r80_lbl = _interpolate_pk_range_threshold(d_stations, pk_row, 80.0)
+        r80_by_speed_m.append({
+            "drone_velocity_mps": v_mps,
+            "r80_m": r80_v,
+            "r80_label": r80_lbl,
+        })
+
+    n_viable_80 = sum(1 for r in grid_records if r["kill_probability_pct"] >= 80.0)
+    return {
+        "distance_stations_m": d_stations,
+        "speed_stations_mps": v_stations,
+        "pk_matrix": pk_matrix,
+        "mean_hits_matrix": mean_hits_matrix,
+        "mean_lethal_matrix": mean_lethal_matrix,
+        "grid_records": grid_records,
+        "r80_by_speed_m": r80_by_speed_m,
+        "summary": {
+            "total_cells": len(grid_records),
+            "viable_80pct_cells": n_viable_80,
+            "viable_80pct_share": round((n_viable_80 / max(1, len(grid_records))) * 100.0, 1),
+            "max_pk_pct": max((r["kill_probability_pct"] for r in grid_records), default=0.0),
+            "mean_pk_pct": round(float(np.mean([r["kill_probability_pct"] for r in grid_records])), 1) if grid_records else 0.0,
+        },
     }
 
 

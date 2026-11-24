@@ -517,3 +517,209 @@ def generate_executive_briefing_pptx(
     out_buf = io.BytesIO()
     prs.save(out_buf)
     return out_buf.getvalue()
+
+
+def generate_cuas_array_spec_sheet_pdf(
+    array_config: dict[str, Any],
+    sim_result: dict[str, Any],
+    range_envelope: dict[str, Any] | None = None,
+    aspect_benchmark: dict[str, Any] | None = None,
+    scenario_name: str = "C-UAS Multi-Shotgun Array Engineering Spec Sheet",
+) -> bytes:
+    """Render a compact 1-2 page landscape PDF engineering specification sheet for Stage 1 Array Sizing."""
+    sm = sim_result.get("summary", {})
+    barrels = sim_result.get("barrels", [])
+    barrel_stats = sim_result.get("barrel_stats", [])
+    scatter = sim_result.get("sample_scatter", {})
+    env_sm = range_envelope.get("summary", {}) if range_envelope else {}
+
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        # Page 1: Executive Scorecard + Barrel Geometry + Impact Cloud
+        fig1 = Figure(figsize=(11.69, 8.27), facecolor="#0F172A")
+        fig1.text(0.04, 0.945, scenario_name[:78], fontsize=15.5, fontweight="bold", color="#F8FAFC")
+        fig1.text(
+            0.04,
+            0.910,
+            f"Array: {sm.get('layout_type', 'circular')} ({sm.get('n_barrels', 6)} bbls) | "
+            f"Target: {sm.get('drone_name', 'UAS')} @ {sm.get('target_distance_m', 35.0):.1f} m | "
+            f"Load: {sm.get('ammunition_name', sm.get('ammunition_preset', ''))}",
+            fontsize=10.5,
+            color="#38BDF8",
+        )
+        fig1.text(0.04, 0.875, f"GOVERNANCE: {USE_LIMITATION_NOTICE}", fontsize=8.0, color="#FDE68A")
+
+        # Scorecard Strip
+        kpis = [
+            ("Intercept P_kill", f"{sm.get('kill_probability_pct', 0.0):.1f}%"),
+            ("Effective R80 / R50", f"{env_sm.get('r80_label', 'N/A')} / {env_sm.get('r50_label', 'N/A')}"),
+            ("Hits / Lethal", f"{sm.get('mean_hits_on_drone', 0.0):.1f} / {sm.get('mean_lethal_hits', 0.0):.1f}"),
+            ("Cloud Diam. (D90)", f"{sm.get('cloud_diameter_90_m', 0.0):.2f} m"),
+            ("Impact Velocity", f"{sm.get('mean_v_impact_nominal_mps', 0.0):.0f} m/s"),
+            ("Presented Area", f"{sm.get('presented_area_cm2', 0.0):.0f} cm²"),
+        ]
+        for idx, (k_lbl, k_val) in enumerate(kpis):
+            ax_k = fig1.add_axes([0.04 + idx * 0.155, 0.755, 0.145, 0.095], facecolor="#1E293B")
+            ax_k.set_xticks([])
+            ax_k.set_yticks([])
+            for sp in ax_k.spines.values():
+                sp.set_color("#334155")
+            ax_k.text(0.5, 0.68, k_val, ha="center", va="center", fontsize=11.5, fontweight="bold", color="#10B981")
+            ax_k.text(0.5, 0.25, k_lbl, ha="center", va="center", fontsize=8.0, color="#CBD5E1")
+
+        # Left Chart: Muzzle Bore Array Geometry
+        ax_b = fig1.add_axes([0.06, 0.34, 0.40, 0.36], facecolor="#1E293B")
+        if barrels:
+            by = [float(b.get("y_m", 0.0)) * 100.0 for b in barrels]
+            bz = [float(b.get("z_m", 0.0)) * 100.0 for b in barrels]
+            ax_b.scatter(by, bz, s=130, color="#38BDF8", edgecolors="#F8FAFC", linewidth=1.2, zorder=5)
+            for b in barrels:
+                ax_b.text(float(b.get("y_m", 0.0)) * 100.0 + 1.2, float(b.get("z_m", 0.0)) * 100.0 + 1.2, str(b.get("barrel_id", "")), fontsize=8, color="#E2E8F0")
+        ax_b.axhline(0.0, color="#475569", linewidth=0.8, linestyle="--")
+        ax_b.axvline(0.0, color="#475569", linewidth=0.8, linestyle="--")
+        ax_b.set_aspect("equal", "box")
+        ax_b.set_xlabel("Horizontal Offset Y (cm)", color="#CBD5E1", fontsize=9)
+        ax_b.set_ylabel("Vertical Offset Z (cm)", color="#CBD5E1", fontsize=9)
+        ax_b.tick_params(colors="#CBD5E1", labelsize=8)
+        ax_b.set_title("Muzzle Array Front-View (cm)", color="#F8FAFC", fontsize=10.5, fontweight="bold")
+        ax_b.grid(color="#334155", alpha=0.5)
+
+        # Right Chart: Target-Plane Sample Pellet Cloud
+        ax_c = fig1.add_axes([0.54, 0.34, 0.42, 0.36], facecolor="#1E293B")
+        if scatter and scatter.get("y"):
+            sy = np.asarray(scatter["y"], dtype=float)
+            sz = np.asarray(scatter["z"], dtype=float)
+            is_hit = np.asarray(scatter.get("is_hit", [False] * len(sy)), dtype=bool)
+            is_let = np.asarray(scatter.get("is_lethal", [False] * len(sy)), dtype=bool)
+            miss_m = ~is_hit
+            hit_non = is_hit & ~is_let
+            if np.any(miss_m):
+                ax_c.scatter(sy[miss_m], sz[miss_m], s=10, color="#64748B", alpha=0.45, label="Miss")
+            if np.any(hit_non):
+                ax_c.scatter(sy[hit_non], sz[hit_non], s=26, color="#F59E0B", label="Non-Lethal Hit")
+            if np.any(is_let):
+                ax_c.scatter(sy[is_let], sz[is_let], s=32, color="#EF4444", label="Lethal Component Hit")
+            ax_c.legend(loc="upper right", frameon=False, labelcolor="#E2E8F0", fontsize=7.5)
+        ax_c.axhline(0.0, color="#475569", linewidth=0.8, linestyle="--")
+        ax_c.axvline(0.0, color="#475569", linewidth=0.8, linestyle="--")
+        ax_c.set_aspect("equal", "box")
+        ax_c.set_xlabel("Crossrange Y at Target (m)", color="#CBD5E1", fontsize=9)
+        ax_c.set_ylabel("Elevation Z at Target (m)", color="#CBD5E1", fontsize=9)
+        ax_c.tick_params(colors="#CBD5E1", labelsize=8)
+        ax_c.set_title("Sample Volley Pellet Pattern on Target Frame (m)", color="#F8FAFC", fontsize=10.5, fontweight="bold")
+        ax_c.grid(color="#334155", alpha=0.5)
+
+        # Bottom System Spec Table
+        ax_t = fig1.add_axes([0.04, 0.04, 0.92, 0.23])
+        ax_t.axis("off")
+        cfg_pairs = [
+            ("Layout / Barrels", f"{array_config.get('layout_type', 'circular')} | {sm.get('n_barrels', 6)} barrels"),
+            ("Mount Geometry", f"R={array_config.get('mount_radius_m', 0.20)} m | dy={array_config.get('spacing_y_m', 0.12)} m | dz={array_config.get('spacing_z_m', 0.12)} m"),
+            ("Pointing & Firing", f"{array_config.get('pointing_mode', 'convergent')} | {array_config.get('firing_mode', 'simultaneous_volley')}"),
+            ("Choke & Barrel", f"{array_config.get('choke', 'Full')} choke | {array_config.get('barrel_length_in', 24.0)} in"),
+            ("Target Threat", f"{sm.get('drone_name', 'UAS')} | Vel={array_config.get('drone_speed_mps', 15.0)} m/s | Aspect={array_config.get('aspect_mode', 'head_on_frontal')}"),
+            ("Payload / Shot", f"{sm.get('ammunition_name', '')} | {sm.get('total_pellets_per_volley', 0)} pellets/volley"),
+        ]
+        table = ax_t.table(
+            cellText=[[k, v] for k, v in cfg_pairs],
+            colLabels=["Engineering Parameter", "Configured Specification"],
+            loc="center",
+            cellLoc="left",
+            colWidths=[0.28, 0.72],
+        )
+        table.auto_set_font_size(False)
+        table.set_fontsize(8.5)
+        for (row_i, col_i), cell in table.get_celld().items():
+            cell.set_edgecolor("#334155")
+            if row_i == 0:
+                cell.set_facecolor("#1E3A8A")
+                cell.set_text_props(color="#FFFFFF", fontweight="bold")
+            else:
+                cell.set_facecolor("#1E293B" if row_i % 2 == 1 else "#0F172A")
+                cell.set_text_props(color="#E2E8F0")
+
+        pdf.savefig(fig1, facecolor=fig1.get_facecolor())
+
+        # Page 2 (optional): Effective Range Curve + Aspect / Barrel Contribution
+        if (range_envelope and range_envelope.get("records")) or (aspect_benchmark and aspect_benchmark.get("aspect_results")) or barrel_stats:
+            fig2 = Figure(figsize=(11.69, 8.27), facecolor="#0F172A")
+            fig2.text(0.04, 0.945, f"{scenario_name[:64]} — Envelope & Vulnerability", fontsize=14.5, fontweight="bold", color="#F8FAFC")
+            fig2.text(0.04, 0.905, "References: Journée (1992), Lowry (1988), Morrison (2016), NATO AEP-4715 / IATG 01.80", fontsize=9.0, color="#94A3B8")
+
+            ax_r = fig2.add_axes([0.07, 0.50, 0.40, 0.35], facecolor="#1E293B")
+            if range_envelope and range_envelope.get("records"):
+                recs = range_envelope["records"]
+                ax_r.plot([r["distance_m"] for r in recs], [r["kill_probability_pct"] for r in recs], "-o", color="#10B981", linewidth=2.4, label="Active Config")
+                for c_idx, alt in enumerate(range_envelope.get("comparison_curves", [])[:3]):
+                    alt_r = alt.get("records", [])
+                    if alt_r:
+                        ax_r.plot([r["distance_m"] for r in alt_r], [r["kill_probability_pct"] for r in alt_r], "--o", linewidth=1.6, label=alt.get("ammunition_preset", f"Alt {c_idx+1}"))
+                ax_r.axhline(80.0, color="#EF4444", linestyle="--", linewidth=1.2, label="R80 (80%)")
+                ax_r.axhline(50.0, color="#F59E0B", linestyle=":", linewidth=1.2, label="R50 (50%)")
+                ax_r.legend(loc="lower left", frameon=False, labelcolor="#E2E8F0", fontsize=7.5)
+            ax_r.set_ylim(0, 105)
+            ax_r.set_xlabel("Slant Range (m)", color="#CBD5E1", fontsize=9)
+            ax_r.set_ylabel("P_kill (%)", color="#CBD5E1", fontsize=9)
+            ax_r.tick_params(colors="#CBD5E1", labelsize=8)
+            ax_r.set_title(f"Effective Range P_kill(R) — R80={env_sm.get('r80_label', 'N/A')}", color="#F8FAFC", fontsize=10.5, fontweight="bold")
+            ax_r.grid(color="#334155", alpha=0.5)
+
+            ax_a = fig2.add_axes([0.56, 0.50, 0.40, 0.35], facecolor="#1E293B")
+            if aspect_benchmark and aspect_benchmark.get("aspect_results"):
+                ares = aspect_benchmark["aspect_results"]
+                lbls = [
+                    "".join(ch for ch in str(a.get("name", "")) if 32 <= ord(ch) < 127).strip()[:24]
+                    for a in ares
+                ]
+                vals = [float(a.get("kill_probability_pct", 0.0)) for a in ares]
+                ypos = np.arange(len(lbls))
+                ax_a.barh(ypos, vals, color="#38BDF8", height=0.55)
+                ax_a.set_yticks(ypos)
+                ax_a.set_yticklabels(lbls, color="#E2E8F0", fontsize=8)
+                ax_a.invert_yaxis()
+                ax_a.set_xlim(0, 105)
+                ax_a.set_title("Aspect Angle P_kill (%)", color="#F8FAFC", fontsize=10.5, fontweight="bold")
+            elif barrel_stats:
+                lbls = [str(b.get("barrel_id", "")) for b in barrel_stats]
+                vals = [float(b.get("contribution_pct", 0.0)) for b in barrel_stats]
+                ax_a.bar(lbls, vals, color="#38BDF8")
+                ax_a.set_ylabel("Hit Contribution (%)", color="#CBD5E1", fontsize=9)
+                ax_a.set_title("Per-Barrel Hit Share (%)", color="#F8FAFC", fontsize=10.5, fontweight="bold")
+            ax_a.tick_params(colors="#CBD5E1", labelsize=8)
+            ax_a.grid(color="#334155", alpha=0.4)
+
+            if barrel_stats:
+                ax_bt = fig2.add_axes([0.04, 0.05, 0.92, 0.36])
+                ax_bt.axis("off")
+                b_rows = [
+                    [
+                        str(b.get("barrel_id", "")),
+                        f"{b.get('y_m', 0.0)*100:+.1f} cm / {b.get('z_m', 0.0)*100:+.1f} cm",
+                        str(b.get("choke", "")),
+                        str(b.get("ammunition_preset", "")),
+                        f"{b.get('fire_time_ms', 0.0):.1f} ms",
+                        str(b.get("hits_on_drone", 0)),
+                        f"{b.get('contribution_pct', 0.0):.1f}%",
+                    ]
+                    for b in barrel_stats[:12]
+                ]
+                bt = ax_bt.table(
+                    cellText=b_rows,
+                    colLabels=["Barrel", "Mount Y / Z", "Choke", "Load Preset", "Fire Delay", "Hits", "Share"],
+                    loc="center",
+                    cellLoc="center",
+                )
+                bt.auto_set_font_size(False)
+                bt.set_fontsize(8.0)
+                for (row_i, _), cell in bt.get_celld().items():
+                    cell.set_edgecolor("#334155")
+                    if row_i == 0:
+                        cell.set_facecolor("#1E3A8A")
+                        cell.set_text_props(color="#FFFFFF", fontweight="bold")
+                    else:
+                        cell.set_facecolor("#1E293B" if row_i % 2 == 1 else "#0F172A")
+                        cell.set_text_props(color="#E2E8F0")
+
+            pdf.savefig(fig2, facecolor=fig2.get_facecolor())
+
+    return buf.getvalue()
