@@ -49,7 +49,7 @@ def get_data_table_provenance() -> list[dict[str, Any]]:
     payload = _load_provenance_payload()
     counts: dict[str, str] = {
         "sources.json": f"{len(kb.sources)} citations",
-        "formulas.json": f"{len(kb.formulas)} equations (3 FLAGGED)",
+        "formulas.json": f"{len(kb.formulas)} equations ({sum(1 for f in kb.formulas if f.get('is_flagged'))} FLAGGED)",
         "drag_tables.json": f"G1:{len(kb.drag_tables.get('G1', []))}, G7:{len(kb.drag_tables.get('G7', []))}, Frag:{len(kb.drag_tables.get('natural_fragment', []))} Mach pts",
         "explosives.json": f"{len(kb.explosives.get('tnt_equivalence', []))} explosives",
         "kb_coefficients.json": f"{len(kb.kb_coefficients)} piecewise log-polynomials",

@@ -58,8 +58,8 @@ def _build_presets() -> dict[str, tuple[AmmoDefinition, Scenario]]:
             fuze=FuzeSpec(type="none", reliability=BetaReliabilitySpec(a=999.0, b=0.001, p_dud_mean=0.0)),
             penetrator=PenetratorSpec(
                 type="bullet_barrier",
-                L_m=0.0315,
-                D_m=0.00782,
+                L_m=0.024,
+                D_m=0.0062,
                 rho=10500.0,
                 v50_mps=420.0,
                 sigma_v50_mps=18.0,
@@ -71,7 +71,7 @@ def _build_presets() -> dict[str, tuple[AmmoDefinition, Scenario]]:
             target=TargetSpec(
                 type="armour",
                 posture="standing",
-                geometry={"half_width_x_m": 0.25, "half_width_y_m": 0.25, "presented_area_m2": 0.45, "obliquity_deg": 15.0},
+                geometry={"half_width_x_m": 0.25, "half_width_y_m": 0.25, "presented_area_m2": 0.45, "armour_thickness_m": 0.008, "obliquity_deg": 15.0},
             ),
             aim=AimSpec(range_m=600.0, az_rad=0.0),
             met=MetSpec(wind_cross_right_mps=2.5),
@@ -103,13 +103,13 @@ def _build_presets() -> dict[str, tuple[AmmoDefinition, Scenario]]:
             fuze=FuzeSpec(
                 type="time",
                 reliability=BetaReliabilitySpec(a=196.0, b=4.0),
-                time_set_s=1.85,
+                time_set_s=1.55,
                 time_sigma_s=0.006,
                 sd_fail_prob=0.01,
             ),
             warhead=WarheadSpec(
                 fill=FillSpec(explosive="RDX", mass_kg=0.055),
-                case=CaseSpec(mass_kg=0.28, t_in=0.16, d_in=1.18, length_m=0.09),
+                case=CaseSpec(mass_kg=0.28, t_in=0.16, d_in=0.86, length_m=0.09),
                 lethal_radius_m=5.5,
                 carleton_rx_m=5.5,
                 carleton_ry_m=5.5,
@@ -142,13 +142,14 @@ def _build_presets() -> dict[str, tuple[AmmoDefinition, Scenario]]:
             mass_kg=4.8,
             mass_sigma_kg=0.02,
             length_m=0.62,
+            inertia=InertiaSpec(ix=4.0e-4, iy=0.14),
             aero=AeroSpec(drag_ref="G7", form_factor=NormalSpec(mu=0.82, sigma=0.02)),
             launch=LaunchSpec(mode="gun", mv=MVSpec(mu=1650.0, sigma_rr=5.5, sigma_lot=3.0), twist_cal=0.0),
             fuze=FuzeSpec(type="none", reliability=BetaReliabilitySpec(a=999.0, b=0.001, p_dud_mean=0.0)),
             penetrator=PenetratorSpec(
                 type="long_rod",
                 L_m=0.56,
-                D_m=0.025,
+                D_m=0.022,
                 rho=17600.0,
                 rod_material="Tungsten alloy",
             ),
@@ -594,8 +595,8 @@ def _build_presets() -> dict[str, tuple[AmmoDefinition, Scenario]]:
             fuze=FuzeSpec(type="none", reliability=BetaReliabilitySpec(a=999.0, b=0.001, p_dud_mean=0.0)),
             penetrator=PenetratorSpec(
                 type="bullet_barrier",
-                L_m=0.048,
-                D_m=0.0108,
+                L_m=0.042,
+                D_m=0.0085,
                 rho=14800.0,
                 v50_mps=510.0,
                 sigma_v50_mps=22.0,
@@ -607,7 +608,7 @@ def _build_presets() -> dict[str, tuple[AmmoDefinition, Scenario]]:
             target=TargetSpec(
                 type="armour",
                 posture="armoured",
-                geometry={"half_width_x_m": 0.9, "half_width_y_m": 1.2, "presented_area_m2": 1.8, "obliquity_deg": 20.0},
+                geometry={"half_width_x_m": 0.9, "half_width_y_m": 1.2, "presented_area_m2": 1.8, "armour_thickness_m": 0.016, "obliquity_deg": 20.0},
             ),
             aim=AimSpec(range_m=1200.0, az_rad=0.0),
             met=MetSpec(wind_cross_right_mps=3.0),
@@ -645,8 +646,8 @@ def _build_presets() -> dict[str, tuple[AmmoDefinition, Scenario]]:
             fuze=FuzeSpec(type="none", reliability=BetaReliabilitySpec(a=999.0, b=0.001, p_dud_mean=0.0)),
             penetrator=PenetratorSpec(
                 type="bullet_barrier",
-                L_m=0.034,
-                D_m=0.00782,
+                L_m=0.026,
+                D_m=0.0058,
                 rho=9800.0,
                 v50_mps=390.0,
                 sigma_v50_mps=20.0,
@@ -658,7 +659,7 @@ def _build_presets() -> dict[str, tuple[AmmoDefinition, Scenario]]:
             target=TargetSpec(
                 type="armour",
                 posture="standing",
-                geometry={"half_width_x_m": 0.35, "half_width_y_m": 0.35, "presented_area_m2": 0.56},
+                geometry={"half_width_x_m": 0.35, "half_width_y_m": 0.35, "presented_area_m2": 0.56, "armour_thickness_m": 0.006},
             ),
             aim=AimSpec(range_m=800.0),
             met=MetSpec(wind_cross_right_mps=2.5),
@@ -723,10 +724,11 @@ def _build_presets() -> dict[str, tuple[AmmoDefinition, Scenario]]:
     ar04_ammo.class_id = "AR-04"
     ar04_ammo.name = "155mm Notional Base-Eject Illumination / Smoke Carrier (NOTIONAL)"
     ar04_ammo.description = "Notional 155mm carrier shell with electronic time fuze (FZ-05) for high-altitude base-ejection of illumination/smoke canisters."
+    ar04_ammo.warhead = None
     ar04_ammo.fuze = FuzeSpec(
         type="time",
         reliability=BetaReliabilitySpec(a=95.0, b=5.0),
-        time_set_s=28.0,
+        time_set_s=25.0,
         time_sigma_s=0.12,
         hob=NormalSpec(mu=450.0, sigma=18.0),
     )
@@ -824,7 +826,7 @@ def _build_presets() -> dict[str, tuple[AmmoDefinition, Scenario]]:
                 jet_rho_kg_m3=8960.0,
                 standoff_cd=4.2,
             ),
-            guidance_plugin="course_correction",
+            guidance_plugin="seeker_miss",
             guidance_params={"cep_guided_m": 1.2, "max_authority_m": 350.0, "p_guidance_fail": 0.04, "gnss_bias_sigma_m": 0.35},
             sources=["S01", "S10", "S13"],
         ),
@@ -1180,7 +1182,7 @@ def _build_presets() -> dict[str, tuple[AmmoDefinition, Scenario]]:
     presets["NOTIONAL-SG-01"] = (
         AmmoDefinition(
             id="NOTIONAL-SG-01",
-            class_id="SG-01",
+            class_id="SA-04",
             name="12-Gauge Notional 00-Buckshot Tactical (9 Pellets)",
             description="Notional 12-gauge 2-3/4\" combat buckshot load firing 9 lead pellets (8.38mm) at 405 m/s with choke dispersion.",
             calibre_m=0.01852,
@@ -1188,7 +1190,7 @@ def _build_presets() -> dict[str, tuple[AmmoDefinition, Scenario]]:
             mass_sigma_kg=0.0005,
             length_m=0.070,
             inertia=InertiaSpec(ix=1.5e-7, iy=1.5e-6),
-            aero=AeroSpec(drag_ref="G1", form_factor=NormalSpec(mu=1.05, sigma=0.04)),
+            aero=AeroSpec(drag_ref="SPHERE", form_factor=NormalSpec(mu=1.05, sigma=0.04)),
             launch=LaunchSpec(
                 mode="gun",
                 mv=MVSpec(mu=405.0, sigma_rr=5.0, sigma_lot=3.0),
@@ -1204,7 +1206,7 @@ def _build_presets() -> dict[str, tuple[AmmoDefinition, Scenario]]:
                 v50_mps=280.0,
                 sigma_v50_mps=15.0,
             ),
-            sources=["S13", "Lowry1970"],
+            sources=["S41", "S42", "S43"],
         ),
         Scenario(
             name="35m Shotgun Tactical Target (30-in Circle & E-Type)",
@@ -1230,15 +1232,15 @@ def _build_presets() -> dict[str, tuple[AmmoDefinition, Scenario]]:
     presets["NOTIONAL-SG-02"] = (
         AmmoDefinition(
             id="NOTIONAL-SG-02",
-            class_id="SG-02",
+            class_id="SA-04",
             name="12-Gauge Notional #7.5 Clay / Trap Target (350 Pellets)",
-            description="Notional 12-gauge 1-1/8 oz competition target load firing 350 #7.5 lead birdshot pellets (2.41mm) at 395 m/s.",
+            description="Notional 12-gauge 1 oz competition target load firing 350 #7.5 lead birdshot pellets (2.41mm) at 395 m/s.",
             calibre_m=0.01852,
-            mass_kg=0.0318,
+            mass_kg=0.02835,
             mass_sigma_kg=0.0003,
             length_m=0.070,
             inertia=InertiaSpec(ix=1.5e-7, iy=1.5e-6),
-            aero=AeroSpec(drag_ref="G1", form_factor=NormalSpec(mu=1.12, sigma=0.05)),
+            aero=AeroSpec(drag_ref="SPHERE", form_factor=NormalSpec(mu=1.12, sigma=0.05)),
             launch=LaunchSpec(
                 mode="gun",
                 mv=MVSpec(mu=395.0, sigma_rr=4.0, sigma_lot=2.5),
@@ -1254,7 +1256,7 @@ def _build_presets() -> dict[str, tuple[AmmoDefinition, Scenario]]:
                 v50_mps=160.0,
                 sigma_v50_mps=10.0,
             ),
-            sources=["S13", "Lowry1970"],
+            sources=["S41", "S42", "S43"],
         ),
         Scenario(
             name="25m Clay Pigeon Breaking Arena",

@@ -52,33 +52,54 @@ def simulate_apfsds_sabot_discard(
         path = [[0.0, 0.0, 1.8]]  # Gun trunnion height ~1.8m
 
         px, py, pz = 0.0, 0.0, 1.8
-        vx = v0_mps
+        vx = float(v0_mps)
         # Radial separation velocity from scoop lift
-        v_rad = v0_mps * math.tan(math.radians(petal_divergence_angle_deg))
+        v_rad = float(v0_mps) * math.tan(math.radians(petal_divergence_angle_deg))
         vy = v_rad * math.cos(angle_rad)
         vz = v_rad * math.sin(angle_rad)
 
-        dt = 0.02
+        # Sub-stepped RK4 so high-drag light sabot petals stay strictly unconditionally stable
         t = 0.0
-        # High drag bluff body decelerates rapidly
-        while pz > 0.0 and t < 4.0:
-            v_mag = math.hypot(vx, vy, vz)
-            # Petal drag coefficient Cd ~ 1.2, area ~ 0.015 m^2
-            drag_f = 0.5 * 1.225 * 0.015 * 1.15 * (v_mag**2) / petal_mass
-            ax = -drag_f * (vx / v_mag)
-            ay = -drag_f * (vy / v_mag)
-            az = -drag_f * (vz / v_mag) - 9.80665
+        step_idx = 0
+        c_petal = (0.5 * 1.225 * 0.015 * 1.15) / max(petal_mass, 1e-4)
 
-            px += vx * dt
-            py += vy * dt
-            pz += vz * dt
+        def petal_accel(vx_s: float, vy_s: float, vz_s: float) -> tuple[float, float, float]:
+            v_m = math.hypot(vx_s, vy_s, vz_s)
+            df = c_petal * v_m
+            return -df * vx_s, -df * vy_s, -df * vz_s - 9.80665
 
-            vx += ax * dt
-            vy += ay * dt
-            vz += az * dt
-            t += dt
+        while pz > 0.0 and t < 6.0:
+            dt = 0.001 if t < 0.08 else 0.005
+            px0, py0, pz0, vx0, vy0, vz0 = px, py, pz, vx, vy, vz
+            ax1, ay1, az1 = petal_accel(vx0, vy0, vz0)
+            vx2, vy2, vz2 = vx0 + 0.5 * dt * ax1, vy0 + 0.5 * dt * ay1, vz0 + 0.5 * dt * az1
+            ax2, ay2, az2 = petal_accel(vx2, vy2, vz2)
+            vx3, vy3, vz3 = vx0 + 0.5 * dt * ax2, vy0 + 0.5 * dt * ay2, vz0 + 0.5 * dt * az2
+            ax3, ay3, az3 = petal_accel(vx3, vy3, vz3)
+            vx4, vy4, vz4 = vx0 + dt * ax3, vy0 + dt * ay3, vz0 + dt * az3
+            ax4, ay4, az4 = petal_accel(vx4, vy4, vz4)
 
-            path.append([round(px, 1), round(py, 1), round(max(0.0, pz), 1)])
+            px_n = px0 + (dt / 6.0) * (vx0 + 2.0 * vx2 + 2.0 * vx3 + vx4)
+            py_n = py0 + (dt / 6.0) * (vy0 + 2.0 * vy2 + 2.0 * vy3 + vy4)
+            pz_n = pz0 + (dt / 6.0) * (vz0 + 2.0 * vz2 + 2.0 * vz3 + vz4)
+            vx_n = vx0 + (dt / 6.0) * (ax1 + 2.0 * ax2 + 2.0 * ax3 + ax4)
+            vy_n = vy0 + (dt / 6.0) * (ay1 + 2.0 * ay2 + 2.0 * ay3 + ay4)
+            vz_n = vz0 + (dt / 6.0) * (az1 + 2.0 * az2 + 2.0 * az3 + az4)
+            t_n = t + dt
+            step_idx += 1
+
+            if pz_n <= 0.0 and pz0 > 0.0 and (pz0 - pz_n) > 1e-12:
+                frac = pz0 / (pz0 - pz_n)
+                px = px0 + frac * (px_n - px0)
+                py = py0 + frac * (py_n - py0)
+                pz = 0.0
+                t = t + frac * dt
+                path.append([round(px, 1), round(py, 1), 0.0])
+                break
+
+            px, py, pz, vx, vy, vz, t = px_n, py_n, pz_n, vx_n, vy_n, vz_n, t_n
+            if step_idx % 8 == 0:
+                path.append([round(px, 1), round(py, 1), round(max(0.0, pz), 1)])
 
         petal_paths.append(path)
         petal_hazard_impacts.append({
@@ -130,21 +151,22 @@ def calculate_moving_target_lead(
     cross_speed_mps = tgt_speed_mps * math.sin(math.radians(target_crossing_angle_deg))
     range_speed_mps = tgt_speed_mps * math.cos(math.radians(target_crossing_angle_deg))
 
-    # Lead angle
+    # Lead angle (NATO mils: 6400 / (2*pi) = 1018.5916 mils per rad)
+    mils_per_rad = 6400.0 / (2.0 * math.pi)
     lead_dist_m = cross_speed_mps * tof_s
-    lead_angle_mils = (lead_dist_m / target_range_m) * 1000.0
+    lead_angle_mils = (lead_dist_m / target_range_m) * mils_per_rad
 
-    # Trunnion cant cross-coupling: theta_elevation couples into azimuth
-    # Approximate supersonic drop: drop = 0.5 * g * tof^2
+    # Trunnion cant cross-coupling: elevation couples into horizontal deflection
     vert_drop_m = 0.5 * 9.80665 * (tof_s**2)
     cant_rad = math.radians(gun_cant_deg)
     cant_drift_m = vert_drop_m * math.sin(cant_rad)
 
-    # Crosswind jump: drag drift
-    crosswind_drift_m = 0.5 * crosswind_mps * (tof_s - target_range_m / v0_mps) * 12.0
+    # Exact Didion flat-fire crosswind lag drift: D_w = W_cross * (TOF - R / v0)
+    crosswind_drift_m = crosswind_mps * max(0.0, tof_s - target_range_m / max(v0_mps, 1.0))
 
-    net_crossrange_correction_m = lead_dist_m + cant_drift_m + crosswind_drift_m
-    fcs_azimuth_aim_mils = (net_crossrange_correction_m / target_range_m) * 1000.0
+    # Gun aim must oppose (subtract) impact shifts induced by cant and crosswind
+    net_crossrange_correction_m = lead_dist_m - cant_drift_m - crosswind_drift_m
+    fcs_azimuth_aim_mils = (net_crossrange_correction_m / target_range_m) * mils_per_rad
 
     return {
         "target_range_m": float(target_range_m),
@@ -208,7 +230,7 @@ def simulate_direct_fire_engagement(
 
     is_hit = (abs(aim_err_x) <= mbt_half_width) and (abs(aim_err_z) <= mbt_half_height)
 
-    # Lanz-Odermatt penetration depth calculation (TP-01)
+    # Lanz-Odermatt penetration depth calculation (TP-01 finite plate perforation mode)
     from ammo_mc.penetration import tp_01_lanz_odermatt
     # Tungsten alloy density 17,600 kg/m^3 vs steel RHA 7,850 kg/m^3
     lo_res = tp_01_lanz_odermatt(
@@ -219,6 +241,7 @@ def simulate_direct_fire_engagement(
         rho_t_kg_m3=7850.0,
         bhn_t=300.0,
         obliquity_rad=math.radians(armor_obliquity_deg),
+        mode="Perforation (finite)",
     )
     lo_pen_normal_mm = float(lo_res["penetration"]) * 1000.0
 

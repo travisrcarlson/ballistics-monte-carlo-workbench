@@ -59,7 +59,12 @@ from ammo_mc.pipeline import GovernanceError, run_simulation
 from ammo_mc.presets import get_preset, list_presets
 from ammo_mc.schemas import AmmoDefinition, Scenario, SimulationResult
 from ammo_mc.small_arms import get_drone_aspect_presets, get_drone_target_specs
-from ammo_mc.validation import run_validation_suite
+from ammo_mc.validation import (
+    generate_vv_certificate_html,
+    generate_vv_certificate_markdown,
+    run_extended_vv_benchmarks,
+    run_validation_suite,
+)
 
 app = FastAPI(
     title="Ammunition Monte Carlo API (ammo-mc)",
@@ -67,7 +72,7 @@ app = FastAPI(
         "Production REST API for stochastic ammunition effects, trajectory dispersion, "
         "fuze reliability, blast/fragmentation hazard modeling, and Counter-UAS trade studies."
     ),
-    version="1.2.0",
+    version="1.3.0",
 )
 
 app.add_middleware(
@@ -121,7 +126,7 @@ def _verify_api_auth(
 
 class HealthResponse(BaseModel):
     status: str = "ok"
-    version: str = "1.0.0"
+    version: str = "1.3.0"
     uptime_seconds: float
     use_limitation: str = USE_LIMITATION_NOTICE
 
@@ -152,7 +157,7 @@ def get_health() -> HealthResponse:
     """Return API health status, version, and official use limitation notice."""
     return HealthResponse(
         status="ok",
-        version="1.0.0",
+        version="1.3.0",
         uptime_seconds=round(time.time() - START_TIME, 2),
         use_limitation=USE_LIMITATION_NOTICE,
     )
@@ -230,6 +235,33 @@ def post_mcdrag(req: McDragRequest) -> dict[str, Any]:
 def get_validation_suite(seed: int = 42, n_mc: int = 50_000) -> list[dict[str, Any]]:
     """Run the 22-case validation suite against Excel values and source tolerances."""
     return run_validation_suite(seed=seed, n_mc_v08=n_mc)
+
+
+@app.get("/validate/benchmarks", tags=["Verification"])
+def get_extended_vv_benchmarks(seed: int = 42, n_mc: int = 50_000) -> dict[str, Any]:
+    """Run the 40-check V&V suite (22 workbook cases + 18 independent physics benchmarks)."""
+    return _to_json_safe(run_extended_vv_benchmarks(seed=seed, n_mc_v08=n_mc))
+
+
+@app.get("/validate/certificate", tags=["Verification"])
+def get_vv_audit_certificate(
+    format: str = Query("html", description="Certificate format: 'html', 'markdown', 'md', or 'json'."),
+    seed: int = 42,
+    n_mc: int = 50_000,
+) -> Any:
+    """Export an HTML, Markdown, or JSON V&V Audit Certificate."""
+    fmt = format.strip().lower()
+    if fmt not in ("html", "markdown", "md", "json"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported format. Choose from: 'html', 'markdown', 'md', or 'json'.",
+        )
+    report = run_extended_vv_benchmarks(seed=seed, n_mc_v08=n_mc)
+    if fmt == "html":
+        return HTMLResponse(content=generate_vv_certificate_html(report))
+    if fmt in ("markdown", "md"):
+        return Response(content=generate_vv_certificate_markdown(report), media_type="text/markdown; charset=utf-8")
+    return _to_json_safe(report)
 
 
 @app.post("/simulate", response_model=SimulationResult, tags=["Simulation"])

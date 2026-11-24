@@ -6,7 +6,7 @@ No UI code resides in core modules.
 
 from __future__ import annotations
 
-from ammo_mc import formulas, mcdrag, plugins, presets
+from ammo_mc import aero_sphere, formulas, mcdrag, plugins, presets, terminal_concrete
 from ammo_mc.data import KnowledgeBase, get_kb
 from ammo_mc.formulas_registry import (
     FORMULA_META,
@@ -17,8 +17,13 @@ from ammo_mc.formulas_registry import (
 )
 from ammo_mc.pipeline import GovernanceError, compute_governed_safety_distance, run_simulation
 from ammo_mc.schemas import AmmoDefinition, Scenario, SimulationResult
+from ammo_mc.validation import (
+    generate_vv_certificate_html,
+    generate_vv_certificate_markdown,
+    run_extended_vv_benchmarks,
+)
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 __all__ = [
     "__version__",
@@ -35,8 +40,13 @@ __all__ = [
     "ProvenanceTracker",
     "USE_LIMITATION_NOTICE",
     "validate_safety_distance_governance",
+    "aero_sphere",
     "formulas",
     "mcdrag",
     "plugins",
     "presets",
+    "terminal_concrete",
+    "run_extended_vv_benchmarks",
+    "generate_vv_certificate_markdown",
+    "generate_vv_certificate_html",
 ]

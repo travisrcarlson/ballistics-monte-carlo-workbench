@@ -60,7 +60,7 @@ def point_in_convex_polygon(y: float, z: float, poly_verts: np.ndarray) -> bool:
         if abs(cross) > 1e-9:
             signs.append(cross > 0)
     if not signs:
-        return True
+        return False
     return all(s == signs[0] for s in signs)
 
 
@@ -99,13 +99,13 @@ def compute_drone_projected_geometry(
     norm_f = np.linalg.norm(u_fwd)
     u_fwd = u_fwd / norm_f if norm_f > 1e-9 else np.array([-1.0, 0.0, 0.0])
 
-    # 2. Lateral unit vector (starboard)
+    # 2. Lateral unit vector (starboard, right-handed wrt u_fwd facing -X at yaw=0)
     if abs(abs(theta_r) - math.pi / 2) < 1e-4:
-        u_r0 = np.array([0.0, 1.0, 0.0], dtype=float)
+        u_r0 = np.array([0.0, -1.0, 0.0], dtype=float)
     else:
-        u_r0 = np.array([math.sin(psi_r), math.cos(psi_r), 0.0], dtype=float)
+        u_r0 = np.array([-math.sin(psi_r), -math.cos(psi_r), 0.0], dtype=float)
         norm_r0 = np.linalg.norm(u_r0)
-        u_r0 = u_r0 / norm_r0 if norm_r0 > 1e-9 else np.array([0.0, 1.0, 0.0])
+        u_r0 = u_r0 / norm_r0 if norm_r0 > 1e-9 else np.array([0.0, -1.0, 0.0])
 
     # Rodrigues roll around u_fwd
     u_right = (
@@ -114,12 +114,10 @@ def compute_drone_projected_geometry(
         + u_fwd * (np.dot(u_fwd, u_r0)) * (1.0 - math.cos(phi_r))
     )
     norm_r = np.linalg.norm(u_right)
-    u_right = u_right / norm_r if norm_r > 1e-9 else np.array([0.0, 1.0, 0.0])
+    u_right = u_right / norm_r if norm_r > 1e-9 else np.array([0.0, -1.0, 0.0])
 
-    # 3. Upward unit vector (dorsal)
-    u_up = np.cross(u_right, u_fwd)
-    if u_up[2] < 0 and abs(theta_r) < math.pi / 2 - 0.05:
-        u_up = -u_up
+    # 3. Upward unit vector (right-handed: u_up = u_fwd x u_right, det(M) == +1.0 everywhere)
+    u_up = np.cross(u_fwd, u_right)
     norm_up = np.linalg.norm(u_up)
     u_up = u_up / norm_up if norm_up > 1e-9 else np.array([0.0, 0.0, 1.0])
 
@@ -277,10 +275,25 @@ def compute_drone_projected_geometry(
         wings_out.append(w_r_hull.tolist())
         area_wings += polygon_area(w_r_hull)
 
-    # Total Presented Area
+    # Total Presented Area (accounting for fuselage-battery & rotor-motor projection overlap)
     span_m = float(drone_spec.get("span_m", 0.40))
-    planform_area = span_m**2 * 0.62
-    tot_presented_area = area_fuse + area_batt + area_wings + area_rotors_tot * 0.75 + area_motors_tot * 0.5
+    if drone_spec.get("drone_type") == "fixed_wing":
+        b_span = float(drone_spec.get("wingspan_m", span_m))
+        c_chord = float(drone_spec.get("wing_chord_m", 0.22))
+        planform_area = max(b_span * c_chord + l_f * w_f * 0.75 + area_rotors_tot * 0.15, 1e-4)
+    else:
+        planform_rot = sum(math.pi * (float(r.get("radius_m", 0.10)) ** 2) for r in rotors_spec)
+        planform_area = max(l_f * w_f + 0.75 * planform_rot, (span_m ** 2) * 0.62, 1e-4)
+
+    batt_vis_frac = 1.0 - 0.65 * abs(nx)
+    mot_vis_frac = max(0.15, 1.0 - 0.70 * abs(nx))
+    tot_presented_area = (
+        area_fuse
+        + area_batt * batt_vis_frac
+        + area_wings
+        + area_rotors_tot * 0.75
+        + area_motors_tot * mot_vis_frac
+    )
     cross_section_ratio_pct = min(100.0, (tot_presented_area / planform_area) * 100.0)
 
     return {
@@ -473,10 +486,10 @@ def evaluate_drone_impact(
     # Fallback to 2D Planform (Top-down)
     drone_type = drone_spec.get("drone_type", "quadcopter")
     fuse_w = float(drone_spec.get("fuselage_w_m", 0.10))
-    fuse_h = float(drone_spec.get("fuselage_h_m", 0.10))
+    fuse_l = float(drone_spec.get("fuselage_l_m", drone_spec.get("fuselage_h_m", 0.10)))
 
     # 1. Central fuselage check (core avionics, battery, IMU)
-    in_fuselage = (abs(y_rel_m) <= fuse_w / 2.0) and (abs(z_rel_m) <= fuse_h / 2.0)
+    in_fuselage = (abs(y_rel_m) <= fuse_w / 2.0) and (abs(z_rel_m) <= fuse_l / 2.0)
     if in_fuselage:
         return {
             "is_hit": True,

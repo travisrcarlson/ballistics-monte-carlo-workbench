@@ -31,7 +31,7 @@ class MPMCoeffsSpec(BaseModel):
 
 
 class AeroSpec(BaseModel):
-    drag_ref: Literal["G7", "G1", "FRAGMENT", "custom"] = "G7"
+    drag_ref: Literal["G7", "G1", "FRAGMENT", "SPHERE", "custom"] = "G7"
     cd_table: list[dict[str, float]] | None = None
     form_factor: NormalSpec = Field(default_factory=lambda: NormalSpec(mu=1.0, sigma=0.015))
     mpm_coeffs: MPMCoeffsSpec = Field(default_factory=MPMCoeffsSpec)

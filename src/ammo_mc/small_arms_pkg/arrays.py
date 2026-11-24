@@ -6,6 +6,12 @@ import math
 from typing import Any
 import numpy as np
 
+from ammo_mc.aero_sphere import (
+    didion_crosswind_drift_m,
+    exact_quadratic_drag_tof_and_velocity,
+    sphere_drag_compressible,
+    sutherland_air_viscosity,
+)
 from .catalogs import DRONE_ASPECT_PRESETS, DRONE_TARGET_SPECS, SHOTGUN_PRESETS, get_choke_definitions, get_drone_target_specs, get_shotgun_presets
 from .geometry import compute_drone_projected_geometry, evaluate_drone_impact
 
@@ -56,15 +62,18 @@ def generate_multishotgun_array_layout(
 
     elif layout_type == "concentric":
         # Dual-ring: center core + outer ring
-        if n_barrels <= 3:
+        if n_barrels <= 1:
             inner_count = 1
+            outer_count = 0
         elif n_barrels <= 6:
             inner_count = 1
+            outer_count = n_barrels - inner_count
         elif n_barrels <= 9:
             inner_count = 3
+            outer_count = n_barrels - inner_count
         else:
             inner_count = max(3, n_barrels // 3)
-        outer_count = max(1, n_barrels - inner_count)
+            outer_count = max(1, n_barrels - inner_count)
 
         # Inner ring / center core
         r_inner = mount_radius_m * 0.45
@@ -161,7 +170,7 @@ def generate_multishotgun_array_layout(
             "barrel_length_in": float(default_barrel_length_in),
             "mount_group": "honeycomb_center",
         })
-        hex_count = max(6, n_barrels - 1)
+        hex_count = max(0, int(n_barrels) - 1)
         for i in range(hex_count):
             angle = (2.0 * math.pi * i) / hex_count
             y_i = round(mount_radius_m * math.cos(angle), 4)
@@ -476,18 +485,40 @@ def simulate_anti_drone_multishotgun_mc(
     n_act_barrels = len(barrels)
     fire_times_s = compute_balanced_pair_fire_times(barrels, firing_mode=firing_mode, ripple_delay_ms=ripple_delay_ms)
 
-    # 4. Aerodynamic deceleration constants (true area-to-mass ratio across Lead/Steel/Tungsten/Flechette)
+    # 4. Aerodynamic deceleration constants (compressible Morrison/Bailey-Hiatt sphere drag for shot, fixed Cd for finned flechettes)
     rho_air = 1.225
-    d_m_nom = eff_d_mm / 1000.0
-    area_nom = math.pi * 0.25 * (d_m_nom ** 2)
-    kappa_nom = (rho_air * nom_ammo["effective_cd"] * area_nom) / (2.0 * (eff_m_g / 1000.0))
-    v_impact_nominal = eff_v0 * math.exp(-kappa_nom * target_distance_m)
-    t_flight_nominal = target_distance_m / max((eff_v0 + v_impact_nominal) / 2.0, 10.0)
+    mu_air = sutherland_air_viscosity(288.15)
+    a_sound = 340.29
 
-    # Moving target vector
+    def _eff_path_cd(v_muzzle: float, diam_m: float, mass_kg: float, range_m: float, base_cd_ov: float) -> float:
+        if base_cd_ov < 0.25:
+            return base_cd_ov
+        area_p = math.pi * 0.25 * (diam_m ** 2)
+        n_q = 6
+        dx_q = max(range_m, 0.5) / n_q
+        vq = max(v_muzzle, 10.0)
+        for _ in range(n_q):
+            cd1 = sphere_drag_compressible(vq * diam_m * rho_air / mu_air, vq / a_sound)
+            k1 = 0.5 * rho_air * cd1 * area_p / max(mass_kg, 1e-6)
+            vmid = max(5.0, vq * math.exp(-0.5 * k1 * dx_q))
+            cd2 = sphere_drag_compressible(vmid * diam_m * rho_air / mu_air, vmid / a_sound)
+            k2 = 0.5 * rho_air * cd2 * area_p / max(mass_kg, 1e-6)
+            _, vq = exact_quadratic_drag_tof_and_velocity(dx_q, vq, k2)
+        k_eff = max(0.0, -math.log(max(vq, 1e-3) / max(v_muzzle, 10.0)) / max(range_m, 1e-3))
+        return max(0.20, (2.0 * mass_kg * k_eff) / max(rho_air * area_p, 1e-12))
+
+    d_m_nom = eff_d_mm / 1000.0
+    m_kg_nom = eff_m_g / 1000.0
+    area_nom = math.pi * 0.25 * (d_m_nom ** 2)
+    cd_nom_eff = _eff_path_cd(eff_v0, d_m_nom, m_kg_nom, target_distance_m, nom_ammo["effective_cd"])
+    kappa_nom = (rho_air * cd_nom_eff * area_nom) / (2.0 * max(m_kg_nom, 1e-6))
+    t_flight_nominal, v_impact_nominal = exact_quadratic_drag_tof_and_velocity(target_distance_m, eff_v0, kappa_nom)
+
+    # Moving target vector in engagement plane: heading 0 = closing (-X), 90 = crossing (+Y)
     heading_rad = math.radians(drone_heading_deg)
+    v_drone_x = -drone_velocity_mps * math.cos(heading_rad)
     v_drone_y = drone_velocity_mps * math.sin(heading_rad)
-    v_drone_z = drone_velocity_mps * math.cos(heading_rad)
+    v_drone_z = 0.0
 
     # 5. Volley Simulation Loop
     volley_records: list[dict[str, Any]] = []
@@ -529,7 +560,7 @@ def simulate_anti_drone_multishotgun_mc(
         "flight_time_s": [],
     }
 
-    aim_sigma_m = (target_distance_m * (aim_error_mrad / 1000.0)) / 2.0 if aim_error_mrad > 0 else 0.0
+    aim_sigma_m = target_distance_m * (aim_error_mrad / 1000.0) if aim_error_mrad > 0 else 0.0
     choke_defs = get_choke_definitions()
 
     barrel_ammo_specs = [_resolve_barrel_ammo(str(b.get("ammunition_preset", ammunition_preset))) for b in barrels]
@@ -584,25 +615,26 @@ def simulate_anti_drone_multishotgun_mc(
             z_bore = z0 + target_distance_m * ((b["aim_pitch_mrad"] + dyn_pitch) / 1000.0) + aim_err_z
 
             barrel_stats_map[b_id]["pellets_fired"] += b_pellets
+            b_cd_path = _eff_path_cd(v0_barrel, b_d_m, b_m_kg, target_distance_m, b_cd_base)
 
             # Generate pellets for this barrel
             for _ in range(b_pellets):
-                # Radial dispersion
-                dy = rng.normal(0.0, sigma_radial) + (crosswind_mps * 0.008 * target_distance_m)
+                # Pellet drag variations & longitudinal stringing
+                cd_pellet = rng.uniform(0.94 * b_cd_path, 1.12 * b_cd_path)
+                kappa_p = (rho_air * cd_pellet * b_area_m2) / (2.0 * max(b_m_kg, 1e-6))
+                t_flight, v_impact = exact_quadratic_drag_tof_and_velocity(target_distance_m, v0_barrel, kappa_p)
+                t_arrival = t_fire + t_flight
+
+                # Radial dispersion + exact Didion crosswind lag drift
+                wind_lag_y = didion_crosswind_drift_m(crosswind_mps, t_flight, target_distance_m, v0_barrel)
+                dy = rng.normal(0.0, sigma_radial) + wind_lag_y
                 dz = rng.normal(0.0, sigma_radial)
 
                 y_impact_raw = y_bore + dy
                 z_impact_raw = z_bore + dz
 
-                # Pellet drag variations & longitudinal stringing
-                cd_pellet = rng.uniform(0.92 * b_cd_base, 1.25 * b_cd_base)
-                kappa_p = (rho_air * cd_pellet * b_area_m2) / (2.0 * max(b_m_kg, 1e-6))
-                v_impact = v0_barrel * math.exp(-kappa_p * target_distance_m)
-                t_flight = target_distance_m / max((v0_barrel + v_impact) / 2.0, 10.0)
-                t_arrival = t_fire + t_flight
-
-                # Moving target position relative to nominal lead at arrival time
-                dt_target = t_arrival - t_flight_nominal
+                # Moving target displacement relative to nominal lead at arrival time
+                dt_target = (t_arrival - t_flight_nominal) * (v_impact / max(v_impact - v_drone_x, 10.0))
                 tgt_offset_y = v_drone_y * dt_target
                 tgt_offset_z = v_drone_z * dt_target
 
@@ -650,12 +682,14 @@ def simulate_anti_drone_multishotgun_mc(
                     sample_scatter["striking_velocity_mps"].append(round(v_impact, 1))
                     sample_scatter["flight_time_s"].append(round(t_arrival, 4))
 
-        # Volley Kill Condition
+        # Volley Kill Condition (architecture-specific rotor kill requirement)
+        d_type = str(drone_spec.get("drone_type", "quadcopter"))
+        req_rotors = 1 if d_type == "fixed_wing" else (2 if d_type == "quadcopter" else 3)
         is_killed = bool(
             (v_lethal >= crit_hits_req)
             or (v_fuselage_lethal >= 1)
             or (v_battery_lethal >= 1)
-            or (len(v_rotors_killed) >= 2)
+            or (len(v_rotors_killed) >= req_rotors)
         )
         if is_killed:
             kills_count += 1
@@ -681,9 +715,11 @@ def simulate_anti_drone_multishotgun_mc(
     mean_lethal = round(float(np.mean(all_lethal_counts)), 1)
     mean_energy = round(float(np.mean(all_energy_on_drone)), 1)
 
-    # Cloud geometry in sample volley
+    # Cloud geometry in sample volley (centered on sample volley CoM)
     if sample_scatter["y"]:
-        rads = np.hypot(sample_scatter["y"], sample_scatter["z"])
+        sy_arr = np.asarray(sample_scatter["y"], dtype=np.float64)
+        sz_arr = np.asarray(sample_scatter["z"], dtype=np.float64)
+        rads = np.hypot(sy_arr - float(np.mean(sy_arr)), sz_arr - float(np.mean(sz_arr)))
         cep_50 = round(float(np.percentile(rads, 50)), 3)
         r_90 = round(float(np.percentile(rads, 90)), 3)
         cloud_diam_90 = round(2.0 * r_90, 3)

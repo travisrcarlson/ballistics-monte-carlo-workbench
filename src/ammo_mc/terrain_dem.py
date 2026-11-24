@@ -206,6 +206,17 @@ def build_preset_terrain_dem(
     )
 
 
+def _wgs84_radii_m(lat_deg: float) -> tuple[float, float]:
+    """Return WGS-84 meridian R_M and prime-vertical R_N radii [m] at geodetic latitude."""
+    a = 6378137.0
+    e2 = 0.00669437999014
+    sin_l = math.sin(math.radians(float(lat_deg)))
+    denom = math.sqrt(max(1.0 - e2 * (sin_l ** 2), 1e-12))
+    r_n = a / denom
+    r_m = (a * (1.0 - e2)) / (denom ** 3)
+    return float(r_m), float(r_n)
+
+
 def parse_dem_csv(
     csv_text: str,
     origin_lat: float = 32.9000,
@@ -238,6 +249,7 @@ def parse_dem_csv(
     ys: list[float] = []
     zs: list[float] = []
     cos_lat = max(math.cos(math.radians(origin_lat)), 0.1)
+    r_mer, r_pv = _wgs84_radii_m(origin_lat)
 
     for row in reader:
         try:
@@ -248,8 +260,8 @@ def parse_dem_csv(
             elif col_lat and col_lon:
                 lat_v = float(row[col_lat])
                 lon_v = float(row[col_lon])
-                xv = math.radians(lon_v - origin_lon) * EARTH_RADIUS_M * cos_lat
-                yv = math.radians(lat_v - origin_lat) * EARTH_RADIUS_M
+                xv = math.radians(lon_v - origin_lon) * r_pv * cos_lat
+                yv = math.radians(lat_v - origin_lat) * r_mer
             else:
                 raise ValueError("CSV DEM needs either (`x_m`, `y_m`) or (`lat`, `lon`) coordinate columns.")
             if math.isfinite(xv) and math.isfinite(yv) and math.isfinite(zv):
@@ -380,13 +392,14 @@ def fetch_open_meteo_elevation_dem(
     xv = np.linspace(-extent_m, extent_m, gn)
     yv = np.linspace(-extent_m, extent_m, gn)
     cos_lat = max(math.cos(math.radians(origin_lat)), 0.1)
+    r_mer, r_pv = _wgs84_radii_m(origin_lat)
 
     lats: list[str] = []
     lons: list[str] = []
     for y_val in yv:
-        lat_p = origin_lat + math.degrees(float(y_val) / EARTH_RADIUS_M)
+        lat_p = origin_lat + math.degrees(float(y_val) / r_mer)
         for x_val in xv:
-            lon_p = origin_lon + math.degrees(float(x_val) / (EARTH_RADIUS_M * cos_lat))
+            lon_p = origin_lon + math.degrees(float(x_val) / (r_pv * cos_lat))
             lats.append(f"{lat_p:.6f}")
             lons.append(f"{lon_p:.6f}")
 
@@ -432,7 +445,11 @@ def segment_crosses_terrain_dem(
     clearance_m: float = 0.5,
 ) -> bool:
     """Return True if 3D sightline p0->p1 intersects the terrain DEM surface."""
-    t_s = np.linspace(0.03, 0.98, max(8, int(n_samples)))
+    seg_len = math.sqrt((float(p1[0]) - float(p0[0])) ** 2 + (float(p1[1]) - float(p0[1])) ** 2 + (float(p1[2]) - float(p0[2])) ** 2)
+    dx_g = float(np.min(np.abs(np.diff(dem.x_m)))) if dem.x_m.size >= 2 else 10.0
+    dy_g = float(np.min(np.abs(np.diff(dem.y_m)))) if dem.y_m.size >= 2 else 10.0
+    n_eff = max(8, int(n_samples), int(math.ceil(seg_len / max(0.4 * min(dx_g, dy_g), 0.5))))
+    t_s = np.linspace(0.02, 0.99, n_eff)
     px = float(p0[0]) + t_s * (float(p1[0]) - float(p0[0]))
     py = float(p0[1]) + t_s * (float(p1[1]) - float(p0[1]))
     pz = float(p0[2]) + t_s * (float(p1[2]) - float(p0[2]))
@@ -508,54 +525,62 @@ def compute_terrain_adjusted_fallout_sdz(
     terr_range_m: float | None = None
     terr_impact_v: float | None = None
     terr_impact_z: float | None = None
-    t_now = 0.0
 
-    for _ in range(1600):
-        vmag = math.sqrt(vx * vx + vy * vy + vz * vz)
-        z_agl_est = max(pz - z0_ground, 0.0)
-        temp_ratio = max(1.0 - 2.2558e-5 * z_agl_est, 0.1)
-        rho_air = 1.225 * (temp_ratio ** 4.2559)
-        a_snd = 340.29 * math.sqrt(temp_ratio)
+    from ammo_mc.environment import eb_04_isa_atmosphere
 
+    def _accel_rk(pz_msl: float, vx_i: float, vy_i: float, vz_i: float) -> tuple[float, float, float]:
+        vmag = math.sqrt(vx_i * vx_i + vy_i * vy_i + vz_i * vz_i)
+        atm = eb_04_isa_atmosphere(h_m=max(float(pz_msl), 0.0))
+        rho_air = float(atm["rho_kg_m3"])
+        a_snd = max(float(atm["a_mps"]), 1.0)
         if is_flechette:
             cd_v = eff_cd
         else:
             re = max(vmag * d_m / 1.48e-5, 1.0)
-            mach = vmag / max(a_snd, 1.0)
-            cd_v = float(_sphere_drag_coeff(np.array([re]), np.array([mach]))[0])
-
+            mach = vmag / a_snd
+            cd_v = float(_sphere_drag_coeff(re, mach))
         k_drag = -(0.5 * rho_air * cd_v * area_m2 / max(m_kg, 1e-6)) * vmag
-        ax = k_drag * vx
-        ay = k_drag * vy
-        az_a = k_drag * vz - 9.80665
+        return k_drag * vx_i, k_drag * vy_i, k_drag * vz_i - 9.80665
 
-        px_n = px + vx * dt + 0.5 * ax * dt * dt
-        py_n = py + vy * dt + 0.5 * ay * dt * dt
-        pz_n = pz + vz * dt + 0.5 * az_a * dt * dt
-        vx_n = vx + ax * dt
-        vy_n = vy + ay * dt
-        vz_n = vz + az_a * dt
-        t_now += dt
+    for _ in range(4800):
+        ax1, ay1, az1 = _accel_rk(pz, vx, vy, vz)
+        ax2, ay2, az2 = _accel_rk(pz + 0.5 * dt * vz, vx + 0.5 * dt * ax1, vy + 0.5 * dt * ay1, vz + 0.5 * dt * az1)
+        ax3, ay3, az3 = _accel_rk(pz + 0.5 * dt * (vz + 0.5 * dt * az1), vx + 0.5 * dt * ax2, vy + 0.5 * dt * ay2, vz + 0.5 * dt * az2)
+        ax4, ay4, az4 = _accel_rk(pz + dt * (vz + 0.5 * dt * az2), vx + dt * ax3, vy + dt * ay3, vz + dt * az3)
 
-        if t_now > 0.08:
-            if flat_range_m is None and pz_n <= z0_ground:
-                frac = (pz - z0_ground) / max(pz - pz_n, 1e-9)
-                ix = px + frac * (px_n - px)
-                iy = py + frac * (py_n - py)
-                flat_range_m = math.hypot(ix - turret_x, iy - turret_y)
+        vx2, vy2, vz2 = vx + 0.5 * dt * ax1, vy + 0.5 * dt * ay1, vz + 0.5 * dt * az1
+        vx3, vy3, vz3 = vx + 0.5 * dt * ax2, vy + 0.5 * dt * ay2, vz + 0.5 * dt * az2
+        vx4, vy4, vz4 = vx + dt * ax3, vy + dt * ay3, vz + dt * az3
 
-            g_here = float(dem.elevation_at(px_n, py_n))
-            g_prev = float(dem.elevation_at(px, py))
-            if terr_range_m is None and pz_n <= g_here:
-                prev_diff = pz - g_prev
-                next_diff = pz_n - g_here
-                frac = prev_diff / max(prev_diff - next_diff, 1e-9)
-                frac = min(max(frac, 0.0), 1.0)
-                ix = px + frac * (px_n - px)
-                iy = py + frac * (py_n - py)
-                terr_range_m = math.hypot(ix - turret_x, iy - turret_y)
-                terr_impact_v = math.sqrt(vx_n * vx_n + vy_n * vy_n + vz_n * vz_n)
-                terr_impact_z = float(dem.elevation_at(ix, iy))
+        px_n = px + (dt / 6.0) * (vx + 2.0 * vx2 + 2.0 * vx3 + vx4)
+        py_n = py + (dt / 6.0) * (vy + 2.0 * vy2 + 2.0 * vy3 + vy4)
+        pz_n = pz + (dt / 6.0) * (vz + 2.0 * vz2 + 2.0 * vz3 + vz4)
+        vx_n = vx + (dt / 6.0) * (ax1 + 2.0 * ax2 + 2.0 * ax3 + ax4)
+        vy_n = vy + (dt / 6.0) * (ay1 + 2.0 * ay2 + 2.0 * ay3 + ay4)
+        vz_n = vz + (dt / 6.0) * (az1 + 2.0 * az2 + 2.0 * az3 + az4)
+
+        if flat_range_m is None and pz_n <= z0_ground and pz >= z0_ground:
+            frac = (pz - z0_ground) / max(pz - pz_n, 1e-9)
+            frac = min(max(frac, 0.0), 1.0)
+            ix = px + frac * (px_n - px)
+            iy = py + frac * (py_n - py)
+            flat_range_m = math.hypot(ix - turret_x, iy - turret_y)
+
+        g_here = float(dem.elevation_at(px_n, py_n))
+        g_prev = float(dem.elevation_at(px, py))
+        if terr_range_m is None and pz_n <= g_here:
+            prev_diff = pz - g_prev
+            next_diff = pz_n - g_here
+            frac = prev_diff / max(prev_diff - next_diff, 1e-9)
+            frac = min(max(frac, 0.0), 1.0)
+            ix = px + frac * (px_n - px)
+            iy = py + frac * (py_n - py)
+            vxi = vx + frac * (vx_n - vx)
+            vyi = vy + frac * (vy_n - vy)
+            vzi = vz + frac * (vz_n - vz)
+            terr_range_m = math.hypot(ix - turret_x, iy - turret_y)
+            terr_impact_v = math.sqrt(vxi * vxi + vyi * vyi + vzi * vzi)
+            terr_impact_z = float(dem.elevation_at(ix, iy))
 
         px, py, pz = px_n, py_n, pz_n
         vx, vy, vz = vx_n, vy_n, vz_n

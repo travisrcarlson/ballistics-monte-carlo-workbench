@@ -16,6 +16,7 @@ from typing import Any
 
 import numpy as np
 
+from ammo_mc.aero_sphere import sphere_drag_compressible, sphere_drag_compressible_array
 from ammo_mc.small_arms import (
     compute_balanced_pair_fire_times,
     compute_drone_projected_geometry,
@@ -356,7 +357,7 @@ def simulate_closed_loop_fcs_engagement_mc(
         # True state at nominal flight arrival time
         true_at_fire = evaluate_evasive_drone_state(0.0, target_distance_m, drone_velocity_mps, drone_heading_deg, maneuver_profile, max_maneuver_g, weave_freq_rad_s, phase)
         true_at_imp = evaluate_evasive_drone_state(t_tof_nom, target_distance_m, drone_velocity_mps, drone_heading_deg, maneuver_profile, max_maneuver_g, weave_freq_rad_s, phase)
-        tau_pred = t_lat + t_tof_nom
+        tau_pred = float(-t_track_grid[-1]) + t_tof_nom
 
         if predictor_mode == "unled_boresight":
             # Aims directly at last measured target angular position without lead
@@ -431,15 +432,19 @@ def simulate_closed_loop_fcs_engagement_mc(
                         v_lethal += 1
                         if hit_info["component"] in ("fuselage_core", "battery_payload"):
                             v_fuselage_lethal += 1
-                        elif hit_info["component"].startswith("rotor_") or hit_info["component"].startswith("motor_"):
+                        elif hit_info["component"].startswith("rotor_"):
                             v_rotors_killed.add(hit_info["component"])
+                        elif hit_info["component"].startswith("motor_"):
+                            v_rotors_killed.add(hit_info["component"].replace("motor_", "rotor_"))
                 if v_idx == 0:
                     sample_pellets["y_offset"].append(round(y_p - true_at_imp["y"], 4))
                     sample_pellets["z_offset"].append(round(z_p - true_at_imp["z"], 4))
                     sample_pellets["is_hit"].append(bool(hit_info["is_hit"]))
                     sample_pellets["is_lethal"].append(bool(hit_info["is_lethal"]))
 
-        if (v_lethal >= crit_hits_req) or (v_fuselage_lethal >= 1) or (len(v_rotors_killed) >= 2):
+        d_type = str(drone_spec.get("drone_type", "quadcopter"))
+        req_rotors = 1 if d_type == "fixed_wing" else (2 if d_type == "quadcopter" else 3)
+        if (v_lethal >= crit_hits_req) or (v_fuselage_lethal >= 1) or (len(v_rotors_killed) >= req_rotors):
             kills += 1
         hits_counts.append(v_hits)
         lethal_counts.append(v_lethal)
@@ -595,11 +600,14 @@ def _estimate_burst_pk_analytics(
         area_core = float(drone_spec.get("fuselage_w_m", 0.10)) * float(drone_spec.get("fuselage_h_m", 0.10))
         area_vuln = min(area_rotors + area_core, math.pi * (float(drone_spec.get("span_m", 0.4)) ** 2) * 0.65)
 
-    # Gaussian core hit probability inside vulnerable disk
+    # Gaussian core hit probability inside vulnerable disk (including nominal 1.2 mrad aim variance)
     r_eq_sq = area_vuln / math.pi
-    p_pellet = 1.0 - math.exp(-r_eq_sq / max(2.0 * (sigma_r ** 2), 1e-6))
-    # Account for partial jitter (~0.75) and high-velocity lethality margin
-    energy_factor = min(1.0, (ke_j / max(e_rotor, 1e-3)) ** 0.75)
+    sigma_aim = 0.0012 * R
+    sigma_eff_sq = (sigma_r ** 2) + (sigma_aim ** 2)
+    p_pellet = 1.0 - math.exp(-r_eq_sq / max(2.0 * sigma_eff_sq, 1e-6))
+    # Transition smoothly between rotor-only lethality (~0.55) and full core lethality (1.0)
+    e_core = float(drone_spec.get("lethal_energy_core_j", 20.0))
+    energy_factor = 0.55 + 0.45 * min(1.0, max(0.0, ke_j - e_rotor) / max(e_core - e_rotor, 1.0))
     lam_lethal = barrels_fired * pellets_per_shot * p_pellet * 0.78 * energy_factor
 
     n_crit = int(drone_spec.get("critical_hits_for_kill", 3))
@@ -1098,8 +1106,10 @@ def simulate_cuas_advanced_payload_mc(
                                 v_lethal += 1
                                 if hit_info["component"] in ("fuselage_core", "battery_payload"):
                                     v_fuselage_lethal += 1
-                                elif hit_info["component"].startswith("rotor_") or hit_info["component"].startswith("motor_"):
+                                elif hit_info["component"].startswith("rotor_"):
                                     v_rotors.add(hit_info["component"])
+                                elif hit_info["component"].startswith("motor_"):
+                                    v_rotors.add(hit_info["component"].replace("motor_", "rotor_"))
                         if v_idx == 0 and b_i == 0:
                             sample_impacts["y"].append(round(y_p, 4))
                             sample_impacts["z"].append(round(z_p, 4))
@@ -1137,8 +1147,10 @@ def simulate_cuas_advanced_payload_mc(
                                 v_lethal += 1
                                 if hit_info["component"] in ("fuselage_core", "battery_payload"):
                                     v_fuselage_lethal += 1
-                                elif hit_info["component"].startswith("rotor_") or hit_info["component"].startswith("motor_"):
+                                elif hit_info["component"].startswith("rotor_"):
                                     v_rotors.add(hit_info["component"])
+                                elif hit_info["component"].startswith("motor_"):
+                                    v_rotors.add(hit_info["component"].replace("motor_", "rotor_"))
                         if v_idx == 0 and b_i == 0:
                             sample_impacts["y"].append(round(y_p, 4))
                             sample_impacts["z"].append(round(z_p, 4))
@@ -1146,7 +1158,9 @@ def simulate_cuas_advanced_payload_mc(
                             sample_impacts["is_lethal"].append(bool(hit_info["is_lethal"]))
                             sample_impacts["energy_j"].append(round(ke_raw, 2))
 
-        if (v_lethal >= crit_hits_req) or (v_fuselage_lethal >= 1) or (len(v_rotors) >= 2):
+        d_type = str(drone_spec.get("drone_type", "quadcopter"))
+        req_rotors = 1 if d_type == "fixed_wing" else (2 if d_type == "quadcopter" else 3)
+        if (v_lethal >= crit_hits_req) or (v_fuselage_lethal >= 1) or (len(v_rotors) >= req_rotors):
             kills += 1
         hits_list.append(v_hits)
         lethal_list.append(v_lethal)
@@ -1293,7 +1307,7 @@ def simulate_turret_recoil_and_gimbal_loads(
         j_i = (m_shot_kg + m_wad_kg) * v0_b + m_prop_kg * 1275.0
         impulses_ns.append(j_i)
         moments_pitch_ns_m.append(j_i * (gimbal_trunnion_offset_z_m + float(b["z_m"])))
-        moments_yaw_ns_m.append(-j_i * float(b["y_m"]))
+        moments_yaw_ns_m.append(+j_i * float(b["y_m"]))
 
     total_impulse = float(sum(impulses_ns))
     free_recoil_vel = total_impulse / max(mount_mass_kg, 1.0)
@@ -1622,19 +1636,65 @@ def optimize_antidrone_array_configuration(
 # UPGRADE 5: ELEVATED-FIRE 3-DOF PELLET FALLOUT & SURFACE DANGER ZONE (SDZ)
 # -------------------------------------------------------------------------
 
-def _sphere_drag_coeff(Re: np.ndarray, Mach: np.ndarray) -> np.ndarray:
-    """Clift-Grace-Weber sphere drag curve with high-subsonic/transonic compressibility multiplier."""
-    Re_s = np.maximum(Re, 1.0)
-    w = np.log10(Re_s)
-    cd = np.where(
-        Re_s < 1e4,
-        (24.0 / Re_s) * (1.0 + 0.15 * (Re_s ** 0.687)) + 0.42 / (1.0 + 42500.0 / (Re_s ** 1.16)),
-        0.47 + 0.03 * np.sin(np.clip((w - 4.0) * 1.2, 0.0, math.pi)),
-    )
-    # Transonic sphere drag rise near Mach > 0.6
-    m_over = np.maximum(Mach - 0.60, 0.0)
-    m_comp = np.where(Mach > 0.60, 1.0 + 0.45 * np.minimum(m_over / 0.60, 1.2) ** 1.5, 1.0)
-    return cd * m_comp
+def _sphere_drag_coeff(Re: float | np.ndarray, Mach: float | np.ndarray) -> float | np.ndarray:
+    """Delegate sphere drag Cd(Re, M) to canonical C1-continuous Morrison/Bailey-Hiatt/Loth model."""
+    if np.ndim(Re) == 0 and np.ndim(Mach) == 0:
+        return sphere_drag_compressible(float(Re), float(Mach))
+    return sphere_drag_compressible_array(np.asarray(Re, dtype=np.float64), np.asarray(Mach, dtype=np.float64))
+
+
+def compute_barrel_thermal_step_convective_radiative(
+    temp_c: float,
+    heat_input_j: float,
+    dt_s: float,
+    barrel_mass_kg: float = 1.4,
+    cp_j_kg_k: float = 460.0,
+    surface_area_m2: float = 0.045,
+    h_conv_w_m2_k: float = 18.0,
+    emissivity: float = 0.80,
+    ambient_c: float = 20.0,
+) -> dict[str, float]:
+    """Integrate single-barrel thermal ODE with natural convection + Stefan-Boltzmann T^4 radiation.
+
+    m * c_p * dT/dt = Q_in/dt - h_c * A_s * (T - T_inf) - eps * sigma_SB * A_s * (T_K^4 - T_inf,K^4)
+    """
+    sigma_sb = 5.670374419e-8
+    cap_j_k = max(float(barrel_mass_kg) * float(cp_j_kg_k), 1.0)
+    a_s = max(float(surface_area_m2), 1e-4)
+    hc = max(float(h_conv_w_m2_k), 0.0)
+    eps = max(0.0, min(1.0, float(emissivity)))
+    t_inf_k = max(float(ambient_c) + 273.15, 50.0)
+    t_k = max(float(temp_c) + 273.15, 50.0)
+    dur = max(float(dt_s), 0.0)
+    q_rate_w = float(heat_input_j) / dur if dur > 1e-9 else 0.0
+
+    def _dT_dt(tk: float) -> float:
+        p_conv = hc * a_s * (tk - t_inf_k)
+        p_rad = eps * sigma_sb * a_s * ((tk ** 4) - (t_inf_k ** 4))
+        return (q_rate_w - p_conv - p_rad) / cap_j_k
+
+    if dur > 0.0:
+        n_sub = max(1, int(math.ceil(dur / 0.25)))
+        dt_sub = dur / n_sub
+        for _ in range(n_sub):
+            k1 = _dT_dt(t_k)
+            k2 = _dT_dt(max(50.0, t_k + 0.5 * dt_sub * k1))
+            k3 = _dT_dt(max(50.0, t_k + 0.5 * dt_sub * k2))
+            k4 = _dT_dt(max(50.0, t_k + dt_sub * k3))
+            t_k = max(50.0, t_k + (dt_sub / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4))
+    else:
+        t_k = max(50.0, t_k + float(heat_input_j) / cap_j_k)
+
+    conv_w = hc * a_s * (t_k - t_inf_k)
+    rad_w = eps * sigma_sb * a_s * ((t_k ** 4) - (t_inf_k ** 4))
+    new_temp_c = t_k - 273.15
+    return {
+        "temp_c": round(float(new_temp_c), 4),
+        "convective_loss_w": round(float(conv_w), 4),
+        "radiative_loss_w": round(float(rad_w), 4),
+        "total_cooling_w": round(float(conv_w + rad_w), 4),
+        "net_heat_gain_j": round(float((new_temp_c - float(temp_c)) * cap_j_k), 4),
+    }
 
 
 def simulate_cuas_pellet_fallout_hazard(
@@ -1703,14 +1763,16 @@ def simulate_cuas_pellet_fallout_hazard(
 
     for i in range(N):
         b = barrels[int(b_indices[i])]
-        pos[i, 0] = 0.0
-        pos[i, 1] = float(b["y_m"])
+        by_local = float(b["y_m"])
+        pos[i, 0] = -by_local * math.sin(az0_rad)
+        pos[i, 1] = by_local * math.cos(az0_rad)
         pos[i, 2] = float(turret_height_m) + float(b["z_m"])
 
-        d_az = float(rng.normal(0.0, theta_choke))
+        # Spherical-coordinate tangent azimuth correction: d_az = cone_angle / cos(el)
         d_el = float(rng.normal(0.0, theta_choke))
+        d_az = float(rng.normal(0.0, theta_choke / max(math.cos(el0_rad), 0.15)))
         el_i = el0_rad + (float(b["aim_pitch_mrad"]) / 1000.0) + d_el
-        az_i = az0_rad + (float(b["aim_yaw_mrad"]) / 1000.0) + d_az
+        az_i = az0_rad + (float(b["aim_yaw_mrad"]) / (1000.0 * max(math.cos(el0_rad), 0.15))) + d_az
         v_i = v0_nom * (1.0 + float(rng.normal(0.0, 0.015)))
 
         vel[i, 0] = v_i * math.cos(el_i) * math.cos(az_i)
@@ -1730,7 +1792,9 @@ def simulate_cuas_pellet_fallout_hazard(
         a_sound = 340.29 * np.sqrt(temp_ratio)
 
         shear = (np.maximum(z_m, 2.0) / 10.0) ** 0.143 if enable_wind_shear else np.ones_like(z_m)
-        w_vec = np.column_stack([wind_downrange_mps * shear, wind_crossrange_mps * shear, np.zeros_like(z_m)])
+        w_world_x = wind_downrange_mps * math.cos(az0_rad) - wind_crossrange_mps * math.sin(az0_rad)
+        w_world_y = wind_downrange_mps * math.sin(az0_rad) + wind_crossrange_mps * math.cos(az0_rad)
+        w_vec = np.column_stack([w_world_x * shear, w_world_y * shear, np.zeros_like(z_m)])
         v_rel = v_arr - w_vec
         v_mag = np.linalg.norm(v_rel, axis=1)
         Re = np.maximum(v_mag * d_m / 1.48e-5, 1.0)
@@ -1744,7 +1808,7 @@ def simulate_cuas_pellet_fallout_hazard(
         return a_out
 
     dt = 0.025
-    max_steps = 1400  # 35 s max flight
+    max_steps = 4800  # 120 s max flight (allows steep 75+ deg low-drag flechettes to land)
     active = np.ones(N, dtype=bool)
     apogee = pos[:, 2].copy()
     t_impact = np.zeros(N, dtype=np.float64)
@@ -1850,9 +1914,13 @@ def simulate_cuas_pellet_fallout_hazard(
         else:
             hazard_classes.append("safe_low_energy")
 
-    # Footprint ellipse area estimate
-    x_span = max(float(np.percentile(x_impact, 99) - np.percentile(x_impact, 1)), 1.0)
-    y_spread = max(float(np.percentile(y_impact, 97.5) - np.percentile(y_impact, 2.5)), 1.0)
+    # Footprint ellipse area estimate in downrange/crossrange frame rotated by firing_azimuth_deg
+    u_dr_x, u_dr_y = math.cos(az0_rad), math.sin(az0_rad)
+    u_cr_x, u_cr_y = -math.sin(az0_rad), math.cos(az0_rad)
+    downrange_imp = x_impact * u_dr_x + y_impact * u_dr_y
+    crossrange_imp = x_impact * u_cr_x + y_impact * u_cr_y
+    x_span = max(float(np.percentile(downrange_imp, 99) - np.percentile(downrange_imp, 1)), 1.0)
+    y_spread = max(float(np.percentile(crossrange_imp, 97.5) - np.percentile(crossrange_imp, 2.5)), 1.0)
     sdz_area_m2 = 0.25 * math.pi * x_span * y_spread
 
     trajectories_3d = [

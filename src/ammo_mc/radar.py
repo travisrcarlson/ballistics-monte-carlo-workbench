@@ -35,22 +35,23 @@ def calculate_projectile_rcs(
     radius_m = 0.5 * calibre_m
     aspect_rad = math.radians(abs(aspect_angle_deg) % 180.0)
 
-    # Cylinder broadside peak
+    # Exact Physical Optics broadside cylinder peak sigma_cyl = k * a * L^2
     k = 2.0 * math.pi / wavelength_m
-    rcs_broadside = (k * radius_m * (length_m**2)) / 2.0
+    rcs_broadside = k * radius_m * (length_m**2)
 
-    # Nose-on Rayleigh-Gans / cone tip return
+    # Nose-on cone tip return (Rayleigh / cone apex contribution)
     rcs_nose = (math.pi * (radius_m**2)) * (math.tan(math.radians(12.0)) ** 4)
 
-    # Base return
+    # Flat circular base specular return (tail-on aspect cos_asp < 0 only!)
     rcs_base = math.pi * (radius_m**2)
 
-    # Smooth angular transition with sin(aspect) weighting
     sin_asp = math.sin(aspect_rad)
     cos_asp = math.cos(aspect_rad)
+    nose_term = rcs_nose * (max(0.0, cos_asp) ** 4)
+    base_term = rcs_base * (max(0.0, -cos_asp) ** 2) * 0.25
 
-    rcs_val = rcs_nose * (cos_asp**4) + rcs_broadside * (sin_asp**8) + rcs_base * (cos_asp**2) * 0.25
-    return float(np.clip(rcs_val, 0.003, 1.5))
+    rcs_val = nose_term + rcs_broadside * (sin_asp**8) + base_term
+    return float(np.clip(rcs_val, 0.003, 2.5))
 
 
 def simulate_radar_tracking(
@@ -165,49 +166,96 @@ def reconstruct_point_of_origin_and_impact(
     y_arr = np.array([p["obs_y"] for p in track_points], dtype=np.float64)
     z_arr = np.array([p["obs_z"] for p in track_points], dtype=np.float64)
 
-    # Fit quadratic polynomials for smoothed state estimation
-    poly_x = np.polyfit(t_arr, x_arr, 2)
-    poly_y = np.polyfit(t_arr, y_arr, 2)
-    poly_z = np.polyfit(t_arr, z_arr, 2)
+    # Fit local quadratic state windows at track start (for POO) and track end (for POI)
+    # Using a single global quadratic across 40+ s of drag-dominated flight biases endpoint velocities.
+    def _fit_local_state(
+        t_sub: np.ndarray,
+        x_sub: np.ndarray,
+        y_sub: np.ndarray,
+        z_sub: np.ndarray,
+    ) -> tuple[float, np.ndarray, np.ndarray]:
+        deg = 2 if len(t_sub) >= 4 else 1
+        t_eval = float(np.mean(t_sub))
+        t_rel = t_sub - t_eval
+        px = np.polyfit(t_rel, x_sub, deg)
+        py = np.polyfit(t_rel, y_sub, deg)
+        pz = np.polyfit(t_rel, z_sub, deg)
+        if deg == 2:
+            r_eval = np.array([px[2], py[2], pz[2]], dtype=np.float64)
+            v_eval = np.array([px[1], py[1], pz[1]], dtype=np.float64)
+        else:
+            r_eval = np.array([px[1], py[1], pz[1]], dtype=np.float64)
+            v_eval = np.array([px[0], py[0], pz[0]], dtype=np.float64)
+        return t_eval, r_eval, v_eval
 
-    # Mid-track evaluation time
-    t_mid = float(np.mean(t_arr))
-    r_mid = np.array([np.polyval(poly_x, t_mid), np.polyval(poly_y, t_mid), np.polyval(poly_z, t_mid)])
-    v_mid = np.array([
-        2.0 * poly_x[0] * t_mid + poly_x[1],
-        2.0 * poly_y[0] * t_mid + poly_y[1],
-        2.0 * poly_z[0] * t_mid + poly_z[1],
-    ])
+    early_mask = (t_arr - t_arr[0]) <= 4.5
+    if int(np.sum(early_mask)) < 6:
+        k_e = min(len(t_arr), 10)
+        early_slice = slice(0, k_e)
+    else:
+        early_slice = early_mask
+    t_early, r_early, v_early = _fit_local_state(t_arr[early_slice], x_arr[early_slice], y_arr[early_slice], z_arr[early_slice])
 
-    from ammo_mc.exterior import AtmosphereEnvironment, BatchTrajectoryConfig, integrate_trajectories_batch
+    late_mask = (t_arr[-1] - t_arr) <= 4.5
+    if int(np.sum(late_mask)) < 6:
+        k_l = min(len(t_arr), 10)
+        late_slice = slice(len(t_arr) - k_l, len(t_arr))
+    else:
+        late_slice = late_mask
+    t_late, r_late, v_late = _fit_local_state(t_arr[late_slice], x_arr[late_slice], y_arr[late_slice], z_arr[late_slice])
 
-    atm_env = AtmosphereEnvironment()
-    cfg = BatchTrajectoryConfig(calibre_m=calibre_m, fidelity="L1", dt=0.08)
+    from ammo_mc.data import get_kb
+    from ammo_mc.environment import eb_04_isa_atmosphere
 
-    # 1. Back-integrate backwards in time to find Point of Origin (POO)
-    dt_rev = 0.05
-    t_curr = t_mid
-    pos_curr = r_mid.copy()
-    vel_curr = v_mid.copy()
+    kb = get_kb()
     area = 0.25 * math.pi * (calibre_m**2)
+
+    def ball_accel(pos_v: np.ndarray, vel_v: np.ndarray) -> np.ndarray:
+        alt = max(float(pos_v[2]), 0.0)
+        atm = eb_04_isa_atmosphere(h_m=alt)
+        v_m = math.hypot(float(vel_v[0]), float(vel_v[1]), float(vel_v[2]))
+        mach = v_m / max(float(atm["a_mps"]), 100.0)
+        cd = float(kb.interp_cd(mach, drag_ref="G7"))
+        drag_acc = 0.5 * float(atm["rho_kg_m3"]) * area * cd / max(mass_kg, 1e-3) * v_m
+        return np.array([-drag_acc * vel_v[0], -drag_acc * vel_v[1], -drag_acc * vel_v[2] - 9.80665], dtype=np.float64)
+
+    def rk4_step(pos_v: np.ndarray, vel_v: np.ndarray, dt_step: float) -> tuple[np.ndarray, np.ndarray]:
+        a1 = ball_accel(pos_v, vel_v)
+        p2, v2 = pos_v + 0.5 * dt_step * vel_v, vel_v + 0.5 * dt_step * a1
+        a2 = ball_accel(p2, v2)
+        p3, v3 = pos_v + 0.5 * dt_step * v2, vel_v + 0.5 * dt_step * a2
+        a3 = ball_accel(p3, v3)
+        p4, v4 = pos_v + dt_step * v3, vel_v + dt_step * a3
+        a4 = ball_accel(p4, v4)
+        p_n = pos_v + (dt_step / 6.0) * (vel_v + 2.0 * v2 + 2.0 * v3 + v4)
+        v_n = vel_v + (dt_step / 6.0) * (a1 + 2.0 * a2 + 2.0 * a3 + a4)
+        return p_n, v_n
+
+    # 1. Back-integrate backwards in time from early window with RK4 (dt_rev < 0) to Point of Origin (POO)
+    dt_step = 0.04
+    t_curr = t_early
+    pos_curr = r_early.copy()
+    vel_curr = v_early.copy()
 
     poo_traj_x = [float(pos_curr[0])]
     poo_traj_y = [float(pos_curr[1])]
     poo_traj_z = [float(pos_curr[2])]
 
-    # Backward stepping: r(t - dt) = r(t) - v*dt, v(t - dt) = v(t) - a*dt
     while pos_curr[2] > gun_elev_m and t_curr > -5.0:
-        v_mag = math.hypot(vel_curr[0], vel_curr[1], vel_curr[2])
-        rho = 1.225 * math.exp(-max(pos_curr[2], 0.0) / 9300.0)
-        drag_acc = 0.5 * rho * area * 0.28 / mass_kg * v_mag
-        ax = -drag_acc * vel_curr[0]
-        ay = -drag_acc * vel_curr[1]
-        az = -drag_acc * vel_curr[2] - 9.80665
-
-        pos_curr -= vel_curr * dt_rev
-        vel_curr -= np.array([ax, ay, az]) * dt_rev
-        t_curr -= dt_rev
-
+        pos_prev, vel_prev, t_prev = pos_curr.copy(), vel_curr.copy(), t_curr
+        pos_n, vel_n = rk4_step(pos_curr, vel_curr, -dt_step)
+        t_n = t_curr - dt_step
+        if pos_n[2] <= gun_elev_m and pos_prev[2] > gun_elev_m and (pos_prev[2] - pos_n[2]) > 1e-12:
+            frac = (pos_prev[2] - gun_elev_m) / (pos_prev[2] - pos_n[2])
+            pos_curr = pos_prev + frac * (pos_n - pos_prev)
+            vel_curr = vel_prev + frac * (vel_n - vel_prev)
+            pos_curr[2] = gun_elev_m
+            t_curr = t_prev - frac * dt_step
+            poo_traj_x.append(float(pos_curr[0]))
+            poo_traj_y.append(float(pos_curr[1]))
+            poo_traj_z.append(float(gun_elev_m))
+            break
+        pos_curr, vel_curr, t_curr = pos_n, vel_n, t_n
         poo_traj_x.append(float(pos_curr[0]))
         poo_traj_y.append(float(pos_curr[1]))
         poo_traj_z.append(float(pos_curr[2]))
@@ -217,27 +265,30 @@ def reconstruct_point_of_origin_and_impact(
     launch_time_s = max(0.0, float(t_curr))
     muzzle_v_est = float(np.linalg.norm(vel_curr))
 
-    # 2. Forward-integrate forward in time to find Point of Impact (POI)
-    t_fwd = t_mid
-    pos_fwd = r_mid.copy()
-    vel_fwd = v_mid.copy()
+    # 2. Forward-integrate in time from late window with RK4 to Point of Impact (POI)
+    t_fwd = t_late
+    pos_fwd = r_late.copy()
+    vel_fwd = v_late.copy()
 
     poi_traj_x = [float(pos_fwd[0])]
     poi_traj_y = [float(pos_fwd[1])]
     poi_traj_z = [float(pos_fwd[2])]
 
     while pos_fwd[2] > target_elev_m and t_fwd < 200.0:
-        v_mag = math.hypot(vel_fwd[0], vel_fwd[1], vel_fwd[2])
-        rho = 1.225 * math.exp(-max(pos_fwd[2], 0.0) / 9300.0)
-        drag_acc = 0.5 * rho * area * 0.28 / mass_kg * v_mag
-        ax = -drag_acc * vel_fwd[0]
-        ay = -drag_acc * vel_fwd[1]
-        az = -drag_acc * vel_fwd[2] - 9.80665
-
-        pos_fwd += vel_fwd * dt_rev
-        vel_fwd += np.array([ax, ay, az]) * dt_rev
-        t_fwd += dt_rev
-
+        pos_prev, vel_prev, t_prev = pos_fwd.copy(), vel_fwd.copy(), t_fwd
+        pos_n, vel_n = rk4_step(pos_fwd, vel_fwd, dt_step)
+        t_n = t_fwd + dt_step
+        if pos_n[2] <= target_elev_m and pos_prev[2] > target_elev_m and (pos_prev[2] - pos_n[2]) > 1e-12:
+            frac = (pos_prev[2] - target_elev_m) / (pos_prev[2] - pos_n[2])
+            pos_fwd = pos_prev + frac * (pos_n - pos_prev)
+            vel_fwd = vel_prev + frac * (vel_n - vel_prev)
+            pos_fwd[2] = target_elev_m
+            t_fwd = t_prev + frac * dt_step
+            poi_traj_x.append(float(pos_fwd[0]))
+            poi_traj_y.append(float(pos_fwd[1]))
+            poi_traj_z.append(float(target_elev_m))
+            break
+        pos_fwd, vel_fwd, t_fwd = pos_n, vel_n, t_n
         poi_traj_x.append(float(pos_fwd[0]))
         poi_traj_y.append(float(pos_fwd[1]))
         poi_traj_z.append(float(pos_fwd[2]))
@@ -247,12 +298,24 @@ def reconstruct_point_of_origin_and_impact(
     impact_time_s = float(t_fwd)
     early_warning_time_s = max(0.0, impact_time_s - t_arr[-1])
 
+    # Smooth track bridge between t_early and t_late for full arc visualization & noise estimation
+    deg_cov = min(4, max(1, len(t_arr) - 1))
+    t_rel_all = t_arr - float(np.mean(t_arr))
+    poly_x_cov = np.polyfit(t_rel_all, x_arr, deg_cov)
+    poly_y_cov = np.polyfit(t_rel_all, y_arr, deg_cov)
+    poly_z_cov = np.polyfit(t_rel_all, z_arr, deg_cov)
+    if t_late > t_early + 0.05:
+        t_bridge = np.linspace(t_early, t_late, 30)[1:-1] - float(np.mean(t_arr))
+        mid_x = np.polyval(poly_x_cov, t_bridge).tolist()
+        mid_y = np.polyval(poly_y_cov, t_bridge).tolist()
+        mid_z = np.polyval(poly_z_cov, t_bridge).tolist()
+    else:
+        mid_x, mid_y, mid_z = [], [], []
+
     # 3. Error covariance estimates (POO / POI semi-major and semi-minor axes)
-    # Residual RMSE from polynomial fit
-    residuals_x = x_arr - np.polyval(poly_x, t_arr)
-    residuals_y = y_arr - np.polyval(poly_y, t_arr)
+    residuals_x = x_arr - np.polyval(poly_x_cov, t_rel_all)
+    residuals_y = y_arr - np.polyval(poly_y_cov, t_rel_all)
     rmse = math.hypot(float(np.std(residuals_x)), float(np.std(residuals_y)))
-    # Error propagation multiplier (extrapolation from track arc to ground)
     track_span_s = max(float(t_arr[-1] - t_arr[0]), 0.5)
     extrap_factor = max(1.0, (impact_time_s - launch_time_s) / track_span_s)
 
@@ -279,16 +342,16 @@ def reconstruct_point_of_origin_and_impact(
         "poo_error_ellipse": {
             "semi_major_m": poo_semi_major_m,
             "semi_minor_m": poo_semi_minor_m,
-            "azimuth_deg": round(math.degrees(math.atan2(v_mid[1], v_mid[0])), 1),
+            "azimuth_deg": round(math.degrees(math.atan2(v_early[1], v_early[0])), 1),
         },
         "poi_error_ellipse": {
             "semi_major_m": poi_semi_major_m,
             "semi_minor_m": poi_semi_minor_m,
-            "azimuth_deg": round(math.degrees(math.atan2(v_mid[1], v_mid[0])), 1),
+            "azimuth_deg": round(math.degrees(math.atan2(v_late[1], v_late[0])), 1),
         },
         "reconstructed_trajectory": {
-            "x_m": poo_traj_x[::-1] + poi_traj_x[1:],
-            "y_m": poo_traj_y[::-1] + poi_traj_y[1:],
-            "z_m": poo_traj_z[::-1] + poi_traj_z[1:],
+            "x_m": poo_traj_x[::-1] + mid_x + poi_traj_x[1:],
+            "y_m": poo_traj_y[::-1] + mid_y + poi_traj_y[1:],
+            "z_m": poo_traj_z[::-1] + mid_z + poi_traj_z[1:],
         },
     }

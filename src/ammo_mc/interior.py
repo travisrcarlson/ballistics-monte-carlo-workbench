@@ -217,7 +217,8 @@ def solve_lumped_interior_ballistics(
         phi_s, x_s, v_s = float(state[0]), float(state[1]), float(state[2])
         z_s, _ = ib_02_form_function(phi_s, 0.0, cfg.half_web_m, cfg.kappa, cfg.lam, cfg.mu)
         e_kin = 0.5 * m_eff * (v_s**2)
-        e_loss = cfg.heat_loss_fraction * e_kin
+        e_res = area * cfg.bore_resistance_Pa * max(x_s, 0.0)
+        e_loss = cfg.heat_loss_fraction * e_kin + e_res
         p_mean = float(
             ib_04_resal_energy(
                 z=z_s,
@@ -236,17 +237,27 @@ def solve_lumped_interior_ballistics(
         )
         r_burn = float(ib_01_vieille_burning_law(p_mean, cfg.burn_beta, cfg.burn_alpha))
         _, dphi = ib_02_form_function(phi_s, r_burn, cfg.half_web_m, cfg.kappa, cfg.lam, cfg.mu)
-        eom = ib_05_projectile_eom_lagrange(
-            p_mean, area, cfg.proj_mass_kg, cfg.charge_mass_kg, cfg.bore_resistance_Pa
-        )
-        p_base = float(eom["p_base_Pa"])
-        p_breech = float(eom["p_breech_Pa"])
-        if started or p_base >= cfg.shot_start_Pa:
+        if started:
+            eom = ib_05_projectile_eom_lagrange(
+                p_mean, area, cfg.proj_mass_kg, cfg.charge_mass_kg, cfg.bore_resistance_Pa
+            )
+            p_base = float(eom["p_base_Pa"])
+            p_breech = float(eom["p_breech_Pa"])
             dv = float(eom["dv_dt"])
             dx = v_s
         else:
-            dv = 0.0
-            dx = 0.0
+            # Stationary projectile prior to engraving: uniform chamber gas pressure (p_breech = p_base = p_mean)
+            p_base = p_mean
+            p_breech = p_mean
+            if p_base >= cfg.shot_start_Pa:
+                eom = ib_05_projectile_eom_lagrange(
+                    p_mean, area, cfg.proj_mass_kg, cfg.charge_mass_kg, cfg.bore_resistance_Pa
+                )
+                dv = float(eom["dv_dt"])
+                dx = v_s
+            else:
+                dv = 0.0
+                dx = 0.0
         return np.array([float(dphi), dx, dv], dtype=np.float64), p_mean, p_breech, p_base
 
     y = np.array([phi, x, v], dtype=np.float64)
@@ -347,3 +358,45 @@ def solve_lumped_interior_ballistics(
             "v_gas_L": hist_v_gas_L,
         }
     return out
+
+
+def le_duc_interior_ballistics(
+    charge_mass_kg: float,
+    proj_mass_kg: float,
+    bore_diameter_m: float,
+    barrel_travel_m: float,
+    chamber_volume_m3: float,
+    propellant_force_J_kg: float = 1.05e6,
+    gamma: float = 1.24,
+    characteristic_b_m: float | None = None,
+) -> dict[str, float]:
+    """Closed-form Le Duc hyperbolic interior-ballistics gun scoping model (v = a * x / (b + x)).
+
+    Provides fast first-principles scaling for muzzle velocity, peak base/breech pressure,
+    and position of peak pressure from charge-to-mass ratio, chamber volume, and barrel travel.
+    """
+    m_p = max(float(proj_mass_kg), 1e-4)
+    C = max(float(charge_mass_kg), 1e-5)
+    d = max(float(bore_diameter_m), 1e-4)
+    A = 0.25 * float(np.pi) * (d ** 2)
+    X = max(float(barrel_travel_m), 1e-3)
+    V0 = max(float(chamber_volume_m3), 1e-8)
+
+    # Effective energetic velocity scale from thermodynamic potential of charge + Lagrange inertia factor
+    m_eff = m_p + C / 3.0
+    v_inf = float(np.sqrt(2.0 * C * float(propellant_force_J_kg) / ((gamma - 1.0) * m_eff)))
+    # Classic Le Duc scale b ~ beta_ch * V0 / A (empirical quick-burning chamber length scale)
+    b = float(characteristic_b_m) if characteristic_b_m is not None else max(2.2 * (V0 / A), 0.15 * X)
+    v_muzzle = v_inf * X / (b + X)
+    x_pmax = 0.5 * b
+    # Peak space-mean acceleration occurs at x = b / 2 -> p_base_max = m_p * a_max / A
+    p_base_max = (m_p * (v_inf ** 2) * b / A) * (x_pmax / ((b + x_pmax) ** 3))
+    p_breech_max = p_base_max * (1.0 + C / (2.0 * m_p))
+    return {
+        "v_asymptote_mps": float(v_inf),
+        "le_duc_b_m": float(b),
+        "muzzle_velocity_mps": float(v_muzzle),
+        "x_peak_pressure_m": float(x_pmax),
+        "peak_base_pressure_Pa": float(p_base_max),
+        "peak_breech_pressure_Pa": float(p_breech_max),
+    }

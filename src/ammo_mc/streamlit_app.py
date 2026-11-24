@@ -73,7 +73,9 @@ def main() -> None:
 
     with st.sidebar:
         st.divider()
-        st.caption(f"ammo-mc v{__version__} • 68 Sources • 96 Formulas")
+        from ammo_mc.data import get_kb
+        _kb_meta = get_kb()
+        st.caption(f"ammo-mc v{__version__} • {len(_kb_meta.sources)} Sources • {len(_kb_meta.formulas)} Formulas")
         st.caption(f"🔗 Shareable view: `{build_deeplink_query()}`")
         if active_wb != "📚 Literature & Sources":
             st.button(

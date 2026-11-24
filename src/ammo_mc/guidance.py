@@ -27,9 +27,9 @@ def proportional_navigation_acceleration(
     v_missile: np.ndarray,
     N_prime: float = 3.5,
     a_target: np.ndarray | None = None,
-    law: Literal["TPN", "APN", "PP"] = "TPN",
+    law: Literal["TPN", "APN", "PP", "ZEM"] = "TPN",
 ) -> tuple[np.ndarray, dict[str, float]]:
-    """Compute commanded lateral acceleration vector (m/s^2) via TPN, APN, or Pure Pursuit.
+    """Compute commanded lateral acceleration vector (m/s^2) via TPN, APN, ZEM, or Pure Pursuit.
 
     Args:
         r_target: 3D target position [x, y, z] in meters.
@@ -37,8 +37,8 @@ def proportional_navigation_acceleration(
         r_missile: 3D missile position [x, y, z] in meters.
         v_missile: 3D missile velocity [vx, vy, vz] in m/s.
         N_prime: Effective navigation ratio (typically 3.0 to 5.0).
-        a_target: Optional 3D target acceleration for Augmented PN (APN).
-        law: Guidance law ('TPN', 'APN', 'PP').
+        a_target: Optional 3D target acceleration for Augmented PN (APN) / ZEM.
+        law: Guidance law ('TPN', 'APN', 'PP', 'ZEM').
 
     Returns:
         (a_cmd, telemetry_dict) where a_cmd is 3D acceleration vector (m/s^2).
@@ -82,6 +82,15 @@ def proportional_navigation_acceleration(
         a_cmd = (v_m_mag / tau_pp) * (R_hat - v_m_hat)
         return a_cmd, telemetry
 
+    if law == "ZEM":
+        # Optimal Zero-Effort-Miss (ZEM) guidance law with optional target acceleration
+        t_go = max(dist / max(v_closing, 10.0), 0.05)
+        a_t_arr = np.asarray(a_target, dtype=np.float64) if a_target is not None else np.zeros(3, dtype=np.float64)
+        zem = R_vec + V_rel * t_go + 0.5 * a_t_arr * (t_go ** 2)
+        zem_perp = zem - np.dot(zem, R_hat) * R_hat
+        a_cmd_zem = (float(N_prime) / (t_go ** 2)) * zem_perp
+        return a_cmd_zem, telemetry
+
     # True Proportional Navigation (TPN): a_cmd = N' * V_c * (Omega x v_m_hat)
     a_cmd_tpn = float(N_prime) * max(v_closing, 0.0) * np.cross(omega_los, v_m_hat)
 
@@ -106,7 +115,7 @@ def simulate_guided_trajectory(
     target_accel_type: Literal["stationary", "constant_velocity", "evasive_weave"] = "constant_velocity",
     target_evasion_g: float = 2.0,
     target_evasion_freq_hz: float = 0.25,
-    guidance_law: Literal["TPN", "APN", "PP"] = "TPN",
+    guidance_law: Literal["TPN", "APN", "PP", "ZEM"] = "TPN",
     N_prime: float = 3.5,
     g_limit: float = 18.0,
     tau_actuator_s: float = 0.08,
@@ -233,13 +242,28 @@ def simulate_guided_trajectory(
             V_rel = v_t - v_m
             v_closing = -float(np.dot(R_vec, V_rel)) / max(dist, 1e-6)
 
-        # Actuator lag: d(a_act)/dt = (a_cmd - a_act) / tau
+        # Actuator lag in missile body-normal frame (strictly orthogonal to v_hat, avoiding spurious axial thrust)
         tau = max(tau_actuator_s, 1e-4)
         a_act += (dt_s / tau) * (a_cmd - a_act)
-        # Re-enforce saturation on achieved acceleration
+        a_act = a_act - np.dot(a_act, v_hat) * v_hat
+        # Re-enforce saturation on achieved lateral acceleration
         act_mag = float(np.linalg.norm(a_act))
         if act_mag > (g_limit * 9.80665):
             a_act *= (g_limit * 9.80665) / act_mag
+
+        # Sub-step Closest Point of Approach (CPA) check against previous step
+        if t_hist:
+            dr0 = np.asarray(r_t_hist[-1], dtype=np.float64) - np.asarray(r_m_hist[-1], dtype=np.float64)
+            dr1 = R_vec
+            dd = dr1 - dr0
+            dd_sq = float(np.dot(dd, dd))
+            if dd_sq > 1e-12:
+                s_cpa = float(np.clip(-np.dot(dr0, dd) / dd_sq, 0.0, 1.0))
+                sub_dist = float(np.linalg.norm(dr0 + s_cpa * dd))
+                if sub_dist < min_dist:
+                    min_dist = sub_dist
+        if dist < min_dist:
+            min_dist = dist
 
         # Record history
         t_hist.append(t)
@@ -253,7 +277,7 @@ def simulate_guided_trajectory(
         a_act_g_hist.append(float(np.linalg.norm(a_act)) / 9.80665)
 
         # Intercept termination checks
-        if dist <= lethal_radius_m:
+        if min_dist <= lethal_radius_m:
             intercept_status = "DIRECT_HIT"
             break
         if v_closing < 0.0 and t > 0.5:
@@ -299,8 +323,8 @@ def simulate_guided_trajectory(
 
         t += dt_s
 
-    # Metrics
-    final_dist = dist_hist[-1] if dist_hist else min_dist
+    # Metrics (miss_distance_m is true closest-point-of-approach distance)
+    final_dist = float(min_dist if math.isfinite(min_dist) else (dist_hist[-1] if dist_hist else 0.0))
     peak_g = max(a_act_g_hist) if a_act_g_hist else 0.0
     mean_g = float(np.mean(a_act_g_hist)) if a_act_g_hist else 0.0
 
@@ -337,7 +361,7 @@ def run_guidance_monte_carlo(
     elev_deg: float = 22.0,
     target_pos_m: tuple[float, float, float] = (3500.0, 50.0, 0.0),
     target_vel_mps: tuple[float, float, float] = (0.0, 8.0, 0.0),
-    guidance_law: Literal["TPN", "APN", "PP"] = "TPN",
+    guidance_law: Literal["TPN", "APN", "PP", "ZEM"] = "TPN",
     N_prime: float = 3.5,
     g_limit: float = 18.0,
     seeker_noise_std_rad: float = 0.0004,

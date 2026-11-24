@@ -236,6 +236,7 @@ def tf_10_aastp1_stack_density(
     N_total: int = 1,
     storage_mode: str = "open",
     E_crit_J: float = 79.0,
+    mean_frag_mass_kg: float | None = None,
 ) -> dict[str, Any]:
     """TF-10: AASTP-1 critical hazardous fragment density from munition stacks (IATG 01.80 Table 28)."""
     r_arr = np.maximum(np.asarray(R_m, dtype=np.float64), 1.0)
@@ -247,7 +248,15 @@ def tf_10_aastp1_stack_density(
     m_cr_high = (2.0 * E_crit_J / (9.81 * max(L_decay_m, 1.0))) ** 0.75
     m_f = np.minimum(m_cr_low, m_cr_high)
 
-    q_f = (q0_eff / (r_arr**2)) * np.exp(-np.sqrt(2.0 * m_f / max(M0_kg_per_item, 1e-6)))
+    # AASTP-1 / IATG Table 28 Mott tail uses mean fragment mass (2 * M_K^2 = M_case / N_t), NOT whole casing mass
+    if mean_frag_mass_kg is not None and mean_frag_mass_kg > 0.0:
+        m_avg = float(mean_frag_mass_kg)
+    elif M0_kg_per_item > 0.5 and N_t_per_item > 10.0:
+        m_avg = float(M0_kg_per_item) / float(N_t_per_item)
+    else:
+        m_avg = max(float(M0_kg_per_item), 1e-6)
+
+    q_f = (q0_eff / (r_arr**2)) * np.exp(-np.sqrt(2.0 * m_f / max(m_avg, 1e-6)))
     exceeds_crit = q_f >= (1.0 / 56.0)
     if np.ndim(R_m) == 0:
         return {"q_f_m2": float(q_f), "exceeds_1_per_56m2": bool(exceeds_crit), "N_effective": float(n_eff)}

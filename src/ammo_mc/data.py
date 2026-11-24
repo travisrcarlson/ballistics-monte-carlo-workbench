@@ -21,6 +21,13 @@ EXPLOSIVE_ALIASES: dict[str, str] = {
     "comp b": "Composition B",
     "comp-b": "Composition B",
     "composition b": "Composition B",
+    "comp a3": "Composition A-3",
+    "comp a-3": "Composition A-3",
+    "composition a3": "Composition A-3",
+    "composition a-3": "Composition A-3",
+    "pbxn-109": "PBXN-109",
+    "pbxn 109": "PBXN-109",
+    "pbxn109": "PBXN-109",
     "c4": "Composition C4",
     "c-4": "Composition C4",
     "comp c4": "Composition C4",
@@ -172,6 +179,9 @@ class KnowledgeBase:
             gurney_mps = 2438.0
             det_vel_mps = 6900.0
             density_g_cm3 = 1.61
+            found_explosive = False
+        else:
+            found_explosive = True
 
         mott_b = None
         for row in self.explosives["mott_constants"]:
@@ -190,8 +200,8 @@ class KnowledgeBase:
             "det_vel_mps": float(det_vel_mps),
             "density_g_cm3": float(density_g_cm3),
             "mott_b": float(mott_b),
-            "source_id": "S01;S05;S11",
-            "verification_status": "VERIFIED-SRC",
+            "source_id": "S01;S05;S11;S79",
+            "verification_status": "VERIFIED-SRC" if found_explosive else "UNVERIFIED-FALLBACK",
         }
 
     def interp_cd(
@@ -221,8 +231,9 @@ class KnowledgeBase:
             idx = np.clip(idx, 0, len(self.frag_cd) - 1)
             res = self.frag_cd[idx]
         elif ref_up == "SPHERE":
-            # Smooth subsonic/supersonic sphere approximation (~0.47 subsonic, ~0.92 supersonic)
-            res = np.where(m_arr < 0.8, 0.47, np.where(m_arr < 1.2, 0.47 + (m_arr - 0.8) * 1.125, 0.92))
+            from ammo_mc.aero_sphere import sphere_drag_compressible_array
+
+            res = sphere_drag_compressible_array(re=1.0e5, mach=m_arr)
         else:
             raise ValueError(f"Unknown drag_ref '{drag_ref}'. Expected G1, G7, FRAGMENT, SPHERE, or custom.")
 

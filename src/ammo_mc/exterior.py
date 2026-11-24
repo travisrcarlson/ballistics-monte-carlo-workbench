@@ -415,9 +415,13 @@ def eb_16_fragment_trajectory(
         cds_cur: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
         speed = np.hypot(u_cur, v_cur)
-        # Local ISA density & sound speed
+        # Local ISA density & sound speed (including stratospheric exponential decay above 11 km)
         t_k = np.where(z_cur <= 11000.0, 288.15 - 0.0065 * np.maximum(z_cur, 0.0), 216.65)
-        rho_a = rho_air_sl * np.power(np.maximum(t_k, 150.0) / 288.15, 4.25588)
+        rho_a = np.where(
+            z_cur <= 11000.0,
+            rho_air_sl * np.power(np.maximum(t_k, 150.0) / 288.15, 4.25588),
+            rho_air_sl * ((216.65 / 288.15) ** 4.25588) * np.exp(-0.000157688 * np.maximum(z_cur - 11000.0, 0.0)),
+        )
         a_snd = np.sqrt(1.4 * 287.05287 * np.maximum(t_k, 150.0))
         mach = speed / a_snd
         cd_f = kb.interp_cd(mach, drag_ref="FRAGMENT") * cds_cur
@@ -533,6 +537,7 @@ class BatchTrajectoryConfig:
     lat_rad: float = 0.0
     az_rad: float = 0.0
     include_coriolis: bool = True
+    include_earth_curvature: bool = False
     vacuum: bool = False
     # Base bleed / tracer (EB-12)
     base_bleed_burn_time_s: float = 0.0
@@ -694,7 +699,13 @@ def integrate_trajectories_batch(
 
         if is_mpm:
             g_vec = np.zeros_like(vel)
-            g_vec[:, 2] = -G0
+            if cfg.include_earth_curvature:
+                r_e_curv = 6371000.0
+                g_local = G0 * ((r_e_curv / (r_e_curv + np.maximum(alt, 0.0))) ** 2)
+                a_centrif = (vel[:, 0] ** 2 + vel[:, 1] ** 2) / r_e_curv
+                g_vec[:, 2] = -g_local + a_centrif
+            else:
+                g_vec[:, 2] = -G0
             if cfg.include_coriolis:
                 vx_c, vy_c, vz_c = vel[:, 0], vel[:, 1], vel[:, 2]
                 a_cor = np.empty_like(vel)
@@ -739,20 +750,24 @@ def integrate_trajectories_batch(
             k_drag_v = (0.5 * area_ref) * (rho * i_sub * cd_ref / m_sub_eff) * v_rel_mag
             dy[:, 3] = -k_drag_v * vr0
             dy[:, 4] = -k_drag_v * vr1
-            dy[:, 5] = -k_drag_v * vr2 - G0
+            if cfg.include_earth_curvature:
+                r_e_curv = 6371000.0
+                g_local = G0 * ((r_e_curv / (r_e_curv + np.maximum(alt, 0.0))) ** 2)
+                a_centrif = (vel[:, 0] ** 2 + vel[:, 1] ** 2) / r_e_curv
+                dy[:, 5] = -k_drag_v * vr2 - g_local + a_centrif
+            else:
+                dy[:, 5] = -k_drag_v * vr2 - G0
             if cfg.include_coriolis:
                 vx_c, vy_c, vz_c = vel[:, 0], vel[:, 1], vel[:, 2]
                 dy[:, 3] -= 2.0 * (oy * vz_c - oz * vy_c)
                 dy[:, 4] -= 2.0 * (oz * vx_c - ox * vz_c)
                 dy[:, 5] -= 2.0 * (ox * vy_c - oy * vx_c)
 
-        # Optional rocket thrust along velocity unit vector
+        # Optional rocket thrust aligned along air-relative flight vector vr / |vr|
         if has_rocket:
             thrust_on = t_cur <= cfg.rocket_burn_time_s
             if np.any(thrust_on):
-                vx_t, vy_t, vz_t = vel[:, 0], vel[:, 1], vel[:, 2]
-                v_mag_abs = np.maximum(np.sqrt(vx_t * vx_t + vy_t * vy_t + vz_t * vz_t), 1e-6)[:, None]
-                u_hat = vel / v_mag_abs
+                u_hat = vr / v_rel_mag[:, None]
                 thrust_acc = np.where(
                     np.asarray(thrust_on)[..., None] if np.ndim(thrust_on) > 0 else thrust_on,
                     (cfg.rocket_mdot_kg_s * cfg.rocket_ve_mps / m_sub_eff)[:, None] * u_hat,
@@ -983,6 +998,7 @@ def solve_quadrant_elevation(
     cfg: BatchTrajectoryConfig,
     high_angle: bool = False,
     z0_m: float = 0.0,
+    form_factor: float = 1.0,
 ) -> float:
     """Solve for launch Quadrant Elevation (radians) that achieves `target_range_m`."""
     # Sample 28 candidate elevations to bracket peak range cleanly
@@ -1003,6 +1019,7 @@ def solve_quadrant_elevation(
         lat_rad=cfg.lat_rad,
         az_rad=cfg.az_rad,
         include_coriolis=cfg.include_coriolis,
+        include_earth_curvature=cfg.include_earth_curvature,
         vacuum=cfg.vacuum,
         base_bleed_burn_time_s=cfg.base_bleed_burn_time_s,
         base_bleed_dcd=cfg.base_bleed_dcd,
@@ -1013,7 +1030,7 @@ def solve_quadrant_elevation(
         max_time_s=cfg.max_time_s,
         integrator="RK4",
     )
-    res = integrate_trajectories_batch(states, np.full(len(thetas), mass_kg), np.ones(len(thetas)), env, fast_cfg)
+    res = integrate_trajectories_batch(states, np.full(len(thetas), mass_kg), np.full(len(thetas), float(form_factor)), env, fast_cfg)
     ranges = res["range_m"]
     idx_peak = int(np.argmax(ranges))
     if target_range_m >= ranges[idx_peak]:
@@ -1032,12 +1049,13 @@ def solve_quadrant_elevation(
     # Two secant/Newton refinement iterations at exact dt
     th0 = qe_est
     th1 = qe_est + (0.002 if not high_angle else -0.002)
+    ff_pair = np.full(2, float(form_factor), dtype=np.float64)
     for _ in range(4):
         st_pair = np.zeros((2, 6), dtype=np.float64)
         st_pair[:, 2] = z0_m
         st_pair[0, 3], st_pair[0, 5] = mv_mps * np.cos(th0), mv_mps * np.sin(th0)
         st_pair[1, 3], st_pair[1, 5] = mv_mps * np.cos(th1), mv_mps * np.sin(th1)
-        r_pair = integrate_trajectories_batch(st_pair, np.full(2, mass_kg), np.ones(2), env, cfg)["range_m"]
+        r_pair = integrate_trajectories_batch(st_pair, np.full(2, mass_kg), ff_pair, env, cfg)["range_m"]
         err1 = float(r_pair[1] - target_range_m)
         if abs(err1) < 0.25:
             return float(th1)
@@ -1284,3 +1302,44 @@ def generate_ballistic_firing_table(
             }
         )
     return rows
+
+
+def compute_aerodynamic_jump_mrad(
+    cl_alpha: float,
+    cm_alpha: float,
+    ix_kg_m2: float,
+    mass_kg: float,
+    calibre_m: float,
+    twist_cal_per_turn: float,
+    crosswind_mps: float,
+    v0_mps: float,
+) -> dict[str, float]:
+    """Compute McCoy / Pejsa crosswind aerodynamic jump (vertical & lateral trajectory jump at muzzle).
+
+    In right-hand rifling (spin +p), a crosswind causes an initial crossflow yaw alpha_w = -w_cross / V0,
+    whose gyroscopic precession yields a transient vertical jump Delta_EL ~ (I_x * p * C_Lalpha / (m * d * V0 * ...)).
+    Per McCoy (Ch. 7) & Pejsa vertical aerodynamic jump:
+      jump_vert_rad = (I_x * p0 / (m * d^2 * V0)) * (C_Lalpha / C_Malpha) * (w_cross / V0) * ...
+    More directly from linear epicyclic impulse integration (McCoy Eq. 7.36 / Carlucci Ch. 8):
+      Delta_v_z / V0 = -(2 * I_x * p0 * C_Lalpha) / (pi * rho * ... ) ->Wait: rho cancels cleanly!
+      Delta_EL_rad = (I_x * p0 * C_Lalpha / (m * V0 * d * C_Malpha)) * (w_cross / V0)
+    Wait: check dimensions!
+      [I_x * p0 / (m * d * V0)] = [kg*m^2 * rad/s / (kg * m * m/s)] = dimensionless!
+      * (w_cross / V0) [dimensionless] * (C_Lalpha / C_Malpha) [dimensionless] -> radians!
+    """
+    v0 = max(float(v0_mps), 1.0)
+    d = max(float(calibre_m), 1e-4)
+    m = max(float(mass_kg), 1e-4)
+    twist = float(twist_cal_per_turn)
+    p0 = (2.0 * float(np.pi) * v0) / (twist * d) if twist > 1e-4 else 0.0
+    muzzle_alpha_w_rad = float(crosswind_mps) / v0
+    coeff = (float(ix_kg_m2) * p0) / (m * d * v0)
+    cl_cm = float(cl_alpha) / max(abs(float(cm_alpha)), 1e-4)
+    # Right-hand spin (+p) + left-to-right crosswind (+w_cross_right) pitches nose slightly UP -> +vert jump
+    vert_jump_rad = coeff * cl_cm * muzzle_alpha_w_rad
+    vert_jump_mrad = vert_jump_rad * 1000.0
+    return {
+        "muzzle_crosswind_yaw_deg": float(np.degrees(muzzle_alpha_w_rad)),
+        "vertical_aerodynamic_jump_mrad": float(vert_jump_mrad),
+        "vertical_aerodynamic_jump_moa": float(vert_jump_mrad * 3.43775),
+    }

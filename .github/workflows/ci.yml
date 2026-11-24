@@ -26,7 +26,7 @@ jobs:
 
       - name: Syntax check entrypoints
         run: |
-          python -m py_compile streamlit_app.py src/ammo_mc/streamlit_app.py src/ammo_mc/cuas_mission.py src/ammo_mc/cuas_analytics.py src/ammo_mc/cuas_raid.py src/ammo_mc/terrain_dem.py src/ammo_mc/calibration.py src/ammo_mc/literature.py src/ammo_mc/scenario_library.py src/ammo_mc/briefing_export.py src/ammo_mc/vis_cuas_mission.py src/ammo_mc/vis_cuas_analytics.py src/ammo_mc/vis_cuas_raid.py src/ammo_mc/vis_calibration.py src/ammo_mc/small_arms.py src/ammo_mc/vis_3d.py src/ammo_mc/api.py src/ammo_mc/cli.py src/ammo_mc/ui/*.py src/ammo_mc/small_arms_pkg/*.py src/ammo_mc/vis_3d_pkg/*.py
+          python -m py_compile streamlit_app.py src/ammo_mc/streamlit_app.py src/ammo_mc/aero_sphere.py src/ammo_mc/terminal_concrete.py src/ammo_mc/validation.py src/ammo_mc/cuas_mission.py src/ammo_mc/cuas_analytics.py src/ammo_mc/cuas_raid.py src/ammo_mc/terrain_dem.py src/ammo_mc/calibration.py src/ammo_mc/literature.py src/ammo_mc/scenario_library.py src/ammo_mc/briefing_export.py src/ammo_mc/vis_cuas_mission.py src/ammo_mc/vis_cuas_analytics.py src/ammo_mc/vis_cuas_raid.py src/ammo_mc/vis_calibration.py src/ammo_mc/small_arms.py src/ammo_mc/vis_3d.py src/ammo_mc/api.py src/ammo_mc/cli.py src/ammo_mc/ui/*.py src/ammo_mc/small_arms_pkg/*.py src/ammo_mc/vis_3d_pkg/*.py
 
       - name: Run pytest suite
         run: pytest

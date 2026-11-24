@@ -416,6 +416,126 @@
       "rho_ratio": 0.0718653829949817,
       "source_id": "S16",
       "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "altitude_m": 22000.0,
+      "T_K": 218.65,
+      "p_Pa": 3999.79977953,
+      "rho_kg_m3": 0.0637274993,
+      "a_mps": 296.42832867,
+      "rho_ratio": 0.0520224477,
+      "source_id": "S16",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "altitude_m": 24000.0,
+      "T_K": 220.65,
+      "p_Pa": 2930.49853166,
+      "rho_kg_m3": 0.0462674626,
+      "a_mps": 297.78096325,
+      "rho_ratio": 0.0377693567,
+      "source_id": "S16",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "altitude_m": 26000.0,
+      "T_K": 222.65,
+      "p_Pa": 2153.09796443,
+      "rho_kg_m3": 0.0336883079,
+      "a_mps": 299.12748136,
+      "rho_ratio": 0.0275006591,
+      "source_id": "S16",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "altitude_m": 28000.0,
+      "T_K": 224.65,
+      "p_Pa": 1586.29259189,
+      "rho_kg_m3": 0.0245988599,
+      "a_mps": 300.46796525,
+      "rho_ratio": 0.0200807017,
+      "source_id": "S16",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "altitude_m": 30000.0,
+      "T_K": 226.65,
+      "p_Pa": 1171.86828835,
+      "rho_kg_m3": 0.0180119688,
+      "a_mps": 301.80249532,
+      "rho_ratio": 0.0147036478,
+      "source_id": "S16",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "altitude_m": 32000.0,
+      "T_K": 228.65,
+      "p_Pa": 868.01982592,
+      "rho_kg_m3": 0.0132250263,
+      "a_mps": 303.13115019,
+      "rho_ratio": 0.0107959397,
+      "source_id": "S16",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "altitude_m": 35000.0,
+      "T_K": 237.05,
+      "p_Pa": 558.92409778,
+      "rho_kg_m3": 0.0082139297,
+      "a_mps": 308.64904984,
+      "rho_ratio": 0.0067052486,
+      "source_id": "S16",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "altitude_m": 38000.0,
+      "T_K": 245.45,
+      "p_Pa": 365.45500393,
+      "rho_kg_m3": 0.0051869132,
+      "a_mps": 314.07002041,
+      "rho_ratio": 0.0042342148,
+      "source_id": "S16",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "altitude_m": 41000.0,
+      "T_K": 253.85,
+      "p_Pa": 242.39558814,
+      "rho_kg_m3": 0.0033264856,
+      "a_mps": 319.39899729,
+      "rho_ratio": 0.0027154984,
+      "source_id": "S16",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "altitude_m": 44000.0,
+      "T_K": 262.25,
+      "p_Pa": 162.93742278,
+      "rho_kg_m3": 0.0021644295,
+      "a_mps": 324.64051075,
+      "rho_ratio": 0.0017668812,
+      "source_id": "S16",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "altitude_m": 47000.0,
+      "T_K": 270.65,
+      "p_Pa": 110.90629074,
+      "rho_kg_m3": 0.0014275333,
+      "a_mps": 329.798731,
+      "rho_ratio": 0.0011653333,
+      "source_id": "S16",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "altitude_m": 50000.0,
+      "T_K": 270.65,
+      "p_Pa": 75.9447372,
+      "rho_kg_m3": 0.0009775247,
+      "a_mps": 329.798731,
+      "rho_ratio": 0.0007979794,
+      "source_id": "S16",
+      "verification_status": "VERIFIED-SRC"
     }
   ]
 }

@@ -138,6 +138,9 @@ def simulate_cluster_dispenser_footprint(
         traj_sub: list[list[float]] = [r_sub.tolist()]
 
         while r_sub[2] > 0.0 and t_sub < 120.0:
+            r_prev = r_sub.copy()
+            v_prev = v_sub.copy()
+            t_prev = t_sub
             cur_z = max(0.0, float(r_sub[2]))
             cur_rho = float(eb_04_isa_atmosphere(h_m=cur_z)["rho_kg_m3"])
 
@@ -165,6 +168,14 @@ def simulate_cluster_dispenser_footprint(
             v_sub += a_sub * dt
             t_sub += dt
 
+            if r_sub[2] <= 0.0 and r_prev[2] > 0.0 and (r_prev[2] - r_sub[2]) > 1e-12:
+                frac = float(r_prev[2] / (r_prev[2] - r_sub[2]))
+                r_sub = r_prev + frac * (r_sub - r_prev)
+                v_sub = v_prev + frac * (v_sub - v_prev)
+                t_sub = float(t_prev + frac * dt)
+                r_sub[2] = 0.0
+                break
+
             # Sample every 0.25 s for visualization
             if int(t_sub / dt) % 5 == 0:
                 traj_sub.append(r_sub.tolist())
@@ -188,17 +199,22 @@ def simulate_cluster_dispenser_footprint(
         )
         p_graze_func = float(graze_eval["p_function"])
 
-        # Stochastic Fuze draw
-        primary_functions = (rng.random() > p_dud_primary) and (rng.random() < p_graze_func)
-        if primary_functions:
-            status = "DETONATED"
+        # Common-cause correlated FZ-07 UXO model: (1 - beta)*p_d*p_sd + beta*min(p_d, p_sd)
+        p_prim_eff = 1.0 - (1.0 - float(p_dud_primary)) * p_graze_func
+        if rng.random() < float(common_cause_beta):
+            u_shared = rng.random()
+            primary_fails = u_shared < p_prim_eff
+            sd_fails = u_shared < float(p_fail_self_destruct)
         else:
-            # Primary failed -> check backup self-destruct / neutralization
-            sd_fails = (rng.random() < p_fail_self_destruct) or (rng.random() < common_cause_beta)
-            if sd_fails:
-                status = "UNEXPLODED_ORDNANCE_UXO"
-            else:
-                status = "SELF_DESTRUCT_NEUTRALIZED"
+            primary_fails = rng.random() < p_prim_eff
+            sd_fails = rng.random() < float(p_fail_self_destruct)
+
+        if not primary_fails:
+            status = "DETONATED"
+        elif sd_fails:
+            status = "UNEXPLODED_ORDNANCE_UXO"
+        else:
+            status = "SELF_DESTRUCT_NEUTRALIZED"
 
         impact_x.append(float(r_sub[0]))
         impact_y.append(float(r_sub[1]))
@@ -216,17 +232,19 @@ def simulate_cluster_dispenser_footprint(
     dx = arr_x - mean_x
     dy = arr_y - mean_y
 
-    # Principal dispersion axes (PCA)
-    cov_mat = np.cov(dx, dy)
-    eig_vals, eig_vecs = np.linalg.eigh(cov_mat)
-    # 2-sigma footprint semi-axes (covers ~86% of bivariate normal impacts)
-    semi_major_m = float(2.0 * math.sqrt(max(eig_vals[1], 1.0)))
-    semi_minor_m = float(2.0 * math.sqrt(max(eig_vals[0], 1.0)))
+    # Principal dispersion axes (PCA) — guard degenerate single-submunition case
+    if len(dx) < 2:
+        semi_major_m = 5.0
+        semi_minor_m = 5.0
+        rot_angle_deg = 0.0
+    else:
+        cov_mat = np.cov(dx, dy)
+        eig_vals, eig_vecs = np.linalg.eigh(cov_mat)
+        semi_major_m = float(2.0 * math.sqrt(max(eig_vals[1], 1.0)))
+        semi_minor_m = float(2.0 * math.sqrt(max(eig_vals[0], 1.0)))
+        rot_angle_deg = math.degrees(math.atan2(eig_vecs[1, 1], eig_vecs[0, 1]))
     footprint_area_m2 = math.pi * semi_major_m * semi_minor_m
     footprint_area_ha = footprint_area_m2 / 10000.0
-
-    # Footprint ellipse orientation angle
-    rot_angle_deg = math.degrees(math.atan2(eig_vecs[1, 1], eig_vecs[0, 1]))
 
     # UXO counts & densities
     n_detonated = status_list.count("DETONATED")

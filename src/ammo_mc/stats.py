@@ -270,6 +270,42 @@ def mc_10_sensitivity_indices(
     return results
 
 
+def compute_sobol_saltelli_indices(
+    y_a: np.ndarray,
+    y_b: np.ndarray,
+    y_ab_list: list[np.ndarray] | np.ndarray,
+    names: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Saltelli (2010) variance-based first-order S_i and total-order S_Ti Sobol sensitivity indices.
+
+    Given model outputs from base matrices A, B and Saltelli hybrid matrices AB^(i)
+    (where column i comes from B and remaining columns from A):
+      S_i  = mean(Y_B * (Y_AB^(i) - Y_A)) / Var(Y)
+      S_Ti = 0.5 * mean((Y_A - Y_AB^(i))^2) / Var(Y)     [Jansen 1999 / Saltelli 2010 Eq. b & f]
+    """
+    ya = np.asarray(y_a, dtype=np.float64).ravel()
+    yb = np.asarray(y_b, dtype=np.float64).ravel()
+    y_ab = [np.asarray(arr, dtype=np.float64).ravel() for arr in y_ab_list]
+    k = len(y_ab)
+    lbls = names if (names is not None and len(names) == k) else [f"x_{i}" for i in range(k)]
+    var_y = float(np.var(np.concatenate([ya, yb]), ddof=1)) if (ya.size + yb.size) > 2 else 0.0
+    out: list[dict[str, Any]] = []
+    for i in range(k):
+        yabi = y_ab[i]
+        if var_y <= 1e-18:
+            s1, st = 0.0, 0.0
+        else:
+            s1 = float(np.mean(yb * (yabi - ya)) / var_y)
+            st = float(0.5 * np.mean((ya - yabi) ** 2) / var_y)
+        out.append({
+            "parameter": lbls[i],
+            "sobol_s1": float(np.clip(s1, -0.05, 1.05)),
+            "sobol_st": float(np.clip(st, 0.0, 1.05)),
+        })
+    out.sort(key=lambda r: r["sobol_st"], reverse=True)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Full Distributions Sheet Sampler Library (16 distributions)
 # ---------------------------------------------------------------------------
@@ -361,9 +397,13 @@ def sample_distribution(
         mu_x, mu_y = float(params.get("mu_x", 0.0)), float(params.get("mu_y", 0.0))
         sx, sy = float(params["sx"]), float(params["sy"])
         rho = float(params.get("rho", 0.0))
-        n_pts = size if isinstance(size, int) else int(np.prod(size))
-        z1 = gen.normal(size=n_pts)
-        z2 = gen.normal(size=n_pts)
+        if u_c is not None and np.asarray(u_c).ndim >= 2 and np.asarray(u_c).shape[-1] >= 2:
+            z1 = sp_stats.norm.ppf(u_c[..., 0])
+            z2 = sp_stats.norm.ppf(u_c[..., 1])
+        else:
+            n_pts = size if isinstance(size, int) else int(np.prod(size))
+            z1 = gen.normal(size=n_pts)
+            z2 = gen.normal(size=n_pts)
         x = mu_x + sx * z1
         y = mu_y + sy * (rho * z1 + np.sqrt(max(0.0, 1.0 - rho * rho)) * z2)
         return np.column_stack([x, y])
@@ -394,12 +434,13 @@ def sample_distribution(
     if dt in ("empirical", "kde"):
         data = np.asarray(params["data"], dtype=np.float64)
         bw = float(params.get("bandwidth", 0.0))
-        idx = (
-            np.floor(u_c * len(data)).astype(int).clip(0, len(data) - 1)
-            if u_c is not None
-            else gen.integers(0, len(data), size=size)
-        )
-        res = data[idx]
+        if u_c is not None:
+            data_src = np.sort(data)
+            idx = np.floor(u_c * len(data_src)).astype(int).clip(0, len(data_src) - 1)
+        else:
+            data_src = data
+            idx = gen.integers(0, len(data_src), size=size)
+        res = data_src[idx]
         if bw > 0.0:
             res = res + gen.normal(0.0, bw, size=res.shape)
         return res

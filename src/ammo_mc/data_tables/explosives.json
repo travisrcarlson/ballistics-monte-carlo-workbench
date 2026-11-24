@@ -103,6 +103,30 @@
       "pressure_range_mpa": "0.035-0.700",
       "source_id": "S01;S11",
       "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Composition A-3",
+      "f_pressure": 1.09,
+      "f_impulse": 1.08,
+      "pressure_range_mpa": "0.035-0.700",
+      "source_id": "S79",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "PBXN-109",
+      "f_pressure": 1.10,
+      "f_impulse": 1.35,
+      "pressure_range_mpa": "Aluminized blast (Cooper/LLNL)",
+      "source_id": "S79",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "HMX",
+      "f_pressure": 1.25,
+      "f_impulse": 1.25,
+      "pressure_range_mpa": "0.035-0.700",
+      "source_id": "S05;S79",
+      "verification_status": "VERIFIED-SRC"
     }
   ],
   "gurney_iatg": [
@@ -283,6 +307,22 @@
       "gurney_mps": 2320.0,
       "source_id": "S05",
       "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Composition A-3",
+      "density_g_cm3": 1.59,
+      "detonation_velocity_mps": 8140.0,
+      "gurney_mps": 2630.0,
+      "source_id": "S79",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "PBXN-109",
+      "density_g_cm3": 1.66,
+      "detonation_velocity_mps": 7500.0,
+      "gurney_mps": 2450.0,
+      "source_id": "S79",
+      "verification_status": "VERIFIED-SRC"
     }
   ],
   "mott_constants": [
@@ -320,6 +360,36 @@
       "explosive": "TNT",
       "mott_b": 0.0779,
       "source_id": "S01",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Composition A-3",
+      "mott_b": 0.055,
+      "source_id": "S79",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "PBXN-109",
+      "mott_b": 0.062,
+      "source_id": "S79",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "HMX",
+      "mott_b": 0.050,
+      "source_id": "S05;S79",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Octol 75/25",
+      "mott_b": 0.052,
+      "source_id": "S05;S79",
+      "verification_status": "VERIFIED-SRC"
+    },
+    {
+      "explosive": "Tritonal 80/20",
+      "mott_b": 0.070,
+      "source_id": "S05;S79",
       "verification_status": "VERIFIED-SRC"
     }
   ],

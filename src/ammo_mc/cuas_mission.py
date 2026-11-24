@@ -556,7 +556,7 @@ def _segment_crosses_obstacle_3d(
                     return False
                 if r < t1:
                     t1 = r
-    return t0 <= t1 and 0.02 < t1 < 0.99
+    return t0 < t1 and t0 < 0.99 and t1 > 0.01
 
 
 def _ray_hits_circle_2d(
@@ -920,8 +920,8 @@ def generate_3d_intercept_replay_data(
     for b_idx, b in enumerate(barrels):
         t_fire = float(fire_times_s[b_idx])
         y0, z0 = float(b["y_m"]), float(b["z_m"])
-        aim_dy = lead_y + target_distance_m * (float(b["aim_yaw_mrad"]) / 1000.0)
-        aim_dz = lead_z + target_distance_m * (float(b["aim_pitch_mrad"]) / 1000.0)
+        aim_dy = y0 + lead_y + target_distance_m * (float(b["aim_yaw_mrad"]) / 1000.0)
+        aim_dz = z0 + lead_z + target_distance_m * (float(b["aim_pitch_mrad"]) / 1000.0)
         sigma_r = 0.01852 / 4.0 + theta_choke * target_distance_m * (target_distance_m / 36.58) ** 0.15
 
         for _ in range(per_b):
@@ -1122,7 +1122,7 @@ CUAS_AMMO_ECONOMICS_CATALOG: dict[str, dict[str, Any]] = {
         "cartridge_mass_g": 42.0,
         "heat_per_shot_kj": 1.45,
         "p_jam_per_shot": 0.0020,
-        "pellets_per_shot": 395,
+        "pellets_per_shot": 350,
         "pellet_diameter_mm": 2.41,
         "pellet_mass_g": 0.081,
         "v0_mps": 395.0,
@@ -1135,9 +1135,9 @@ CUAS_AMMO_ECONOMICS_CATALOG: dict[str, dict[str, Any]] = {
         "cartridge_mass_g": 46.0,
         "heat_per_shot_kj": 1.90,
         "p_jam_per_shot": 0.0028,
-        "pellets_per_shot": 42,
+        "pellets_per_shot": 52,
         "pellet_diameter_mm": 5.08,
-        "pellet_mass_g": 0.54,
+        "pellet_mass_g": 0.53,
         "v0_mps": 435.0,
         "base_cd": 0.47,
         "shots_per_trigger": 1,
@@ -1148,11 +1148,11 @@ CUAS_AMMO_ECONOMICS_CATALOG: dict[str, dict[str, Any]] = {
         "cartridge_mass_g": 54.0,
         "heat_per_shot_kj": 2.05,
         "p_jam_per_shot": 0.0022,
-        "pellets_per_shot": 52,
+        "pellets_per_shot": 70,
         "pellet_diameter_mm": 3.81,
         "pellet_mass_g": 0.52,
         "v0_mps": 410.0,
-        "base_cd": 0.46,
+        "base_cd": 0.44,
         "shots_per_trigger": 1,
     },
     "12G_FLECHETTE_SABOT_C_UAS": {
@@ -1162,10 +1162,10 @@ CUAS_AMMO_ECONOMICS_CATALOG: dict[str, dict[str, Any]] = {
         "heat_per_shot_kj": 1.95,
         "p_jam_per_shot": 0.0035,
         "pellets_per_shot": 20,
-        "pellet_diameter_mm": 2.60,
-        "pellet_mass_g": 1.15,
+        "pellet_diameter_mm": 1.90,
+        "pellet_mass_g": 0.75,
         "v0_mps": 445.0,
-        "base_cd": 0.24,
+        "base_cd": 0.18,
         "shots_per_trigger": 1,
     },
     "CUAS_AIRBURST_CANISTER": {
@@ -1175,17 +1175,17 @@ CUAS_AMMO_ECONOMICS_CATALOG: dict[str, dict[str, Any]] = {
         "heat_per_shot_kj": 3.40,
         "p_jam_per_shot": 0.0018,
         "pellets_per_shot": 85,
-        "pellet_diameter_mm": 3.00,
-        "pellet_mass_g": 0.25,
+        "pellet_diameter_mm": 3.50,
+        "pellet_mass_g": 0.40,
         "v0_mps": 425.0,
-        "base_cd": 0.34,
+        "base_cd": 0.44,
         "shots_per_trigger": 1,
     },
     "762_MINIGUN_BURST": {
         "name": "7.62×51mm Rotary Minigun (20-rd Burst)",
         "unit_cost_usd": 14.00,  # 20 rounds @ $0.70/rd per burst equivalent
         "cartridge_mass_g": 500.0,  # 20 × 25g linked belt
-        "heat_per_shot_kj": 9.80,  # rapid burst thermal load across rotary cluster
+        "heat_per_shot_kj": 60.0,  # 20 rounds x ~3.0 kJ chamber/barrel heat waste per burst
         "p_jam_per_shot": 0.0012,
         "pellets_per_shot": 20,
         "pellet_diameter_mm": 7.82,

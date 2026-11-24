@@ -1,5 +1,4 @@
 {
-  "schema_version": "1.0",
   "modules": [
     {
       "entry_id": "sim-launch",
@@ -8,7 +7,7 @@
       "module_name": "End-to-End Stochastic Launch -> Flight -> Fuze -> Terminal Pipeline",
       "code_files": ["src/ammo_mc/pipeline.py", "src/ammo_mc/interior.py", "src/ammo_mc/exterior.py", "src/ammo_mc/fuze.py", "src/ammo_mc/vulnerability.py", "src/ammo_mc/cuas_analytics.py"],
       "description": "Full bias + random Monte Carlo pipeline propagating propellant lot/temperature variations, MPM/3-DoF aerodynamic flight, fuze reliability, Kingery-Bulmash blast & Mott/Gurney/THOR fragmentation, Carleton vulnerability, and OAT sensitivity.",
-      "source_ids": ["S01", "S13", "S14", "S15", "S16", "S21", "S22", "S24", "S25", "S26", "S27", "S28", "S31", "S32", "S33", "S62", "S63", "S64"],
+      "source_ids": ["S01", "S13", "S14", "S15", "S16", "S21", "S22", "S24", "S25", "S26", "S27", "S28", "S31", "S32", "S33", "S62", "S63", "S64", "S76", "S77"],
       "formula_ids": ["IB-01", "IB-04", "IB-07", "IB-08", "EB-01", "EB-02", "EB-03", "EB-05", "FZ-01", "DA-01", "DA-04", "TB-03", "TF-01", "TF-04", "TV-04", "MC-05"],
       "data_tables": ["ammo_taxonomy.json", "drag_tables.json", "explosives.json", "kb_coefficients.json", "atmosphere.json"],
       "assumptions_and_limits": "Modified Point Mass assumes slowly varying yaw of repose and axisymmetric projectiles; L0 analytical mode uses linearized range approximations."
@@ -90,9 +89,9 @@
       "workbench": "🛸 C-UAS & Small Arms",
       "workbench_slug": "cuas",
       "module_name": "Module 5: Elevated Pellet Fallout Ballistics & Friendly SDZ",
-      "code_files": ["src/ammo_mc/cuas_defense.py", "src/ammo_mc/vis_cuas.py"],
+      "code_files": ["src/ammo_mc/cuas_defense.py", "src/ammo_mc/vis_cuas.py", "src/ammo_mc/aero_sphere.py"],
       "description": "Integrates upward-fired shotshell pellets through climb, apex, and gravity descent under Bailey-Hiatt sphere drag and wind drift to determine maximum fallout range, terminal KE (2 J / 15 J thresholds), and Surface Danger Zones.",
-      "source_ids": ["S01", "S41", "S42", "S43", "S53"],
+      "source_ids": ["S01", "S41", "S42", "S43", "S53", "S69", "S70", "S71", "S72"],
       "formula_ids": ["EB-16", "EB-17", "TF-09", "TF-14"],
       "data_tables": ["atmosphere.json", "drag_tables.json"],
       "assumptions_and_limits": "Advisory engineering model; operational firing safety templates must follow competent national authority (DA PAM 385-63 / UNODA)."
@@ -198,9 +197,9 @@
       "workbench": "🛸 C-UAS & Small Arms",
       "workbench_slug": "cuas",
       "module_name": "Small Arms Mode 1: Shotshell Pattern Spread & Longitudinal Shot Stringing",
-      "code_files": ["src/ammo_mc/small_arms_pkg/ballistics.py", "src/ammo_mc/small_arms_pkg/geometry.py"],
+      "code_files": ["src/ammo_mc/small_arms_pkg/ballistics.py", "src/ammo_mc/small_arms_pkg/geometry.py", "src/ammo_mc/aero_sphere.py"],
       "description": "Rayleigh radial pellet distribution conditioned on 40-yd 30-in choke efficiency, shot stringing velocity spread, Bailey-Hiatt sphere deceleration, and polygonal silhouette/drone hit checks.",
-      "source_ids": ["S21", "S35", "S41", "S42", "S43"],
+      "source_ids": ["S21", "S35", "S41", "S42", "S43", "S69", "S70", "S71", "S72"],
       "formula_ids": ["DA-03", "DA-05", "EB-16"],
       "data_tables": ["atmosphere.json"],
       "assumptions_and_limits": "Radial choke dispersion scales nonlinearly with distance exponent 1.15 due to wake aerodynamic separation."
@@ -296,7 +295,7 @@
       "module_name": "Physics Lab 4: Gurney Energy, Taylor Detonation Angles & Mott Fragmentation",
       "code_files": ["src/ammo_mc/terminal_frag.py"],
       "description": "Initial fragment velocity for cylindrical/spherical/sandwich charges, Taylor projection angle deflection, and Mott exponential/mass-number fragment spectra.",
-      "source_ids": ["S01", "S05", "S06", "S07", "S23"],
+      "source_ids": ["S01", "S05", "S06", "S07", "S23", "S79"],
       "formula_ids": ["TF-01", "TF-02", "TF-03", "TF-04", "TF-05", "TF-06"],
       "data_tables": ["explosives.json"],
       "assumptions_and_limits": "Assumes natural casing fragmentation with steady detonation wave and negligible premature gas venting."
@@ -306,9 +305,9 @@
       "workbench": "🔬 Physics & Ballistics Labs",
       "workbench_slug": "physics",
       "module_name": "Physics Lab 5: Lanz-Odermatt Long-Rod, Birkhoff Jet, De Marre & THOR",
-      "code_files": ["src/ammo_mc/penetration.py", "src/ammo_mc/terminal_frag.py"],
-      "description": "Computes kinetic long-rod RHA perforation (Lanz-Odermatt [FLAG]), hydrodynamic shaped-charge penetration, De Marre naval plate limits, Lambert-Jonas residual velocity, and 17-material Project THOR equations.",
-      "source_ids": ["S07", "S08", "S18", "S19", "S20", "S26", "S38", "S39"],
+      "code_files": ["src/ammo_mc/penetration.py", "src/ammo_mc/terminal_frag.py", "src/ammo_mc/terminal_concrete.py"],
+      "description": "Evaluates Project THOR perforation equations, Lanz-Odermatt WHA/DU/steel long-rod penetration, De Marre naval armor empirical limits, Forrestal-Frew concrete penetration, Modified NDRC scabbing/perforation, and Recht-Ipson / Lambert-Jonas residual velocity.",
+      "source_ids": ["S07", "S08", "S18", "S19", "S20", "S26", "S38", "S39", "S73", "S75"],
       "formula_ids": ["TF-12", "TF-13", "TP-01", "TP-02", "TP-03", "TP-04", "TP-05", "TP-06"],
       "data_tables": ["penetration.json", "thor_coefficients.json"],
       "assumptions_and_limits": "TF-12 and TP-01 carry FLAG governance status and require empirical verification outside standard caliber/material bands."
@@ -320,7 +319,7 @@
       "module_name": "Physics Lab 6: Quasi-Monte Carlo Sobol vs LHS Convergence & KB Explorer",
       "code_files": ["src/ammo_mc/stats.py", "src/ammo_mc/ui/physics_labs.py"],
       "description": "Demonstrates 1/N vs 1/sqrt(N) Quasi-MC convergence across 16 supported probability distributions, salience order statistics, and salvo binomial scaling.",
-      "source_ids": ["S33", "S34", "S35", "S63"],
+      "source_ids": ["S33", "S34", "S35", "S63", "S76", "S77"],
       "formula_ids": ["MC-01", "MC-02", "MC-03", "MC-04", "MC-05", "MC-06", "MC-07", "MC-08", "MC-09", "MC-10"],
       "data_tables": ["formulas.json", "sources.json"],
       "assumptions_and_limits": "Scrambled Sobol sequences require power-of-2 sample counts for strict digital net balance."
@@ -404,7 +403,7 @@
       "module_name": "Physics Lab 13: Multi-Layer Armor, Ceramics & Explosive Reactive Armor (ERA)",
       "code_files": ["src/ammo_mc/advanced_armor.py"],
       "description": "Models tandem precursor + main warhead interactions against composite ceramic/RHA/spaced stacks and moving ERA flyer plates.",
-      "source_ids": ["S18", "S20", "S38", "S57", "S58"],
+      "source_ids": ["S18", "S20", "S38", "S57", "S58", "S74", "S75"],
       "formula_ids": ["TP-01", "TP-02", "TP-03", "TP-04", "TF-02"],
       "data_tables": ["penetration.json", "thor_coefficients.json"],
       "assumptions_and_limits": "One-dimensional hydrodynamic/continuum stack approximation; edge/corner perforation effects excluded."
@@ -464,7 +463,7 @@
       "module_name": "IATG Tool 2: Structural Brick-House Damage & Swiss Glazing Hyperbola",
       "code_files": ["src/ammo_mc/ui/iatg.py", "src/ammo_mc/terminal_blast.py"],
       "description": "Evaluates Scilly/Jarrett masonry categories (A-E) and Swiss Pressure-Impulse glazing failure curves across NEQ and standoff distance.",
-      "source_ids": ["S01", "S40", "S60"],
+      "source_ids": ["S01", "S40", "S60", "S78"],
       "formula_ids": ["TB-10", "TB-11"],
       "data_tables": ["effects_criteria.json", "kb_coefficients.json"],
       "assumptions_and_limits": "Applies to unreinforced brick dwellings and standard annealed window panes under open blast waves."
@@ -488,7 +487,7 @@
       "module_name": "IATG Tool 4: Axelsson Thoracic Biomechanics ODE & Thermal Dose",
       "code_files": ["src/ammo_mc/ui/iatg.py", "src/ammo_mc/terminal_blast.py"],
       "description": "Integrates the Axelsson-Yelverton 1-DOF chest-wall response to incident/reflected blast waves and computes primary blast ASII, TNO probit [FLAG], and fireball thermal dose.",
-      "source_ids": ["S01", "S59"],
+      "source_ids": ["S01", "S59", "S78"],
       "formula_ids": ["TB-12", "TB-13", "TB-14", "TB-16"],
       "data_tables": ["effects_criteria.json"],
       "assumptions_and_limits": "TB-12 is FLAGGED (cannot be sole safety basis); Axelsson ASII assumes free-standing human torso oriented side-on/normal per test correlation."
@@ -512,7 +511,7 @@
       "module_name": "IATG Tool 6: Propellant Aging & In-Service Surveillance (AOP-48 / IATG 07.10)",
       "code_files": ["src/ammo_mc/surveillance.py", "src/ammo_mc/ui/iatg.py"],
       "description": "Predicts DPA/EC stabilizer depletion curves under Arrhenius diurnal climatic storage zones (A1/A2/B2/C1/ECM), Semenov thermal runaway cook-off, and ISO 2859-1 lot inspection plans.",
-      "source_ids": ["S61"],
+      "source_ids": ["S61", "S80"],
       "formula_ids": [],
       "data_tables": ["stabilizer_kinetics (in-code)"],
       "assumptions_and_limits": "Arrhenius pre-exponential factors calibrated to representative single- and double-base propellants; lot surveillance requires heat-flow calorimetry / HPLC verification."
@@ -547,19 +546,55 @@
       "workbench_slug": "validation",
       "module_name": "Knowledge Base Verification & Regression Suite (V-01a .. V-12)",
       "code_files": ["src/ammo_mc/validation.py", "src/ammo_mc/ui/validation.py"],
-      "description": "Audits 22 analytical and stochastic test vectors against UNODA IATG, Kingery-Bulmash reference values, THOR tables, Lanz-Odermatt bounds, Axelsson ODE, and LHS convergence.",
-      "source_ids": ["S01", "S02", "S03", "S08", "S11", "S16", "S18", "S21", "S22", "S33", "S39", "S40", "S59"],
-      "formula_ids": ["TB-01", "TB-03", "TB-09", "TB-10", "TB-13", "TB-15", "TF-04", "TF-07", "TF-12", "TP-01", "FZ-04", "DA-04", "TV-03", "TV-04", "MC-05"],
+      "description": "Audits 22 analytical and stochastic test vectors (V-01a through V-12) against UNODA IATG, Kingery-Bulmash reference values, THOR tables, Lanz-Odermatt bounds, Axelsson ODE, and LHS convergence.",
+      "source_ids": ["S01", "S02", "S03", "S08", "S11", "S16", "S18", "S21", "S22", "S33", "S39", "S40", "S59", "S73", "S74", "S75", "S76", "S77", "S78", "S79", "S80"],
+      "formula_ids": ["TB-01", "TB-03", "TB-05", "TB-14", "EB-04", "EB-08", "TF-01", "TF-12", "DA-01", "DA-03", "TV-01", "TV-04"],
       "data_tables": ["validation_cases.json", "kb_coefficients.json"],
       "assumptions_and_limits": "Verifies solver mathematical fidelity to published standards; does not substitute for live range certification."
+    },
+    {
+      "entry_id": "aero-sphere",
+      "workbench": "🔬 Physics & Ballistics Labs",
+      "workbench_slug": "physics",
+      "module_name": "Compressible & Rarefied Sphere Drag + Sutherland Viscosity",
+      "code_files": ["src/ammo_mc/aero_sphere.py"],
+      "description": "Continuous Reynolds-Mach-Knudsen spherical pellet and fragment drag (Morrison 2013, Loth 2008, Henderson 1976, Bailey-Hiatt 1972) coupled with Sutherland air viscosity and analytical quadratic-drag TOF.",
+      "source_ids": ["S16", "S42", "S69", "S70", "S71", "S72"],
+      "formula_ids": ["EB-04", "EB-16"],
+      "data_tables": ["atmosphere.json"],
+      "assumptions_and_limits": "Smooth non-rotating spherical particles in continuum to transition slip-flow regimes; irregular fragments apply shape factors."
+    },
+    {
+      "entry_id": "terminal-concrete",
+      "workbench": "🔬 Physics & Ballistics Labs",
+      "workbench_slug": "physics",
+      "module_name": "Concrete Penetration (Forrestal-Frew) & Modified NDRC Perforation",
+      "code_files": ["src/ammo_mc/terminal_concrete.py"],
+      "description": "Ogive-nose kinetic projectile concrete depth of penetration via Forrestal-Frew empirical S-factor equation alongside Modified NDRC scabbing and perforation slab thickness limits.",
+      "source_ids": ["S01", "S20", "S73"],
+      "formula_ids": ["TP-05", "TP-06"],
+      "data_tables": ["penetration.json"],
+      "assumptions_and_limits": "Unreinforced to lightly reinforced concrete; perforation thresholds assume rigid non-deforming nose shapes within calibrated caliber-radius-head range."
+    },
+    {
+      "entry_id": "validation-vv-benchmarks",
+      "workbench": "✅ Verification & Validation",
+      "workbench_slug": "validation",
+      "module_name": "Extended 18-Benchmark Physics V&V Suite & Audit Certificates",
+      "code_files": ["src/ammo_mc/validation.py", "src/ammo_mc/ui/validation.py", "src/ammo_mc/api.py", "src/ammo_mc/cli.py"],
+      "description": "Independent analytical and empirical verification suite (B-01..B-18) covering ISA-1976 50 km atmosphere, compressible sphere drag, vacuum flight, 6-DoF/MPM spin stability, concrete penetration, Tate-Alekseevskii, Mach stem blast, TNO probits, Craig elliptical CEP, Saltelli Sobol indices, and ISO 2859-1 sampling with HTML/Markdown certificates.",
+      "source_ids": ["S01", "S02", "S08", "S16", "S18", "S22", "S27", "S33", "S59", "S69", "S73", "S74", "S75", "S76", "S77", "S78", "S79", "S80"],
+      "formula_ids": ["TB-01", "TB-03", "EB-04", "EB-16", "DA-01", "TV-04", "TP-01", "MC-02"],
+      "data_tables": ["validation_cases.json", "atmosphere.json", "explosives.json", "kb_coefficients.json"],
+      "assumptions_and_limits": "Self-contained numerical regression tolerances verify implementation fidelity against closed-form reference physics and standards."
     }
   ],
   "data_tables": [
     {
       "table_name": "sources.json",
       "domain": "Master Literature Registry",
-      "description": "68 curated primary standards, NATO STANAGs/AOPs, UNODA IATG guidelines, US Army field manuals, peer-reviewed papers, and textbooks with verification flags.",
-      "source_ids": ["S01", "S13", "S16", "S26", "S27", "S41", "S44", "S49", "S59", "S66"]
+      "description": "80 curated primary standards, NATO STANAGs/AOPs, UNODA IATG guidelines, US Army field manuals, peer-reviewed papers, and textbooks with verification flags.",
+      "source_ids": ["S01", "S13", "S16", "S26", "S27", "S41", "S44", "S49", "S59", "S66", "S73", "S78", "S79", "S80"]
     },
     {
       "table_name": "formulas.json",
@@ -576,8 +611,8 @@
     {
       "table_name": "explosives.json",
       "domain": "High Explosives & Gurney Constants",
-      "description": "TNT pressure/impulse equivalence (13 HE), IATG & S05 Gurney velocities/densities (9-13 HE), Mott fragmentation B constants (6 HE), and UFC heats of detonation.",
-      "source_ids": ["S01", "S05", "S11"]
+      "description": "TNT pressure/impulse equivalence (16 HE), IATG & S05 Gurney velocities/densities (9-15 HE), Mott fragmentation B constants (11 HE), and UFC heats of detonation (12 HE).",
+      "source_ids": ["S01", "S05", "S11", "S79"]
     },
     {
       "table_name": "kb_coefficients.json",
@@ -589,7 +624,7 @@
       "table_name": "thor_coefficients.json",
       "domain": "Project THOR Perforation & Shape Factors",
       "description": "Empirical fragment perforation exponents and residual velocity coefficients across 17 target materials plus 3 fragment shape factors.",
-      "source_ids": ["S07", "S08"]
+      "source_ids": ["S07", "S08", "S80"]
     },
     {
       "table_name": "penetration.json",
@@ -606,7 +641,7 @@
     {
       "table_name": "atmosphere.json",
       "domain": "U.S. Standard Atmosphere 1976",
-      "description": "Physical air constants (R, gamma, g0, rho0) and 41 altitude stations from 0 to 40 km.",
+      "description": "Physical air constants (R, gamma, g0, rho0) and 53 altitude stations from 0 to 50 km.",
       "source_ids": ["S16"]
     },
     {
@@ -618,8 +653,8 @@
     {
       "table_name": "validation_cases.json",
       "domain": "Benchmark Test Vectors",
-      "description": "22 closed-form and stochastic acceptance reference vectors (V-01a through V-12).",
-      "source_ids": ["S01", "S02", "S08", "S18", "S22", "S33", "S59"]
+      "description": "22 closed-form and stochastic acceptance reference vectors (V-01a through V-12) paired with 18 extended physics verification benchmarks (B-01 through B-18).",
+      "source_ids": ["S01", "S02", "S08", "S18", "S22", "S33", "S59", "S69", "S73", "S74", "S76", "S77", "S78", "S80"]
     },
     {
       "table_name": "C-UAS & Small Arms Empirical Catalogs",

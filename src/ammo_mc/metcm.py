@@ -54,6 +54,7 @@ def generate_stanag_4082_profile(
     zones = []
     z_prev = 0.0
     p_prev = p_sfc_pa
+    t_prev_k = t_sfc_k
 
     for z in STANAG_4082_STANDARD_ZONES:
         # 1. Temperature model
@@ -70,16 +71,17 @@ def generate_stanag_4082_profile(
 
         t_curr_k = t_base + t_inv
 
-        # 2. Hydrostatic Pressure integration
+        # 2. Hydrostatic Pressure integration across the layer [z_prev, z]
         if z == 0.0:
             p_curr_pa = p_sfc_pa
         else:
-            t_layer_mean = 0.5 * (t_sfc_k + t_curr_k)
+            t_layer_mean = 0.5 * (t_prev_k + t_curr_k)
             dz = z - z_prev
             p_curr_pa = p_prev * math.exp(-g * dz / (R_spec * t_layer_mean))
 
         p_prev = p_curr_pa
         z_prev = z
+        t_prev_k = t_curr_k
 
         # 3. Density
         rho_curr = p_curr_pa / (R_spec * t_curr_k)
@@ -180,63 +182,93 @@ def integrate_trajectory_with_sounding(
         wy = float(np.interp(z_clamped, altitudes, wind_vy))
         return rho, tk, wx, wy
 
-    # 1. Integrate with Sheared Met Sounding
+    # 1. Integrate with Sheared Met Sounding via RK4 + G7 table + linear ground interpolation
+    from ammo_mc.data import get_kb
+    from ammo_mc.exterior import AtmosphereEnvironment, BatchTrajectoryConfig, integrate_trajectories_batch
+
+    kb = get_kb()
     rad_qe = math.radians(qe_deg)
     rad_az = math.radians(az_deg)
 
+    def met_accel(z_val: float, vx_v: float, vy_v: float, vz_v: float) -> tuple[float, float, float]:
+        rho, tk, wx, wy = get_atmo_at_z(z_val)
+        vrx = vx_v - wx
+        vry = vy_v - wy
+        vrz = vz_v
+        vr_mag = math.hypot(vrx, vry, vrz)
+        a_sound = math.sqrt(gamma * R_gas * tk)
+        mach = vr_mag / max(a_sound, 100.0)
+        cd = float(kb.interp_cd(mach, drag_ref="G7"))
+        # Consistent EB-02 G7 area scaling: (pi * d^2 / 8) * rho * cd / m * |v_rel|
+        drag_acc = (math.pi * (calibre_m ** 2) / (8.0 * mass_kg)) * rho * cd * vr_mag
+        ax = -drag_acc * vrx
+        ay = -drag_acc * vry
+        az = -drag_acc * vrz - 9.80665
+        return ax, ay, az
+
+    px, py, pz = 0.0, 0.0, 0.0
     vx = v0_mps * math.cos(rad_qe) * math.sin(rad_az)
     vy = v0_mps * math.cos(rad_qe) * math.cos(rad_az)
     vz = v0_mps * math.sin(rad_qe)
-
-    px, py, pz = 0.0, 0.0, 0.0
     t = 0.0
 
     traj_x, traj_y, traj_z, traj_t = [0.0], [0.0], [0.0], [0.0]
 
     while pz >= 0.0 and t < 180.0:
-        rho, tk, wx, wy = get_atmo_at_z(pz)
-        # Relative velocity to air
-        vrx = vx - wx
-        vry = vy - wy
-        vrz = vz
-        vr_mag = math.hypot(vrx, vry, vrz)
+        px0, py0, pz0, vx0, vy0, vz0, t0 = px, py, pz, vx, vy, vz, t
+        ax1, ay1, az1 = met_accel(pz0, vx0, vy0, vz0)
+        ax2, ay2, az2 = met_accel(
+            pz0 + 0.5 * dt * vz0,
+            vx0 + 0.5 * dt * ax1,
+            vy0 + 0.5 * dt * ay1,
+            vz0 + 0.5 * dt * az1,
+        )
+        vx_m2 = vx0 + 0.5 * dt * ax1
+        vy_m2 = vy0 + 0.5 * dt * ay1
+        vz_m2 = vz0 + 0.5 * dt * az1
+        ax3, ay3, az3 = met_accel(
+            pz0 + 0.5 * dt * vz_m2,
+            vx_m2,
+            vy_m2,
+            vz_m2,
+        )
+        vx_k3 = vx0 + 0.5 * dt * ax2
+        vy_k3 = vy0 + 0.5 * dt * ay2
+        vz_k3 = vz0 + 0.5 * dt * az2
+        vx_k4 = vx0 + dt * ax3
+        vy_k4 = vy0 + dt * ay3
+        vz_k4 = vz0 + dt * az3
+        ax4, ay4, az4 = met_accel(pz0 + dt * vz_k3, vx_k4, vy_k4, vz_k4)
 
-        # Drag coefficient vs local Mach number
-        a_sound = math.sqrt(gamma * R_gas * tk)
-        mach = vr_mag / max(a_sound, 100.0)
-        # G7-like drag representation
-        if mach < 0.8:
-            cd = 0.14
-        elif mach <= 1.2:
-            cd = 0.14 + 0.22 * ((mach - 0.8) / 0.4)
-        else:
-            cd = 0.36 * (1.2 / mach) ** 0.45
+        px_n = px0 + (dt / 6.0) * (vx0 + 2.0 * vx_m2 + 2.0 * vx_k3 + vx_k4)
+        py_n = py0 + (dt / 6.0) * (vy0 + 2.0 * vy_m2 + 2.0 * vy_k3 + vy_k4)
+        pz_n = pz0 + (dt / 6.0) * (vz0 + 2.0 * vz_m2 + 2.0 * vz_k3 + vz_k4)
+        vx_n = vx0 + (dt / 6.0) * (ax1 + 2.0 * ax2 + 2.0 * ax3 + ax4)
+        vy_n = vy0 + (dt / 6.0) * (ay1 + 2.0 * ay2 + 2.0 * ay3 + ay4)
+        vz_n = vz0 + (dt / 6.0) * (az1 + 2.0 * az2 + 2.0 * az3 + az4)
+        t_n = t0 + dt
 
-        drag_acc = 0.5 * rho * area * cd * vr_mag / mass_kg
-        ax = -drag_acc * vrx
-        ay = -drag_acc * vry
-        az = -drag_acc * vrz - 9.80665
+        if pz_n < 0.0 and pz0 >= 0.0 and (pz0 - pz_n) > 1e-12:
+            frac = pz0 / (pz0 - pz_n)
+            px = px0 + frac * (px_n - px0)
+            py = py0 + frac * (py_n - py0)
+            pz = 0.0
+            t = t0 + frac * dt
+            traj_x.append(px)
+            traj_y.append(py)
+            traj_z.append(0.0)
+            traj_t.append(t)
+            break
 
-        # Euler-Heun predictor-corrector
-        px += vx * dt + 0.5 * ax * (dt**2)
-        py += vy * dt + 0.5 * ay * (dt**2)
-        pz += vz * dt + 0.5 * az * (dt**2)
-
-        vx += ax * dt
-        vy += ay * dt
-        vz += az * dt
-        t += dt
-
+        px, py, pz, vx, vy, vz, t = px_n, py_n, pz_n, vx_n, vy_n, vz_n, t_n
         traj_x.append(px)
         traj_y.append(py)
         traj_z.append(pz)
         traj_t.append(t)
 
-    # 2. Integrate with Standard ISA Atmosphere (Zero Wind) for baseline comparison
-    from ammo_mc.exterior import AtmosphereEnvironment, BatchTrajectoryConfig, integrate_trajectories_batch
-
+    # 2. Integrate with Standard ISA Atmosphere (Zero Wind, no Coriolis so physics isolate MET effects cleanly)
     atm_std = AtmosphereEnvironment()
-    cfg_std = BatchTrajectoryConfig(calibre_m=calibre_m, fidelity="L1", dt=dt)
+    cfg_std = BatchTrajectoryConfig(calibre_m=calibre_m, fidelity="L1", dt=dt, include_coriolis=False)
     s0_std = np.array([[0.0, 0.0, 0.0, v0_mps * math.cos(rad_qe), 0.0, v0_mps * math.sin(rad_qe)]], dtype=np.float64)
     res_std = integrate_trajectories_batch(s0_std, np.array([mass_kg]), np.array([1.0]), atm_std, cfg_std, record_single_path=True)
 
@@ -249,20 +281,21 @@ def integrate_trajectory_with_sounding(
     std_traj_y = [float(std_sp["range_m"][k]) * math.cos(rad_az) for k in range(len(std_sp.get("t", [])))] if std_sp else [0.0, std_range * math.cos(rad_az)]
     std_traj_z = [float(std_sp["alt_m"][k]) for k in range(len(std_sp.get("t", [])))] if std_sp else [0.0, 0.0]
 
-    actual_range = math.hypot(traj_x[-1], traj_y[-1])
-    delta_range_m = actual_range - std_range
-    delta_x_m = traj_x[-1] - (std_range * math.sin(rad_az))
-    delta_y_m = traj_y[-1] - (std_range * math.cos(rad_az))
+    # Downrange projection along firing azimuth and perpendicular crossrange drift
+    along_range_m = traj_x[-1] * math.sin(rad_az) + traj_y[-1] * math.cos(rad_az)
+    cross_perp_m = traj_x[-1] * math.cos(rad_az) - traj_y[-1] * math.sin(rad_az)
+    delta_range_m = along_range_m - std_range
 
     # Downsample trajectory points to ~35 points for fast 3D WebGL rendering
     step = max(1, len(traj_t) // 35)
     step_std = max(1, len(std_traj_x) // 35)
 
     return {
-        "range_with_met_m": round(actual_range, 1),
+        "range_with_met_m": round(along_range_m, 1),
         "range_isa_baseline_m": round(std_range, 1),
         "delta_range_met_m": round(delta_range_m, 1),
-        "crossrange_drift_m": round(math.hypot(delta_x_m, delta_y_m), 1),
+        "crossrange_drift_m": round(abs(cross_perp_m), 1),
+        "crossrange_signed_m": round(cross_perp_m, 1),
         "tof_with_met_s": round(traj_t[-1], 2),
         "tof_isa_baseline_s": round(std_tof, 2),
         "vertex_altitude_m": round(float(np.max(traj_z)), 1),
@@ -277,4 +310,36 @@ def integrate_trajectory_with_sounding(
             "y_m": [round(std_traj_y[k], 1) for k in range(0, len(std_traj_y), step_std)],
             "z_m": [round(std_traj_z[k], 1) for k in range(0, len(std_traj_z), step_std)],
         },
+    }
+
+
+def compute_ballistic_met_weighting(
+    sounding_profile: dict[str, Any],
+    vertex_alt_m: float = 4000.0,
+) -> dict[str, float]:
+    """Compute NATO STANAG 4061 / 4082 parabolic ordinate-weighted ballistic wind, temp, and density."""
+    zones = sounding_profile.get("zones", [])
+    if not zones:
+        return {"ballistic_wx_mps": 0.0, "ballistic_wy_mps": 0.0, "ballistic_temp_c": 15.0, "ballistic_density_pct_isa": 0.0}
+
+    h_max = max(float(vertex_alt_m), 200.0)
+    grid = np.linspace(0.0, h_max, 50)
+    # Time spent at altitude z on a parabolic arc scales as (h_max - z)^(-1/2) -> weights concentrated near apogee
+    weights = 1.0 / np.sqrt(np.maximum(1.0 - (grid / h_max), 0.04))
+    weights /= float(np.sum(weights))
+
+    alts = np.array([float(z["altitude_m"]) for z in zones], dtype=np.float64)
+    wx = np.interp(grid, alts, [float(z["wind_vx_mps"]) for z in zones])
+    wy = np.interp(grid, alts, [float(z["wind_vy_mps"]) for z in zones])
+    tc = np.interp(grid, alts, [float(z["temp_c"]) for z in zones])
+    dp = np.interp(grid, alts, [float(z["density_pct_isa"]) for z in zones])
+
+    bwx = float(np.sum(weights * wx))
+    bwy = float(np.sum(weights * wy))
+    return {
+        "ballistic_wx_mps": round(bwx, 2),
+        "ballistic_wy_mps": round(bwy, 2),
+        "ballistic_wind_speed_mps": round(math.hypot(bwx, bwy), 2),
+        "ballistic_temp_c": round(float(np.sum(weights * tc)), 2),
+        "ballistic_density_pct_isa": round(float(np.sum(weights * dp)), 2),
     }

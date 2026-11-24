@@ -6,6 +6,12 @@ import math
 from typing import Any
 import numpy as np
 
+from ammo_mc.aero_sphere import (
+    didion_crosswind_drift_m,
+    exact_quadratic_drag_tof_and_velocity,
+    sphere_drag_compressible,
+    sutherland_air_viscosity,
+)
 from .catalogs import CHOKE_DEFINITIONS, DRONE_ASPECT_PRESETS, DRONE_TARGET_SPECS, MULTIBARREL_PRESETS, PELLET_SPECIFICATIONS, SHOTGUN_PRESETS, STANDARD_BARREL_LENGTHS, get_choke_definitions, get_drone_target_specs, get_multibarrel_presets, get_shotgun_presets
 from .geometry import check_target_hit, compute_drone_projected_geometry, evaluate_drone_impact, point_in_convex_polygon
 
@@ -53,14 +59,33 @@ def simulate_shotgun_pattern_mc(
     dist_ratio = max(0.1, target_distance_m / r_bench)
     sigma_target = 0.005 + theta_choke_rad * target_distance_m * (dist_ratio**0.15)
 
-    # 2. Pellet Aerodynamic Deceleration Parameters
+    # 2. Pellet Aerodynamic Deceleration Parameters (compressible Morrison/Bailey-Hiatt/Loth sphere drag)
     d_m = pellet_diameter_mm / 1000.0
     m_kg = pellet_mass_g / 1000.0
     rho_air = 1.225
-    cd_base = 0.47  # subsonic smooth sphere drag
+    mu_air = sutherland_air_viscosity(288.15)
+    a_sound = 340.29
+    area_p = math.pi * 0.25 * (d_m ** 2)
+
+    # Path-integrate baseline compressible Cd across [0, target_distance_m] so transonic deceleration is resolved
+    n_quad = 8
+    dx_q = max(float(target_distance_m), 0.5) / n_quad
+    v_q = max(float(v0_mps), 10.0)
+    t_q_nom = 0.0
+    for _ in range(n_quad):
+        cd1 = sphere_drag_compressible(v_q * d_m * rho_air / mu_air, v_q / a_sound)
+        k1 = 0.5 * rho_air * cd1 * area_p / max(m_kg, 1e-6)
+        vmid = max(5.0, v_q * math.exp(-0.5 * k1 * dx_q))
+        cd2 = sphere_drag_compressible(vmid * d_m * rho_air / mu_air, vmid / a_sound)
+        k2 = 0.5 * rho_air * cd2 * area_p / max(m_kg, 1e-6)
+        dt_step, v_next = exact_quadratic_drag_tof_and_velocity(dx_q, v_q, k2)
+        t_q_nom += dt_step
+        v_q = max(5.0, v_next)
+    kappa_eff_nom = max(0.0, -math.log(max(v_q, 1e-3) / max(float(v0_mps), 10.0)) / max(float(target_distance_m), 1e-3))
+    cd_base = max(0.20, (2.0 * m_kg * kappa_eff_nom) / max(rho_air * area_p, 1e-12))
 
     # Differential drag factor distribution due to launch setback deformation
-    # Leading pellets stay rounder; trailing pellets flatten
+    # Round leading pellets retain near-ideal Cd; trailing flattened pellets experience +20% drag
     total_pellets = int(n_shots * pellets_per_shot)
 
     # Target movement vector
@@ -86,11 +111,6 @@ def simulate_shotgun_pattern_mc(
         shot_aim_y = rng.normal(0.0, aim_error_mrad * target_distance_m / 1000.0)
         shot_aim_z = rng.normal(0.0, aim_error_mrad * target_distance_m / 1000.0)
 
-        # Crosswind drift offset: approx drift = 0.5 * rho * A * Cd * w_z * t^2 / m
-        # simplified closed form
-        t_est = target_distance_m / max(v0_mps * 0.8, 100.0)
-        wind_drift_y = 0.5 * (crosswind_mps * 0.15) * (t_est**1.3)
-
         # Generate individual pellets for this shot
         # Deformation: normalized 0.0 (round front) to 1.0 (flattened rear)
         deformations = rng.uniform(0.0, 1.0, size=pellets_per_shot)
@@ -98,16 +118,24 @@ def simulate_shotgun_pattern_mc(
         radii = rng.rayleigh(scale=sigma_target, size=pellets_per_shot)
         thetas = rng.uniform(0.0, 2.0 * math.pi, size=pellets_per_shot)
 
-        # Longitudinal stringing: deformed pellets experience higher drag
-        # Drag variation: +0% to +35%
-        cd_pellets = cd_base * (1.0 + 0.35 * deformations)
-        kappas = (3.0 * rho_air * cd_pellets) / (4.0 * (m_kg / (math.pi / 6.0 * d_m**3)) * d_m)
+        # Longitudinal stringing: setback deformation spreads drag around baseline path Cd
+        cd_pellets = cd_base * (0.94 + 0.14 * deformations)
+        kappas = (rho_air * area_p * cd_pellets) / (2.0 * max(m_kg, 1e-6))
 
         # Arrival velocity: v(x) = v0 * exp(-kappa * x)
         v_impacts = v0_mps * np.exp(-kappas * target_distance_m)
 
         # Arrival time: t = integral dx / v = (exp(kappa * x) - 1) / (v0 * kappa)
-        t_arrivals = (np.exp(kappas * target_distance_m) - 1.0) / (v0_mps * kappas)
+        kr = np.maximum(kappas * target_distance_m, 1e-8)
+        t_arrivals = np.where(
+            kr > 1e-5,
+            (np.exp(kr) - 1.0) / (v0_mps * kappas),
+            (target_distance_m / max(v0_mps, 1.0)) * (1.0 + 0.5 * kr),
+        )
+
+        # Exact Didion crosswind lag drift: w_z * (t_flight - R / v0)
+        t_mean = float(np.mean(t_arrivals))
+        wind_drift_y = didion_crosswind_drift_m(crosswind_mps, t_mean, target_distance_m, v0_mps)
 
         # Shot string length for this shot: distance between fastest and slowest pellet
         t_min = float(np.min(t_arrivals))
@@ -199,16 +227,18 @@ def simulate_shotgun_pattern_mc(
     total_energy_delivered = float(np.sum(all_energies))
     mean_string_len = float(np.mean(shot_string_lengths_m))
 
-    # 50% and 90% radial containment (CEP50 and R90)
-    sorted_r = np.sort(r_arr)
+    # 50% and 90% radial containment (CEP50 and R90) centered on pattern CoM
+    com_y = float(np.mean(y_arr))
+    com_z = float(np.mean(z_arr))
+    sorted_r = np.sort(np.hypot(y_arr - com_y, z_arr - com_z))
     cep_50_m = float(sorted_r[int(0.50 * (len(sorted_r) - 1))])
     r_90_m = float(sorted_r[int(0.90 * (len(sorted_r) - 1))])
 
-    # Pattern Uniformity Index (ratio of actual 10in to 30in hits vs ideal Gaussian)
-    # Ideal Gaussian ratio = (1 - exp(-r10^2/(2*sigma^2))) / (1 - exp(-r30^2/(2*sigma^2)))
-    uniformity_index = (hits_10in_total / max(hits_30in_total, 1)) / (
-        (r_10in / r_30in) ** 2
-    )
+    # Pattern Uniformity Index: actual 10in-to-30in ratio relative to ideal Rayleigh pattern density
+    ideal_p10 = 1.0 - math.exp(-(r_10in ** 2) / max(2.0 * (sigma_target ** 2), 1e-9))
+    ideal_p30 = 1.0 - math.exp(-(r_30in ** 2) / max(2.0 * (sigma_target ** 2), 1e-9))
+    ideal_ratio = max(ideal_p10 / max(ideal_p30, 1e-6), 1e-6)
+    uniformity_index = (hits_10in_total / max(hits_30in_total, 1)) / ideal_ratio
 
     return {
         "n_shots": n_shots,
@@ -503,7 +533,7 @@ def simulate_multibarrel_burst_mc(
     drone_killed = False
     kill_prob_pct = 0.0
     if target_type == "drone" and drone_spec is not None:
-        crit_hits_req = int(drone_spec.get("critical_hits_to_kill", 2))
+        crit_hits_req = int(drone_spec.get("critical_hits_for_kill", 2))
         drone_type_name = drone_spec.get("drone_type", "quadcopter")
         req_rotors = 1 if drone_type_name == "fixed_wing" else (2 if drone_type_name == "quadcopter" else 3)
         drone_killed = (

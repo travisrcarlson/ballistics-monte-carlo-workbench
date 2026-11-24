@@ -287,8 +287,13 @@ def simulate_unified_tactical_raid_mc(
                     "straight_dive": "linear_cruise",
                     "linear_cruise": "linear_cruise",
                 }.get(str(evasion_profile), "sinusoidal_weave")
+                t_ev = (
+                    (float(weapon_max_range_m) - r_nom) / max(float(threat_speed_mps), 1.0)
+                    if ev_map == "terminal_popup_jink"
+                    else t_fly
+                )
                 ev_off = evaluate_evasive_drone_state(
-                    t_s=t_fly,
+                    t_s=t_ev,
                     target_distance_m=start_r,
                     velocity_mps=float(threat_speed_mps),
                     heading_deg=0.0,
@@ -394,15 +399,17 @@ def simulate_unified_tactical_raid_mc(
                 candidates.sort(key=lambda item: item[0])
                 _, sdist, ray_az, ray_el, chosen_d = candidates[0]
 
-                slew_delta = abs(_angle_diff_deg(ray_az, ts["az_deg"]))
+                slew_az_delta = abs(_angle_diff_deg(ray_az, ts["az_deg"]))
+                slew_el_delta = abs(max(0.0, ray_el) - ts["elev_deg"])
+                slew_delta = math.hypot(slew_az_delta, slew_el_delta)
                 if slew_delta > 15.0:
                     t_slew = _trapezoidal_slew_time(
                         slew_delta, float(turret_slew_rate_deg_s), float(turret_slew_accel_deg_s2)
                     )
-                    # Coarse slewing toward new target azimuth before firing
+                    # Coarse slewing toward new target azimuth/elevation before firing
                     ts["az_deg"] = ray_az
                     ts["elev_deg"] = max(0.0, ray_el)
-                    ts["busy_until_s"] = t_now + max(dt, min(t_slew, 0.7))
+                    ts["busy_until_s"] = t_now + max(dt, t_slew)
                     chosen_d["engaged_by"] = ts["id"]
                     continue
 
@@ -567,9 +574,10 @@ def simulate_unified_tactical_raid_mc(
         if trial_int_ranges:
             intercept_ranges.extend(trial_int_ranges)
 
+        trial_dur_s = max(t_now, dt)
         max_tr_temp = max((ts["peak_temp_c"] for ts in t_states), default=float(ambient_temp_c))
         peak_temps.append(max_tr_temp)
-        rel_pct = float(np.mean([100.0 * ts["reload_time_s"] / max(max_t, 1.0) for ts in t_states]))
+        rel_pct = float(np.mean([100.0 * ts["reload_time_s"] / trial_dur_s for ts in t_states]))
         reload_fracs.append(rel_pct)
 
         for ts in t_states:

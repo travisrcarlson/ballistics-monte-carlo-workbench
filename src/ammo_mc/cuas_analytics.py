@@ -250,10 +250,8 @@ def compare_cuas_architectures_ab(
         peak_temp_c = float(lg_sm["peak_barrel_temp_c"])
         cookoff_margin_c = round(float(lg_sm.get("cookoff_limit_c", 220.0)) - peak_temp_c, 1)
 
-        # Airburst & concentric core boost reflection if configured
+        # Pure physics cumulative kill-chain Pk without artificial preset floor clamping
         pk_kc = float(kc_sm["cumulative_pk_pct"])
-        if econ_ammo == "CUAS_AIRBURST_CANISTER":
-            pk_kc = min(98.5, max(pk_kc, 74.0 if not fiber_optic_autonomous else 71.0))
 
         raw_rows.append(
             {
@@ -419,8 +417,6 @@ def simulate_layered_cuas_defense_mc(
         aspect_mode="head_on_frontal",
         aspect_geom=aspect_geom,
     )
-    if canon_ammo == "CUAS_AIRBURST_CANISTER":
-        base_inner_pk = max(base_inner_pk, 0.72)
 
     weather_mult = float(outer_spec["weather_penalty_fog"]) if weather == "heavy_fog_rain" else 1.0
     c_steel = 0.49

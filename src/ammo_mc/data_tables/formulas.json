@@ -738,7 +738,7 @@
     "formula_id": "TB-09",
     "module": "Terminal - blast",
     "name": "Surface vs free-air burst equivalence",
-    "equation_math": "W_hemi ~ 1.8*W_free (surface-burst reflection factor)",
+    "equation_math": "W_free_equiv ~ 1.8*W_surface (surface-burst reflection factor)",
     "code_form": "W_free_equiv = W_surface*1.8",
     "variables_units": "Rigid-ish ground; 2.0 for perfect reflector",
     "validity_assumptions": "Approximate",

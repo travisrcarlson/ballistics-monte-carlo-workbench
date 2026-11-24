@@ -177,7 +177,12 @@ from ammo_mc.cuas_mission import (
     simulate_multiturret_site_defense_mc,
     validate_cuas_scenario_config,
 )
-from ammo_mc.validation import run_validation_suite
+from ammo_mc.validation import (
+    generate_vv_certificate_html,
+    generate_vv_certificate_markdown,
+    run_extended_vv_benchmarks,
+    run_validation_suite,
+)
 from ammo_mc.vis_cuas import (
     create_2d_cuas_fallout_safety_map_figure,
     create_3d_cuas_fallout_footprint_figure,
@@ -263,15 +268,16 @@ from ammo_mc.ui.common import (
 
 
 def tab_validation() -> None:
-    st.header("✅ Knowledge Base Verification & Validation Suite (V-01a .. V-12)")
+    st.header("✅ Verification & Validation Benchmark Dashboard & Audit Certificates")
     st.markdown(
-        "Automated regression harness comparing Python engine evaluations against `Ammunition Monte Carlo Knowledge Base.xlsx` "
-        "workbook cells and authoritative reference literature (IATG 01.80, STANAG 4355, BRL, McCoy 1974)."
+        "Automated V&V audit harness combining the 22-case `Ammunition Monte Carlo Knowledge Base.xlsx` regression suite "
+        "(`V-01a..V-12`) with 18 independent physical, analytical, and standards benchmarks (`B-01..B-18`) across "
+        "80 linked literature sources."
     )
 
     with st.sidebar:
-        _render_sidebar_header("✅ Validation Suite", "22-case Knowledge Base regression harness")
-        run_val_btn = st.button("🔄 Run Full 22-Case Validation Suite", type="primary", width="stretch", key="val_run_btn")
+        _render_sidebar_header("✅ Validation Suite", "40-check V&V harness & audit certificates")
+        run_val_btn = st.button("🔄 Run Full 40-Check V&V Suite", type="primary", width="stretch", key="val_run_btn")
         val_n_mc = st.select_slider(
             "V-08 Monte Carlo Samples",
             options=[10_000, 25_000, 50_000, 100_000],
@@ -280,86 +286,212 @@ def tab_validation() -> None:
         )
 
     if (
-        "validation_results" not in st.session_state
+        "vv_benchmark_report" not in st.session_state
+        or "validation_results" not in st.session_state
         or run_val_btn
         or st.session_state.get("_val_last_n_mc") != val_n_mc
     ):
-        with st.spinner("Executing 22 analytical and stochastic verification cases..."):
-            val_results = run_validation_suite(seed=42, n_mc_v08=int(val_n_mc))
-            st.session_state["validation_results"] = val_results
+        with st.spinner("Executing 22 workbook cases + 18 extended physics V&V benchmarks..."):
+            report = run_extended_vv_benchmarks(seed=42, n_mc_v08=int(val_n_mc))
+            st.session_state["vv_benchmark_report"] = report
+            st.session_state["validation_results"] = report["workbook_cases"]
             st.session_state["_val_last_n_mc"] = int(val_n_mc)
 
-    v_df = pd.DataFrame(st.session_state["validation_results"])
+    report = st.session_state["vv_benchmark_report"]
+    summary = report["summary"]
+    lit = summary["literature"]
+    v_df = pd.DataFrame(report["workbook_cases"])
+    b_df = pd.DataFrame(report["physics_benchmarks"])
+    dom_df = pd.DataFrame(summary["domain_breakdown"])
 
     with st.sidebar:
         st.divider()
-        st.subheader("🔎 Filter & Export")
+        st.subheader("🔎 Filters & Exports")
         status_filter = st.radio(
             "Filter by Status",
             ["All Cases", "PASS Only", "Non-PASS Only"],
             key="val_status_filter",
         )
+        domain_opts = sorted(b_df["domain"].astype(str).unique().tolist())
+        domain_filter = st.multiselect(
+            "Filter Physics Benchmarks by Domain",
+            domain_opts,
+            default=[],
+            key="val_domain_filter",
+        )
         formula_opts = sorted(v_df["formula"].astype(str).unique().tolist())
         formula_filter = st.multiselect(
-            "Filter by Formula ID",
+            "Filter Workbook by Formula ID",
             formula_opts,
             default=[],
             key="val_formula_filter",
         )
+        cert_html = generate_vv_certificate_html(report)
+        cert_md = generate_vv_certificate_markdown(report)
         st.download_button(
-            "📥 Download Validation Results (.csv)",
+            "📜 Download Audit Certificate (.html)",
+            cert_html.encode("utf-8"),
+            "ammo_mc_vv_certificate.html",
+            "text/html",
+            key="val_dl_html_btn",
+            width="stretch",
+        )
+        st.download_button(
+            "📝 Download Audit Certificate (.md)",
+            cert_md.encode("utf-8"),
+            "ammo_mc_vv_certificate.md",
+            "text/markdown",
+            key="val_dl_md_btn",
+            width="stretch",
+        )
+        st.download_button(
+            "📥 Download Workbook Results (.csv)",
             v_df.to_csv(index=False).encode("utf-8"),
             "kb_validation_suite_results.csv",
             "text/csv",
             key="val_dl_csv_btn",
             width="stretch",
         )
-
-    filtered_df = v_df.copy()
-    if status_filter == "PASS Only":
-        filtered_df = filtered_df[filtered_df["status"].astype(str).str.contains("PASS")]
-    elif status_filter == "Non-PASS Only":
-        filtered_df = filtered_df[~filtered_df["status"].astype(str).str.contains("PASS")]
-    if formula_filter:
-        filtered_df = filtered_df[filtered_df["formula"].astype(str).isin(formula_filter)]
-
-    n_pass = sum(1 for s in v_df["status"] if "PASS" in str(s))
-    max_err_excel = float(v_df["rel_err_vs_excel"].max())
-
-    vc1, vc2, vc3 = st.columns(3)
-    vc1.metric("Validation Cases Passed", f"{n_pass} / {len(v_df)}", delta="100% Pass Rate" if n_pass == len(v_df) else f"{len(v_df) - n_pass} Flagged")
-    vc2.metric("Max Relative Deviation vs Excel", f"{max_err_excel * 100:.4f} %")
-    vc3.metric("Registered Formula Functions", "96 / 96", delta="All Verified")
-
-    if filtered_df.empty:
-        st.info("No validation cases match the selected sidebar filters.")
-    else:
-        if len(filtered_df) != len(v_df):
-            st.caption(f"Showing {len(filtered_df)} of {len(v_df)} validation cases based on sidebar filters.")
-        fig_val = px.bar(
-            filtered_df,
-            x="test_id",
-            y="rel_err_vs_expected",
-            color="formula",
-            labels={"test_id": "Validation Test ID", "rel_err_vs_expected": "Relative Error vs Expected"},
-            title="Relative Deviation Across Knowledge Base Validation Cases",
-        )
-        fig_val.update_layout(height=340, margin=dict(l=20, r=20, t=40, b=20))
-        st.plotly_chart(fig_val, width="stretch")
-
-        st.dataframe(
-            filtered_df[
-                [
-                    "test_id",
-                    "formula",
-                    "status",
-                    "computed",
-                    "excel_value",
-                    "expected",
-                    "rel_err_vs_excel",
-                    "rel_err_vs_expected",
-                    "case",
-                ]
-            ],
+        st.download_button(
+            "🧾 Download Full V&V Payload (.json)",
+            json.dumps(report, indent=2).encode("utf-8"),
+            "ammo_mc_vv_report.json",
+            "application/json",
+            key="val_dl_json_btn",
             width="stretch",
         )
+
+    filtered_b = b_df.copy()
+    filtered_v = v_df.copy()
+    if status_filter == "PASS Only":
+        filtered_b = filtered_b[filtered_b["status"].astype(str).str.contains("PASS")]
+        filtered_v = filtered_v[filtered_v["status"].astype(str).str.contains("PASS")]
+    elif status_filter == "Non-PASS Only":
+        filtered_b = filtered_b[~filtered_b["status"].astype(str).str.contains("PASS")]
+        filtered_v = filtered_v[~filtered_v["status"].astype(str).str.contains("PASS")]
+    if domain_filter:
+        filtered_b = filtered_b[filtered_b["domain"].astype(str).isin(domain_filter)]
+    if formula_filter:
+        filtered_v = filtered_v[filtered_v["formula"].astype(str).isin(formula_filter)]
+
+    kc1, kc2, kc3, kc4 = st.columns(4)
+    kc1.metric(
+        "Extended Physics Benchmarks",
+        f"{summary['physics_passed']} / {summary['physics_total']}",
+        delta=f"{summary['overall_physics_pass_rate_pct']:.1f}% Verified",
+    )
+    kc2.metric(
+        "Workbook Cases (Excel Match)",
+        f"{summary['workbook_excel_passed']} / {summary['workbook_total']}",
+        delta=f"{summary['workbook_source_passed']}/{summary['workbook_total']} Source Tol",
+    )
+    kc3.metric(
+        "Literature & Formula Governance",
+        f"{lit['total_formulas']} / {lit['total_sources']}",
+        delta=f"{lit['linked_source_coverage_pct']:.0f}% Linked ({len(lit['flagged_formula_ids'])} Flagged)",
+    )
+    kc4.metric(
+        "Total V&V Runtime",
+        f"{report['elapsed_s']:.2f} s",
+        delta=f"{summary['total_checks']} Total Checks",
+    )
+
+    tab_score, tab_phys, tab_wb = st.tabs(
+        [
+            "📊 Executive Scorecard & Tolerance Margins",
+            "🔬 Extended Physics Benchmarks (B-01..B-18)",
+            "📋 Knowledge Base Workbook Suite (V-01a..V-12)",
+        ]
+    )
+
+    with tab_score:
+        st.subheader("Domain Verification Scorecard")
+        st.dataframe(dom_df, width="stretch")
+
+        if filtered_b.empty:
+            st.info("No extended physics benchmarks match the selected sidebar filters.")
+        else:
+            fig_margin = px.bar(
+                filtered_b.sort_values("utilization_pct", ascending=True),
+                x="utilization_pct",
+                y="benchmark_id",
+                color="domain",
+                orientation="h",
+                hover_data=["title", "computed", "reference", "rel_error", "tolerance", "status"],
+                labels={
+                    "utilization_pct": "Tolerance Utilization (% of Allowed Margin Used)",
+                    "benchmark_id": "Benchmark ID",
+                },
+                title="Normalized Tolerance Utilization Across Physics Benchmarks (Lower = Tighter Match)",
+            )
+            fig_margin.add_vline(x=100.0, line_dash="dash", line_color="red", annotation_text="100% Limit")
+            fig_margin.update_layout(height=480, margin=dict(l=20, r=20, t=44, b=20))
+            st.plotly_chart(fig_margin, width="stretch")
+
+        st.warning(
+            f"**Formula Registry Governance Status:** `{', '.join(lit['flagged_formula_ids'])}` remain explicitly flagged "
+            f"requiring secondary verification (workbook open issue: `{', '.join(summary['workbook_flagged_open_ids']) or 'None'}`)."
+        )
+
+    with tab_phys:
+        st.subheader("18 Independent Physical, Analytical & Standards Benchmarks (B-01..B-18)")
+        if filtered_b.empty:
+            st.info("No extended physics benchmarks match the selected sidebar filters.")
+        else:
+            disp_b = filtered_b.copy()
+            disp_b["source_ids"] = disp_b["source_ids"].apply(lambda s: ", ".join(s) if isinstance(s, list) else str(s))
+            st.dataframe(
+                disp_b[
+                    [
+                        "benchmark_id",
+                        "domain",
+                        "status",
+                        "computed",
+                        "reference",
+                        "unit",
+                        "rel_error",
+                        "tolerance",
+                        "utilization_pct",
+                        "source_ids",
+                        "title",
+                        "notes",
+                    ]
+                ],
+                width="stretch",
+                height=520,
+            )
+
+    with tab_wb:
+        st.subheader("22 Knowledge Base Workbook Regression Cases (V-01a..V-12)")
+        if filtered_v.empty:
+            st.info("No validation cases match the selected sidebar filters.")
+        else:
+            if len(filtered_v) != len(v_df):
+                st.caption(f"Showing {len(filtered_v)} of {len(v_df)} validation cases based on sidebar filters.")
+            fig_val = px.bar(
+                filtered_v,
+                x="test_id",
+                y="rel_err_vs_expected",
+                color="formula",
+                labels={"test_id": "Validation Test ID", "rel_err_vs_expected": "Relative Error vs Expected"},
+                title="Relative Deviation Across Knowledge Base Validation Cases",
+            )
+            fig_val.update_layout(height=340, margin=dict(l=20, r=20, t=40, b=20))
+            st.plotly_chart(fig_val, width="stretch")
+
+            st.dataframe(
+                filtered_v[
+                    [
+                        "test_id",
+                        "formula",
+                        "status",
+                        "computed",
+                        "excel_value",
+                        "expected",
+                        "rel_err_vs_excel",
+                        "rel_err_vs_expected",
+                        "case",
+                    ]
+                ],
+                width="stretch",
+            )

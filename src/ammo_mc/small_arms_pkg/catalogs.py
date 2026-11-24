@@ -83,6 +83,12 @@ PELLET_SPECIFICATIONS: dict[str, dict[str, Any]] = {
         "standard_12g_count": 16,
         "type": "buckshot",
     },
+    "#2 Buckshot": {
+        "diameter_mm": 6.86,  # 0.270 in
+        "mass_g": 1.91,
+        "standard_12g_count": 18,
+        "type": "buckshot",
+    },
     "#4 Buckshot": {
         "diameter_mm": 6.10,  # 0.240 in
         "mass_g": 1.34,
@@ -184,12 +190,12 @@ SHOTGUN_PRESETS: dict[str, dict[str, Any]] = {
         "pellet_mass_g": 0.081,
         "v0_mps": 395.0,
         "default_choke": "Modified",
-        "description": "Standard 1-1/8 oz sporting clay and trap competition load.",
+        "description": "Standard 1 oz (350-pellet) sporting clay and trap competition load.",
     },
     "20G_NO2_BUCK_LIGHT": {
         "name": "20-Gauge #2 Buckshot (18 Pellets)",
         "gauge": "20_gauge",
-        "pellet_type": "#1 Buckshot",
+        "pellet_type": "#2 Buckshot",
         "pellets_per_shot": 18,
         "pellet_diameter_mm": 6.86,
         "pellet_mass_g": 1.91,

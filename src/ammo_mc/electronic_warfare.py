@@ -59,6 +59,7 @@ def simulate_sal_seeker_tracking(
     spot_x = tx + float(rng.normal(0.0, laser_jitter_sigma_m))
     spot_y = ty + float(rng.normal(0.0, laser_jitter_sigma_m))
     spot_z = tz
+    min_total_optical_trans = trans_des
 
     for idx, pt in enumerate(trajectory_pts):
         px, py, pz = pt[0], pt[1], pt[2]
@@ -82,7 +83,7 @@ def simulate_sal_seeker_tracking(
         cos_look = (vx * los_x + vy * los_y + vz * los_z) / v_mag
         look_angle_deg = math.degrees(math.acos(float(np.clip(cos_look, -1.0, 1.0))))
 
-        # Check optical acquisition conditions
+        # Check 2-way Beer-Lambert optical acquisition conditions (Designator->Target * Target->Seeker)
         r_proj_tgt_km = dist_to_tgt / 1000.0
         trans_proj = math.exp(-smoke_extinction_coeff_per_km * r_proj_tgt_km)
         total_optical_trans = trans_des * trans_proj
@@ -97,12 +98,15 @@ def simulate_sal_seeker_tracking(
             seeker_locked = True
             lock_point_idx = idx
             lock_slant_range_m = dist_to_tgt
+            min_total_optical_trans = total_optical_trans
 
-        # Apply terminal homing pull when locked
+        # Closed-loop exponential homing convergence toward laser spot upon lock
         if seeker_locked and idx >= lock_point_idx:
-            pull_factor = min(1.0, (idx - lock_point_idx + 1) / max(1, len(trajectory_pts) - lock_point_idx))
-            c_px = px + (spot_x - px) * 0.45 * pull_factor
-            c_py = py + (spot_y - py) * 0.45 * pull_factor
+            lock_frac = (idx - lock_point_idx + 1) / max(1, len(trajectory_pts) - lock_point_idx)
+            pull_factor = 1.0 - math.exp(-4.5 * lock_frac)
+            pull_factor = min(1.0, pull_factor / (1.0 - math.exp(-4.5)))
+            c_px = px + (spot_x - px) * pull_factor
+            c_py = py + (spot_y - py) * pull_factor
             corrected_traj.append([c_px, c_py, pz])
         else:
             corrected_traj.append([px, py, pz])
@@ -114,7 +118,7 @@ def simulate_sal_seeker_tracking(
 
     return {
         "seeker_locked": seeker_locked,
-        "optical_transmission": round(float(trans_des), 3),
+        "optical_transmission": round(float(min_total_optical_trans), 3),
         "lock_range_m": round(lock_slant_range_m, 1),
         "lock_point_index": lock_point_idx,
         "laser_spot_pos_m": [round(spot_x, 2), round(spot_y, 2), round(spot_z, 2)],
@@ -175,13 +179,24 @@ def simulate_ins_gps_guidance_under_jamming(
     t_elapsed = 0.0
     drift_x = 0.0
     drift_y = 0.0
+    # Draw fixed coherent IMU sensor bias signs/realizations per flight (no zero-mean cancellation)
+    omega_schuler = math.sqrt(9.80665 / 6371000.0)
+    a_bias_mps2 = (imu_accel_bias_mg * 1e-3) * 9.80665
+    g_drift_rad_s = math.radians(imu_gyro_drift_deg_per_hr / 3600.0)
+    bx_real = float(rng.normal(0.0, a_bias_mps2))
+    by_real = float(rng.normal(0.0, a_bias_mps2))
+    gx_real = float(rng.normal(0.0, g_drift_rad_s))
+    gy_real = float(rng.normal(0.0, g_drift_rad_s))
+    vx_err_init = float(rng.normal(0.0, 0.15))
+    vy_err_init = float(rng.normal(0.0, 0.15))
+    rw_x = 0.0
+    rw_y = 0.0
 
     for idx, pt in enumerate(trajectory_pts):
         px, py, pz = pt[0], pt[1], pt[2]
         dist_to_jammer = math.hypot(px - jx, py - jy, pz - jz)
 
-        # Free space path loss to jammer
-        # P_rx_jam = P_tx * (lambda / (4 * pi * R))^2
+        # Free space path loss to jammer: P_rx_jam = P_tx * (lambda / (4 * pi * R))^2
         path_loss_db = 20.0 * math.log10(max(dist_to_jammer, 10.0)) + 20.0 * math.log10(jamming_carrier_ghz) + 32.44
         p_tx_jam_dbw = 10.0 * math.log10(max(jammer_power_kw * 1000.0, 1.0))
         p_jam_rx_dbw = p_tx_jam_dbw - path_loss_db
@@ -195,18 +210,13 @@ def simulate_ins_gps_guidance_under_jamming(
             denial_time_s = t_elapsed
 
         if gps_denied:
-            # Inertial drift growth
+            # Coherent Schuler-coupled pure-inertial drift + integrated random walk
             t_drift = t_elapsed - denial_time_s
-            # Accel bias drift (converted to m/s^2)
-            a_bias_mps2 = (imu_accel_bias_mg * 1e-3) * 9.80665
-            # Gyro drift rate (converted to rad/s)
-            g_drift_rad_s = math.radians(imu_gyro_drift_deg_per_hr / 3600.0)
-
-            # Quadratic and cubic navigation drift
-            pos_drift_mag = 0.5 * a_bias_mps2 * (t_drift**2) + (1.0 / 6.0) * 9.80665 * g_drift_rad_s * (t_drift**3)
-            # Stochastic angle walk
-            drift_x += float(rng.normal(0.0, 0.4 * pos_drift_mag * 0.1))
-            drift_y += float(rng.normal(0.0, 0.7 * pos_drift_mag * 0.15))
+            schuler_accel_factor = (1.0 - math.cos(omega_schuler * t_drift)) / (omega_schuler ** 2)
+            rw_x += float(rng.normal(0.0, 0.05 * a_bias_mps2 * (dt_step ** 1.5)))
+            rw_y += float(rng.normal(0.0, 0.05 * a_bias_mps2 * (dt_step ** 1.5)))
+            drift_x = vx_err_init * t_drift + bx_real * schuler_accel_factor + (1.0 / 6.0) * 9.80665 * gy_real * (t_drift ** 3) + rw_x
+            drift_y = vy_err_init * t_drift + by_real * schuler_accel_factor + (1.0 / 6.0) * 9.80665 * gx_real * (t_drift ** 3) + rw_y
 
             actual_guided_traj.append([px + drift_x, py + drift_y, pz])
         else:

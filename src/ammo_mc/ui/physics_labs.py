@@ -139,7 +139,15 @@ from ammo_mc.terminal_blast import (
     tb_13_axelsson_chest_wall,
     tb_15_simple_safety_distances,
     tb_16_thermal_dose,
+    tno_eardrum_rupture_probit,
+    tno_lung_lethality_probit,
+    tno_thermal_lethality_probit,
 )
+from ammo_mc.terminal_concrete import (
+    forrestal_frew_concrete_penetration,
+    ndrc_concrete_perforation_and_scabbing,
+)
+from ammo_mc.advanced_armor import tate_alekseevskii_penetration
 from ammo_mc.terminal_frag import (
     tf_01_gurney_cyl_sphere,
     tf_02_gurney_sandwiches,
@@ -810,6 +818,158 @@ def tab_calculators() -> None:
             st.metric("De Marre Mild-Steel Penetration (TF-13)", f"{dm_pen_m * 1000.0:.2f} mm", delta=f"Fragment KE: {0.5 * (thor_m_g * 1e-3) * (thor_vs**2):.0f} J", delta_color="off")
             st.dataframe(thor_df, width="stretch", height=365)
 
+        st.divider()
+        st.subheader("🧱 Concrete Penetration (Forrestal–Frew & Modified NDRC), Tate–Alekseevskii Long-Rod ODE & TNO Blast Probits")
+        t_conc, t_tate, t_tno = st.tabs(
+            [
+                "🧱 Concrete & Slab Limits (S73)",
+                "🎯 Tate–Alekseevskii ODE (S74)",
+                "🫧 TNO Green Book Probits (S78)",
+            ]
+        )
+        with t_conc:
+            cc1, cc2, cc3 = st.columns(3)
+            c_mass = cc1.slider("Projectile mass (kg)", 0.5, 50.0, 10.0, 0.5, key="pl5_conc_mass")
+            c_diam_mm = cc1.slider("Projectile diameter (mm)", 20.0, 203.0, 105.0, 5.0, key="pl5_conc_d")
+            c_vel = cc2.slider("Impact velocity (m/s)", 200.0, 1600.0, 800.0, 25.0, key="pl5_conc_v")
+            c_fc = cc2.slider("Concrete compressive strength f'c (MPa)", 20.0, 80.0, 35.0, 1.0, key="pl5_conc_fc")
+            c_crh = cc3.slider("Ogive CRH (caliber radius head)", 1.0, 6.0, 3.0, 0.25, key="pl5_conc_crh")
+            c_wall = cc3.slider("Target slab thickness (m)", 0.2, 3.0, 0.85, 0.05, key="pl5_conc_wall")
+
+            ff_res = forrestal_frew_concrete_penetration(
+                mass_kg=c_mass,
+                diameter_m=c_diam_mm / 1000.0,
+                velocity_mps=c_vel,
+                crh_psi=c_crh,
+                fc_mpa=c_fc,
+            )
+            ndrc_res = ndrc_concrete_perforation_and_scabbing(
+                mass_kg=c_mass,
+                diameter_m=c_diam_mm / 1000.0,
+                velocity_mps=c_vel,
+                fc_mpa=c_fc,
+                wall_thickness_m=c_wall,
+            )
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            mc1.metric("Forrestal–Frew DoP", f"{ff_res['penetration_mm']:.0f} mm", f"S={ff_res['s_resistance_factor']:.2f}")
+            mc2.metric("Modified NDRC DoP", f"{ndrc_res['penetration_mm']:.0f} mm", ff_res["regime"])
+            mc3.metric(
+                "Perforation Limit",
+                f"{ndrc_res['perforation_limit_mm']:.0f} mm",
+                "PERFORATES" if ndrc_res["perforates_wall"] else "STOPPED",
+            )
+            mc4.metric(
+                "Scabbing Limit",
+                f"{ndrc_res['scabbing_limit_mm']:.0f} mm",
+                "SPALLS" if ndrc_res["spalls_back_face"] else "INTACT",
+            )
+
+            v_sweep_c = np.linspace(250.0, 1500.0, 40)
+            ff_curve = [
+                forrestal_frew_concrete_penetration(c_mass, c_diam_mm / 1000.0, float(v), crh_psi=c_crh, fc_mpa=c_fc)["penetration_mm"]
+                for v in v_sweep_c
+            ]
+            ndrc_dop_c = [
+                ndrc_concrete_perforation_and_scabbing(c_mass, c_diam_mm / 1000.0, float(v), fc_mpa=c_fc)["penetration_mm"]
+                for v in v_sweep_c
+            ]
+            ndrc_perf_c = [
+                ndrc_concrete_perforation_and_scabbing(c_mass, c_diam_mm / 1000.0, float(v), fc_mpa=c_fc)["perforation_limit_mm"]
+                for v in v_sweep_c
+            ]
+            fig_conc = go.Figure()
+            fig_conc.add_trace(go.Scatter(x=v_sweep_c, y=ff_curve, name="Forrestal–Frew DoP (mm)", line=dict(width=3)))
+            fig_conc.add_trace(go.Scatter(x=v_sweep_c, y=ndrc_dop_c, name="Modified NDRC DoP (mm)", line=dict(dash="dash")))
+            fig_conc.add_trace(go.Scatter(x=v_sweep_c, y=ndrc_perf_c, name="NDRC Perforation Limit (mm)", line=dict(dash="dot")))
+            fig_conc.add_hline(y=c_wall * 1000.0, line_dash="dashdot", line_color="red", annotation_text=f"Slab {c_wall:.2f} m")
+            fig_conc.update_layout(
+                title="Concrete Penetration & Slab Perforation Threshold vs Impact Velocity",
+                xaxis_title="Impact Velocity (m/s)",
+                yaxis_title="Depth / Thickness (mm)",
+                template="plotly_white",
+                height=350,
+            )
+            st.plotly_chart(fig_conc, width="stretch")
+
+        with t_tate:
+            tc1, tc2 = st.columns(2)
+            t_v = tc1.slider("Long-rod impact velocity (m/s)", 800.0, 2200.0, 1650.0, 25.0, key="pl5_tate_v")
+            t_len = tc1.slider("Rod length L0 (m)", 0.10, 0.80, 0.50, 0.02, key="pl5_tate_l")
+            t_rt = tc2.slider("Target resistance Rt (GPa)", 2.0, 10.0, 5.5, 0.25, key="pl5_tate_rt")
+            t_yp = tc2.slider("Penetrator yield Yp (GPa)", 0.5, 3.5, 1.5, 0.1, key="pl5_tate_yp")
+
+            tate_res = tate_alekseevskii_penetration(
+                v_impact_mps=t_v,
+                rod_length_m=t_len,
+                y_p_gpa=t_yp,
+                r_t_gpa=t_rt,
+            )
+            tm1, tm2, tm3, tm4 = st.columns(4)
+            tm1.metric("Final Penetration", f"{tate_res['penetration_mm']:.1f} mm", f"P/L = {tate_res['penetration_over_length']:.2f}")
+            tm2.metric("Hydrodynamic Limit P/L", f"{tate_res['hydrodynamic_limit_p_over_l']:.2f}")
+            tm3.metric("Critical Velocity Vcrit", f"{tate_res['critical_velocity_mps']:.0f} m/s")
+            tm4.metric("Residual Rod", f"{tate_res['residual_rod_length_mm']:.1f} mm", f"{tate_res['duration_us']:.0f} µs")
+
+            hist_t = tate_res["history"]
+            fig_tate = make_subplots(specs=[[{"secondary_y": True}]])
+            fig_tate.add_trace(
+                go.Scatter(x=hist_t["t_us"], y=hist_t["penetration_mm"], name="Penetration Depth (mm)"),
+                secondary_y=False,
+            )
+            fig_tate.add_trace(
+                go.Scatter(x=hist_t["t_us"], y=hist_t["rod_length_mm"], name="Residual Rod Length (mm)", line=dict(dash="dash")),
+                secondary_y=False,
+            )
+            fig_tate.add_trace(
+                go.Scatter(x=hist_t["t_us"], y=hist_t["tail_velocity_mps"], name="Tail Velocity (m/s)"),
+                secondary_y=True,
+            )
+            fig_tate.add_trace(
+                go.Scatter(x=hist_t["t_us"], y=hist_t["interface_velocity_mps"], name="Interface Velocity u (m/s)", line=dict(dash="dot")),
+                secondary_y=True,
+            )
+            fig_tate.update_layout(
+                title="Tate–Alekseevskii Erosion & Deceleration Time History (WHA Rod vs Steel)",
+                xaxis_title="Time (µs)",
+                template="plotly_white",
+                height=350,
+            )
+            fig_tate.update_yaxes(title_text="Length / Depth (mm)", secondary_y=False)
+            fig_tate.update_yaxes(title_text="Velocity (m/s)", secondary_y=True)
+            st.plotly_chart(fig_tate, width="stretch")
+
+        with t_tno:
+            pc1, pc2 = st.columns(2)
+            p_ear_kpa = pc1.slider("Incident overpressure Ps for eardrum (kPa)", 5.0, 200.0, 35.0, 2.5, key="pl5_tno_ear")
+            p_lung_kpa = pc1.slider("Effective overpressure Peff for lung (kPa)", 100.0, 1200.0, 650.0, 25.0, key="pl5_tno_lung_p")
+            i_lung_pas = pc2.slider("Blast impulse I for lung (Pa·s)", 100.0, 5000.0, 2400.0, 50.0, key="pl5_tno_lung_i")
+            tdu_val = pc2.slider("Thermal dose TDU ((kW/m²)^4/3·s)", 100.0, 5000.0, 2400.0, 50.0, key="pl5_tno_tdu")
+
+            ear_res = tno_eardrum_rupture_probit(p_ear_kpa * 1000.0)
+            lung_res = tno_lung_lethality_probit(p_lung_kpa * 1000.0, i_lung_pas)
+            therm_res = tno_thermal_lethality_probit(tdu_val)
+
+            pm1, pm2, pm3 = st.columns(3)
+            pm1.metric("Eardrum Rupture (CPR 16E)", f"{ear_res['probability'] * 100.0:.1f}%", f"Y = {ear_res['probit']:.2f}")
+            pm2.metric("Lung Lethality (CPR 16E)", f"{lung_res['probability'] * 100.0:.1f}%", f"Y = {lung_res['probit']:.2f}")
+            pm3.metric("Thermal Lethality (CPR 16E)", f"{therm_res['probability'] * 100.0:.1f}%", f"Y = {therm_res['probit']:.2f}")
+
+            ps_grid = np.linspace(5.0, 200.0, 60)
+            ear_probs = np.asarray(tno_eardrum_rupture_probit(ps_grid * 1000.0)["probability"]) * 100.0
+            peff_grid = np.linspace(150.0, 1200.0, 60)
+            lung_probs = np.asarray(tno_lung_lethality_probit(peff_grid * 1000.0, np.full_like(peff_grid, i_lung_pas))["probability"]) * 100.0
+            fig_tno = go.Figure()
+            fig_tno.add_trace(go.Scatter(x=ps_grid, y=ear_probs, name="Eardrum Rupture vs Ps (kPa)"))
+            fig_tno.add_trace(go.Scatter(x=peff_grid, y=lung_probs, name=f"Lung Lethality vs Peff (I={i_lung_pas:.0f} Pa·s)"))
+            fig_tno.update_layout(
+                title="TNO Green Book (CPR 16E) Injury & Lethality Probit Curves",
+                xaxis_title="Overpressure (kPa)",
+                yaxis_title="Response Probability (%)",
+                template="plotly_white",
+                height=340,
+            )
+            st.plotly_chart(fig_tno, width="stretch")
+
     # --- SUB-LAB 6: QUASI-MONTE CARLO DISCREPANCY & KNOWLEDGE BASE ---
     elif active_lab == _PHYSICS_LABS[5]:
         st.subheader("📐 Quasi-Monte Carlo Low-Discrepancy Sampling (`MC-05`, `MC-06`) & Salvo Correlation (`TV-04`, `TV-05`)")
@@ -909,12 +1069,20 @@ def tab_calculators() -> None:
             )
             st.plotly_chart(fig_salvo, width="stretch")
 
-        st.subheader("📚 Authoritative Knowledge Base Explorer (96 Formulas & 68 Primary Sources)")
+        st.subheader(
+            f"📚 Authoritative Knowledge Base Explorer ({len(kb.formulas)} Formulas & {len(kb.sources)} Primary Sources)"
+        )
         kb_tab_choice = st.selectbox(
             "Select Knowledge Base Sheet",
-            ["Formulas (96)", "Explosives", "THOR_Coefficients", "Ammo_Taxonomy", "Sources (68)"],
+            [
+                f"Formulas ({len(kb.formulas)})",
+                "Explosives",
+                "THOR_Coefficients",
+                "Ammo_Taxonomy",
+                f"Sources ({len(kb.sources)})",
+            ],
         )
-        if kb_tab_choice == "Formulas (96)":
+        if kb_tab_choice.startswith("Formulas"):
             forms_df = pd.DataFrame(kb.formulas)
             cols_f = [
                 c

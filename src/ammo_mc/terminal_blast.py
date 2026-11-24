@@ -9,6 +9,7 @@ probit conversion, IATG 01.80 simple range safety distances, and thermal dose.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 import numpy as np
 from scipy import stats as sp_stats
@@ -512,11 +513,13 @@ def evaluate_blast_field(
     zp_clamped = np.maximum(zp, 0.0675)
     zi_clamped = np.maximum(zi, 0.0675)
 
-    # Inside Z <= 40: Kingery-Bulmash; beyond Z > 40: Kinney-Graham (using 1.8*wp_hemi free-air equiv)
-    ps_kb = np.asarray(tb_03_kingery_bulmash(np.minimum(zp_clamped, 40.0), wp_hemi, "Ps"), dtype=np.float64)
+    # Inside Z <= 38: Kingery-Bulmash; beyond Z >= 42: Kinney-Graham; C1 smoothstep across [38, 42]
+    ps_kb = np.asarray(tb_03_kingery_bulmash(np.minimum(zp_clamped, 42.0), wp_hemi, "Ps"), dtype=np.float64)
     z_kg_free = slant_r / (np.power(np.maximum(wp_hemi * 1.8, 1e-9), 1.0 / 3.0) * sd)
     ps_kg = np.asarray(tb_04_kinney_graham(z_kg_free, Pa_kPa=101.325), dtype=np.float64)
-    ps_sl = np.where(zp_clamped <= 40.0, ps_kb, ps_kg)
+    a_blend = np.clip((zp_clamped - 38.0) / 4.0, 0.0, 1.0)
+    w_blend = a_blend * a_blend * (3.0 - 2.0 * a_blend)
+    ps_sl = (1.0 - w_blend) * ps_kb + w_blend * ps_kg
     ps_kpa = ps_sl * sp
 
     is_sl = np.asarray(tb_03_kingery_bulmash(np.minimum(zi_clamped, 40.0), wi_hemi, "Is"), dtype=np.float64)
@@ -528,9 +531,9 @@ def evaluate_blast_field(
     td_ms = td_sl * st
 
     q_kpa = np.asarray(tb_05_dynamic_pressure(ps_kpa, pz_kpa), dtype=np.float64)
-    pr_kb = np.asarray(tb_03_kingery_bulmash(np.minimum(zp_clamped, 40.0), wp_hemi, "Pr"), dtype=np.float64) * sp
+    pr_kb = np.asarray(tb_03_kingery_bulmash(np.minimum(zp_clamped, 42.0), wp_hemi, "Pr"), dtype=np.float64) * sp
     pr_rh = np.asarray(tb_07_normal_reflected_pressure(ps_kpa, pz_kpa), dtype=np.float64)
-    pr_kpa = np.where(zp_clamped <= 40.0, pr_kb, pr_rh)
+    pr_kpa = (1.0 - w_blend) * pr_kb + w_blend * pr_rh
 
     if np.ndim(R_m) == 0 and np.ndim(w_fill_kg) == 0:
         return {
@@ -554,3 +557,113 @@ def evaluate_blast_field(
 # Aliases for convenience and backward compatibility
 tb_01_hopkinson_cranz_scaled_distance = tb_01_scaled_distance
 tb_03_kingery_bulmash_blast = tb_03_kingery_bulmash
+
+
+def compute_mach_stem_triple_point_height(
+    range_m: float,
+    hob_m: float,
+    w_tnt_kg: float,
+) -> float:
+    """Estimate UFC 3-340-02 / Swisdak Mach-stem triple-point height H_tp(R) [m] above ground.
+
+    When height of burst hob_m > 0, shock reflection from the ground transitions from
+    regular reflection to Mach reflection at scaled range Z_tp_onset, after which the
+    triple point rises smoothly as H_tp ~ W^(1/3) * 0.068 * (Z - Z_onset)^1.35.
+    """
+    w13 = max(float(w_tnt_kg), 1e-6) ** (1.0 / 3.0)
+    z_r = max(float(range_m), 0.0) / w13
+    z_h = max(float(hob_m), 0.0) / w13
+    if z_h <= 1e-4:
+        return float("inf")
+    z_onset = 0.68 * z_h + 0.14 * (z_h ** 2)
+    if z_r <= z_onset:
+        return 0.0
+    h_tp = w13 * 0.068 * ((z_r - z_onset) ** 1.35)
+    return float(max(0.0, h_tp))
+
+
+def evaluate_airburst_mach_stem_blast(
+    range_m: float,
+    hob_m: float,
+    w_tnt_kg: float,
+    target_height_m: float = 1.5,
+) -> dict[str, float | bool]:
+    """Evaluate UFC 3-340-02 airburst ground-level overpressure with Mach-stem transition."""
+    w = max(float(w_tnt_kg), 1e-6)
+    w13 = w ** (1.0 / 3.0)
+    r = max(float(range_m), 0.1)
+    h = max(float(hob_m), 0.0)
+    h_tp = compute_mach_stem_triple_point_height(r, h, w)
+    in_mach_stem = (h <= 1e-4) or (target_height_m <= h_tp)
+
+    # Free-air incident overpressure uses equivalent hemispherical charge W/1.8 -> Z_eq = (R/W^(1/3)) * 1.8^(1/3)
+    slant = math.hypot(r, h)
+    z_free = (slant / w13) * (1.8 ** (1.0 / 3.0))
+    ps_free_kpa = float(tb_03_kingery_bulmash(min(max(z_free, 0.0675), 40.0), w / 1.8, "Ps"))
+    z_hemi = slant / w13
+    ps_hemi_kpa = float(tb_03_kingery_bulmash(min(max(z_hemi, 0.0675), 40.0), w, "Ps"))
+
+    # Inside Mach-stem zone, coalescence yields up to ~1.85-2.0x overpressure vs free air
+    z_h = h / w13
+    if in_mach_stem:
+        mach_factor = 1.0 + 0.18 * math.exp(-((z_h - 0.55) / 0.45) ** 2) if 0.05 < z_h < 2.2 else 1.0
+        ps_eff_kpa = ps_hemi_kpa * mach_factor
+    else:
+        # Regular reflection region above triple point
+        ps_eff_kpa = ps_free_kpa
+
+    return {
+        "range_m": float(r),
+        "hob_m": float(h),
+        "triple_point_height_m": float(h_tp if math.isfinite(h_tp) else 9999.0),
+        "in_mach_stem": bool(in_mach_stem),
+        "ps_free_air_kPa": float(ps_free_kpa),
+        "ps_mach_stem_kPa": float(ps_eff_kpa),
+    }
+
+
+def tno_lung_lethality_probit(
+    p_eff_Pa: float | np.ndarray,
+    impulse_Pa_s: float | np.ndarray,
+    p0_Pa: float | np.ndarray = 101325.0,
+    body_mass_kg: float = 70.0,
+) -> dict[str, float | np.ndarray]:
+    """TNO Green Book (CPR 16E) Pressure-Impulse human lung hemorrhage fatality probit.
+
+      Y = 5 - 5.74 * ln(4.2 * P_0 / P_eff + 1.3 / i_sc)
+      where i_sc = I / (sqrt(P_0) * m^(1/3)) [Pa*s / (Pa^0.5 * kg^(1/3))]
+    """
+    pe = np.maximum(np.asarray(p_eff_Pa, dtype=np.float64), 1.0)
+    imp = np.maximum(np.asarray(impulse_Pa_s, dtype=np.float64), 1e-4)
+    p0 = np.maximum(np.asarray(p0_Pa, dtype=np.float64), 1000.0)
+    m13 = max(float(body_mass_kg), 1.0) ** (1.0 / 3.0)
+    i_sc = imp / (np.sqrt(p0) * m13)
+    arg = (4.2 * p0 / pe) + (1.3 / np.maximum(i_sc, 1e-9))
+    pr = 5.0 - 5.74 * np.log(np.maximum(arg, 1e-9))
+    prob = np.asarray(tb_14_probit_to_probability(pr), dtype=np.float64)
+    if np.ndim(pr) == 0:
+        return {"probit": float(pr), "probability": float(prob), "i_scaled": float(i_sc)}
+    return {"probit": pr, "probability": prob, "i_scaled": i_sc}
+
+
+def tno_eardrum_rupture_probit(ps_Pa: float | np.ndarray) -> dict[str, float | np.ndarray]:
+    """TNO Green Book (CPR 16E) human eardrum rupture probit: Y = -12.6 + 1.524 * ln(P_s [Pa])."""
+    ps = np.maximum(np.asarray(ps_Pa, dtype=np.float64), 1.0)
+    pr = -12.6 + 1.524 * np.log(ps)
+    prob = np.asarray(tb_14_probit_to_probability(pr), dtype=np.float64)
+    if np.ndim(pr) == 0:
+        return {"probit": float(pr), "probability": float(prob)}
+    return {"probit": pr, "probability": prob}
+
+
+def tno_thermal_lethality_probit(tdu_kw43_s: float | np.ndarray) -> dict[str, float | np.ndarray]:
+    """TNO Green Book (CPR 16E) thermal radiation lethality probit: Y = -14.9 + 2.56 * ln(TDU).
+
+    TDU = t * I^(4/3) in (kW/m^2)^(4/3) * s (TDU ~ 2400 -> ~50% fatality).
+    """
+    d = np.asarray(tdu_kw43_s, dtype=np.float64)
+    pr = np.where(d > 1.0, -14.9 + 2.56 * np.log(np.maximum(d, 1.0)), -20.0)
+    prob = np.where(d > 1.0, np.asarray(tb_14_probit_to_probability(pr), dtype=np.float64), 0.0)
+    if np.ndim(d) == 0:
+        return {"probit": float(pr), "probability": float(prob)}
+    return {"probit": pr, "probability": prob}

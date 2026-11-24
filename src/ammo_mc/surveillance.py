@@ -144,13 +144,16 @@ def simulate_propellant_aging(
     years_to_warning = float(-math.log(max(s_warn / s0, 1e-9)) / k_rate) if s_warn < s0 else 0.0
     years_to_critical = float(-math.log(max(s_crit / s0, 1e-9)) / k_rate) if s_crit < s0 else 0.0
 
-    # Auto-ignition time after critical depletion (Semenov self-heating time)
-    # At T_eq, once stabilizer is zero, runaway time is typically 0.5 to 2.5 years depending on temperature
-    q_reaction_j_kg = 1.8e6  # Exothermic heat of decomposition of nitrocellulose (~1.8 MJ/kg)
-    cp_j_kg_k = 1400.0  # Heat capacity
+    # Auto-ignition time after critical depletion (Semenov self-heating with NC autocatalytic kinetics)
+    # Nitrocellulose autocatalytic decomposition: Ea_nc ~ 145 kJ/mol, A_nc ~ 3.5e20 yr^-1 -> runs ~0.4-3+ yr at 30-55 C
+    q_reaction_j_kg = 1.8e6
+    cp_j_kg_k = 1400.0
+    ea_nc = 145000.0
+    a_nc_yr = 3.5e20
     t_eq_k = t_eq + 273.15
-    tau_adiabatic_runaway_years = (cp_j_kg_k * R_GAS * (t_eq_k**2)) / max(q_reaction_j_kg * ea * k_rate, 1e-9)
-    tau_adiabatic_runaway_years = float(np.clip(tau_adiabatic_runaway_years, 0.2, 5.0))
+    k_nc_yr = max(a_nc_yr * math.exp(-ea_nc / (R_GAS * t_eq_k)), 1e-9)
+    tau_adiabatic_runaway_years = (cp_j_kg_k * R_GAS * (t_eq_k**2)) / max(q_reaction_j_kg * ea_nc * k_nc_yr, 1e-9)
+    tau_adiabatic_runaway_years = float(np.clip(tau_adiabatic_runaway_years, 0.05, 15.0))
 
     # Current status at end of duration
     final_s = float(s_pct[-1])
@@ -246,10 +249,24 @@ def generate_surveillance_sampling_plan(
     elif "Special" in inspection_level:
         sample_n = max(5, int(sample_n * 0.15))
 
-    # Acceptance number Ac based on sample size and AQL
-    np_crit = sample_n * (aql_percent / 100.0)
-    ac = max(0, int(round(np_crit)))
+    # True ISO 2859-1 Table 2-A acceptance number Ac chosen so producer risk alpha(AQL) <= ~6%
+    p_aql = max(min(float(aql_percent) / 100.0, 0.25), 1e-5)
+    ac = 0
+    for k_cand in range(sample_n + 1):
+        p_acc_k = sum(
+            math.comb(sample_n, j) * (p_aql ** j) * ((1.0 - p_aql) ** (sample_n - j))
+            for j in range(k_cand + 1)
+        )
+        if p_acc_k >= 0.94:
+            ac = k_cand
+            break
     re_num = ac + 1
+
+    p_acc_aql = sum(
+        math.comb(sample_n, j) * (p_aql ** j) * ((1.0 - p_aql) ** (sample_n - j))
+        for j in range(ac + 1)
+    )
+    alpha_actual_pct = round(max(0.0, (1.0 - p_acc_aql) * 100.0), 2)
 
     # Operating Characteristic (OC) Curve: P_acc(p) for true defect fraction p
     p_defect_grid = np.linspace(0.0001, 0.08, 100)
@@ -268,7 +285,7 @@ def generate_surveillance_sampling_plan(
         "sampling_fraction_pct": round(100.0 * sample_n / n_lot, 2),
         "acceptance_number_ac": int(ac),
         "rejection_number_re": int(re_num),
-        "producer_risk_alpha_pct": 5.0,  # Nominal producer risk at AQL
+        "producer_risk_alpha_pct": alpha_actual_pct,
         "oc_curve": {
             "p_defect_pct": (p_defect_grid * 100.0).tolist(),
             "p_accept": p_acc.tolist(),

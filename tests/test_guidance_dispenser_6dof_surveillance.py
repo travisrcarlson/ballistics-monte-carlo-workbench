@@ -171,9 +171,10 @@ def test_in_service_ammunition_surveillance_and_aging() -> None:
     assert "HAZARD" in res_desert["status_label"]
     assert res_desert["years_to_critical_shelf_life"] < 10.0
 
-    # 4. ISO 2859-1 / STANAG 4147 sampling plan
+    # 4. ISO 2859-1 / STANAG 4147 sampling plan (Code M, n=200, AQL=0.65% -> Table 2-A Ac=3, Re=4)
     plan = generate_surveillance_sampling_plan(lot_size=5000, inspection_level="Level II (Normal Standard)", aql_percent=0.65)
     assert plan["sample_size_n"] == 200
-    assert plan["acceptance_number_ac"] == 1
-    assert plan["rejection_number_re"] == 2
+    assert plan["acceptance_number_ac"] == 3
+    assert plan["rejection_number_re"] == 4
+    assert plan["producer_risk_alpha_pct"] < 6.0
     assert len(plan["oc_curve"]["p_accept"]) == 100

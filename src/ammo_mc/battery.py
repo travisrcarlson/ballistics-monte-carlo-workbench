@@ -85,10 +85,12 @@ def calculate_sheaf_aim_points(
             aim_points.append((tx, ty))
 
     elif sheaf_type == "open":
-        # Weapons lay parallel: impact spacing equals gun displacement spacing
+        # Weapons lay parallel centered on the battery geometric centroid
+        cx = sum(g["x_m"] for g in guns) / max(n_guns, 1)
+        cy = sum(g["y_m"] for g in guns) / max(n_guns, 1)
         for g in guns:
-            dx = g["x_m"] - guns[0]["x_m"]
-            dy = g["y_m"] - guns[0]["y_m"]
+            dx = g["x_m"] - cx
+            dy = g["y_m"] - cy
             aim_points.append((tx + dx, ty + dy))
 
     elif sheaf_type == "linear":
@@ -136,8 +138,18 @@ def find_elevation_for_range(
         res = integrate_trajectories_batch(s0, np.array([mass_kg]), np.array([1.0]), atm_env, cfg)
         return float(res["range_m"][0])
 
+    # Vectorized sweep finds true drag-shifted max-range elevation (often 48-52 deg under G7 drag)
+    sweep_qes = np.linspace(2.0, 80.0, 20)
+    rads = np.radians(sweep_qes)
+    s_sw = np.zeros((len(sweep_qes), 6), dtype=np.float64)
+    s_sw[:, 3] = v0_mps * np.cos(rads)
+    s_sw[:, 5] = v0_mps * np.sin(rads)
+    r_sw = integrate_trajectories_batch(s_sw, np.full(len(sweep_qes), mass_kg), np.ones(len(sweep_qes)), atm_env, cfg)["range_m"]
+    idx_peak = int(np.argmax(r_sw))
+    qe_peak = float(sweep_qes[idx_peak])
+
     if not high_angle:
-        q_low, q_high = 2.0, 44.5
+        q_low, q_high = 2.0, min(qe_peak + 1.5, 80.0)
         for _ in range(max_iter):
             q_mid = 0.5 * (q_low + q_high)
             r_mid = eval_r(q_mid)
@@ -149,8 +161,7 @@ def find_elevation_for_range(
                 q_high = q_mid
         return 0.5 * (q_low + q_high)
     else:
-        q_low, q_high = 45.5, 78.0
-        # In high angle, range decreases as QE increases toward 90
+        q_low, q_high = max(qe_peak - 1.5, 45.0), 82.0
         for _ in range(max_iter):
             q_mid = 0.5 * (q_low + q_high)
             r_mid = eval_r(q_mid)
@@ -178,39 +189,53 @@ def solve_mrsi_trajectory_plan(
     atm_env = AtmosphereEnvironment()
     cfg = BatchTrajectoryConfig(calibre_m=calibre_m, fidelity="L1", dt=0.04)
 
-    # 1. Low angle solution
-    qe_low = find_elevation_for_range(target_range_m, v0_mps, calibre_m, mass_kg, high_angle=False)
-    rad_low = math.radians(qe_low)
-    s0_l = np.array([[0.0, 0.0, 0.0, v0_mps * math.cos(rad_low), 0.0, v0_mps * math.sin(rad_low)]], dtype=np.float64)
-    res_l = integrate_trajectories_batch(s0_l, np.array([mass_kg]), np.array([1.0]), atm_env, cfg)
-    tof_low = float(res_l["tof_s"][0])
+    # Compute true aerodynamic max range for active charge
+    probe_qes = np.linspace(35.0, 58.0, 12)
+    probe_rads = np.radians(probe_qes)
+    s_probe = np.zeros((len(probe_qes), 6), dtype=np.float64)
+    s_probe[:, 3] = v0_mps * np.cos(probe_rads)
+    s_probe[:, 5] = v0_mps * np.sin(probe_rads)
+    true_max_range_m = float(np.max(integrate_trajectories_batch(s_probe, np.full(len(probe_qes), mass_kg), np.ones(len(probe_qes)), atm_env, cfg)["range_m"]))
 
-    mrsi_rounds: list[dict[str, Any]] = [
-        {"round_num": 1, "qe_deg": round(qe_low, 2), "tof_s": round(tof_low, 2), "branch": "Low Angle"}
-    ]
+    mrsi_rounds: list[dict[str, Any]] = []
+    if target_range_m <= true_max_range_m:
+        # 1. Low angle solution
+        qe_low = find_elevation_for_range(target_range_m, v0_mps, calibre_m, mass_kg, high_angle=False)
+        if min_qe_deg <= qe_low <= max_qe_deg:
+            rad_low = math.radians(qe_low)
+            s0_l = np.array([[0.0, 0.0, 0.0, v0_mps * math.cos(rad_low), 0.0, v0_mps * math.sin(rad_low)]], dtype=np.float64)
+            res_l = integrate_trajectories_batch(s0_l, np.array([mass_kg]), np.array([1.0]), atm_env, cfg)
+            tof_low = float(res_l["tof_s"][0])
+            mrsi_rounds.append({"round_num": 1, "qe_deg": round(qe_low, 2), "tof_s": round(tof_low, 2), "branch": "Low Angle"})
 
-    # 2. High angle solution
-    qe_high = find_elevation_for_range(target_range_m, v0_mps, calibre_m, mass_kg, high_angle=True)
-    rad_high = math.radians(qe_high)
-    s0_h = np.array([[0.0, 0.0, 0.0, v0_mps * math.cos(rad_high), 0.0, v0_mps * math.sin(rad_high)]], dtype=np.float64)
-    res_h = integrate_trajectories_batch(s0_h, np.array([mass_kg]), np.array([1.0]), atm_env, cfg)
-    tof_high = float(res_h["tof_s"][0])
-    if abs(tof_high - tof_low) > 8.0:
-        mrsi_rounds.append({"round_num": 2, "qe_deg": round(qe_high, 2), "tof_s": round(tof_high, 2), "branch": "High Angle"})
+        # 2. High angle solution
+        qe_high = find_elevation_for_range(target_range_m, v0_mps, calibre_m, mass_kg, high_angle=True)
+        if min_qe_deg <= qe_high <= max_qe_deg:
+            rad_high = math.radians(qe_high)
+            s0_h = np.array([[0.0, 0.0, 0.0, v0_mps * math.cos(rad_high), 0.0, v0_mps * math.sin(rad_high)]], dtype=np.float64)
+            res_h = integrate_trajectories_batch(s0_h, np.array([mass_kg]), np.array([1.0]), atm_env, cfg)
+            tof_high = float(res_h["tof_s"][0])
+            if not mrsi_rounds or abs(tof_high - mrsi_rounds[0]["tof_s"]) > 8.0:
+                mrsi_rounds.append({"round_num": len(mrsi_rounds) + 1, "qe_deg": round(qe_high, 2), "tof_s": round(tof_high, 2), "branch": "High Angle"})
 
-    # 3. Intermediate angle with modular charge reduction
+    # 3. Intermediate angle with reduced Charge 4 velocity (check reachability!)
     if max_rounds >= 3 and len(mrsi_rounds) >= 2:
         v0_mid = v0_mps * 0.90
-        qe_mid = find_elevation_for_range(target_range_m, v0_mid, calibre_m, mass_kg, high_angle=False)
-        rad_mid = math.radians(qe_mid)
-        s0_m = np.array([[0.0, 0.0, 0.0, v0_mid * math.cos(rad_mid), 0.0, v0_mid * math.sin(rad_mid)]], dtype=np.float64)
-        res_m = integrate_trajectories_batch(s0_m, np.array([mass_kg]), np.array([1.0]), atm_env, cfg)
-        tof_mid = float(res_m["tof_s"][0])
-        mrsi_rounds.append({"round_num": 3, "qe_deg": round(qe_mid, 2), "tof_s": round(tof_mid, 2), "branch": "Charge 4 (Mid)"})
+        s_p4 = np.zeros((len(probe_qes), 6), dtype=np.float64)
+        s_p4[:, 3] = v0_mid * np.cos(probe_rads)
+        s_p4[:, 5] = v0_mid * np.sin(probe_rads)
+        chg4_max_r = float(np.max(integrate_trajectories_batch(s_p4, np.full(len(probe_qes), mass_kg), np.ones(len(probe_qes)), atm_env, cfg)["range_m"]))
+        if target_range_m <= chg4_max_r:
+            qe_mid = find_elevation_for_range(target_range_m, v0_mid, calibre_m, mass_kg, high_angle=False)
+            if min_qe_deg <= qe_mid <= max_qe_deg:
+                rad_mid = math.radians(qe_mid)
+                s0_m = np.array([[0.0, 0.0, 0.0, v0_mid * math.cos(rad_mid), 0.0, v0_mid * math.sin(rad_mid)]], dtype=np.float64)
+                res_m = integrate_trajectories_batch(s0_m, np.array([mass_kg]), np.array([1.0]), atm_env, cfg)
+                tof_mid = float(res_m["tof_s"][0])
+                mrsi_rounds.append({"round_num": 3, "qe_deg": round(qe_mid, 2), "tof_s": round(tof_mid, 2), "branch": "Charge 4 (Mid)"})
 
-    # Sort rounds by descending TOF (longest TOF fired first at t_fire = 0)
     mrsi_rounds.sort(key=lambda r: r["tof_s"], reverse=True)
-    max_tof = mrsi_rounds[0]["tof_s"]
+    max_tof = mrsi_rounds[0]["tof_s"] if mrsi_rounds else 0.0
 
     for idx, rd in enumerate(mrsi_rounds):
         rd["round_num"] = idx + 1
@@ -220,10 +245,10 @@ def solve_mrsi_trajectory_plan(
     return {
         "mrsi_feasible": len(mrsi_rounds) >= 2,
         "target_range_m": float(target_range_m),
-        "max_range_m": 21850.0,
+        "max_range_m": round(true_max_range_m, 1),
         "rounds_planned": len(mrsi_rounds),
         "total_engagement_duration_s": max_tof,
-        "firing_window_s": round(mrsi_rounds[-1]["fire_time_s"], 2),
+        "firing_window_s": round(mrsi_rounds[-1]["fire_time_s"], 2) if mrsi_rounds else 0.0,
         "plan": mrsi_rounds,
     }
 
@@ -317,10 +342,11 @@ def simulate_battery_salvo(
                 step_tr = max(1, len(sp["t"]) // 30)
                 cos_b = math.cos(bearing_rad)
                 sin_b = math.sin(bearing_rad)
+                # deflection_m is +RIGHT -> rightward normal of bore heading (cos b, sin b) is (+sin b, -cos b)
                 traj_pts = [
                     [
-                        gx + float(sp["range_m"][k]) * cos_b - float(sp["deflection_m"][k]) * sin_b,
-                        gy + float(sp["range_m"][k]) * sin_b + float(sp["deflection_m"][k]) * cos_b,
+                        gx + float(sp["range_m"][k]) * cos_b + float(sp["deflection_m"][k]) * sin_b,
+                        gy + float(sp["range_m"][k]) * sin_b - float(sp["deflection_m"][k]) * cos_b,
                         float(sp["alt_m"][k]),
                     ]
                     for k in range(0, len(sp["t"]), step_tr)
@@ -329,8 +355,8 @@ def simulate_battery_salvo(
 
             bore_range = float(res["range_m"][0])
             bore_defl = float(res["deflection_m"][0])
-            imp_x = gx + bore_range * math.cos(bearing_rad) - bore_defl * math.sin(bearing_rad)
-            imp_y = gy + bore_range * math.sin(bearing_rad) + bore_defl * math.cos(bearing_rad)
+            imp_x = gx + bore_range * math.cos(bearing_rad) + bore_defl * math.sin(bearing_rad)
+            imp_y = gy + bore_range * math.sin(bearing_rad) - bore_defl * math.cos(bearing_rad)
             tof = float(res["tof_s"][0])
             v_imp = float(res["v_impact_mps"][0])
 
@@ -368,14 +394,13 @@ def simulate_battery_salvo(
     grid_y = np.linspace(target_pos_m[1] - 250.0, target_pos_m[1] + 250.0, 35)
     GX, GY = np.meshgrid(grid_x, grid_y)
 
-    # Cumulative survival across all rounds
+    # Cumulative survival across all rounds via TV-01 Carleton damage function: P_kill = exp(-r^2 / R_C^2)
     surv_prob = np.ones_like(GX)
+    r_c_sq = max(float(lethal_radius_m) ** 2, 1e-6)
     for ix, iy in zip(impact_x_list, impact_y_list):
         r2 = (GX - ix) ** 2 + (GY - iy) ** 2
-        # Carleton damage model: P_kill = exp(-r^2 / (2 * b^2)) where b = R_lethal / 1.1774
-        b_carl = lethal_radius_m / 1.1774
-        p_hit = np.exp(-r2 / (2.0 * (b_carl**2)))
-        surv_prob *= (1.0 - 0.98 * p_hit)
+        p_hit = np.exp(-r2 / r_c_sq)
+        surv_prob *= (1.0 - p_hit)
 
     lethal_map = 1.0 - surv_prob
     fractional_neutralization = float(np.mean(lethal_map))

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from scipy import stats as sp_stats
 
@@ -189,3 +191,42 @@ def sample_correlated_mvn(
     # Small jitter on diagonal if positive-semidefinite
     chol = np.linalg.cholesky(cov + np.eye(k) * 1e-15)
     return mu + z @ chol.T
+
+
+def compute_exact_elliptical_cep(sigma_x_m: float, sigma_y_m: float) -> dict[str, float]:
+    """Compute exact 50% circular error probable (CEP) for an uncorrelated elliptical normal (sx, sy).
+
+    Unlike the linear approximation 0.5887*(sx + sy) (which under-predicts by 12.7% as sx/sy -> 0),
+    this solves P(X^2 + Y^2 <= R^2) = 0.50 to high precision via Gauss-Legendre quadrature / brentq
+    and also returns Grubbs-Patnaik (1964) analytical approximation for cross-reference.
+    """
+    from scipy.optimize import brentq
+
+    sx = max(float(abs(sigma_x_m)), 1e-9)
+    sy = max(float(abs(sigma_y_m)), 1e-9)
+    s_max = max(sx, sy)
+    s_min = min(sx, sy)
+    ratio = s_min / s_max
+
+    # Exact radial CDF via Craig-type angular integral on standardized (U, V) ~ N(0, I_2):
+    # P(s_max^2 U^2 + s_min^2 V^2 <= r^2) = 1 - (1/pi)*int_0^pi exp(-r^2 / (2*(s_max^2 cos^2 t + s_min^2 sin^2 t))) dt
+    phi_q = np.linspace(0.0, np.pi, 360, endpoint=False) + (np.pi / 720.0)
+    denom = np.maximum(2.0 * ((s_max * np.cos(phi_q)) ** 2 + (s_min * np.sin(phi_q)) ** 2), 1e-30)
+
+    def cdf_diff(r_val: float) -> float:
+        return float(1.0 - np.mean(np.exp(-(r_val ** 2) / denom)) - 0.5)
+
+    r_exact = float(brentq(cdf_diff, 0.5 * s_max, 1.5 * s_max, xtol=1e-7))
+
+    # Grubbs-Patnaik (1964) Wilson-Hilferty chi-square cube-root approximation
+    m_v = (s_max ** 2) + (s_min ** 2)
+    var_v = 2.0 * ((s_max ** 4) + (s_min ** 4))
+    w_gp = 2.0 * (m_v ** 2) / var_v
+    cep_grubbs = float(math.sqrt(m_v * ((1.0 - 2.0 / (9.0 * w_gp)) ** 3)))
+
+    return {
+        "cep50_exact_m": r_exact,
+        "cep50_grubbs_patnaik_m": cep_grubbs,
+        "cep50_da04_approx_m": float(0.5887 * (s_max + s_min)),
+        "aspect_ratio": float(ratio),
+    }

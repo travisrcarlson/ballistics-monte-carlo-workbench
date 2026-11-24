@@ -47,6 +47,7 @@ from ammo_mc.gis import build_terrain_callable
 from ammo_mc.interior import ib_07_propellant_temp_correction, ib_08_mv_error_budget
 from ammo_mc.launch import (
     RAD_PER_NATO_MIL,
+    compute_exact_elliptical_cep,
     da_01_impact_error_model,
     da_02_pe_to_sigma,
     da_03_cep_circular,
@@ -84,6 +85,7 @@ from ammo_mc.terminal_blast import (
     tb_13_axelsson_chest_wall,
     tb_15_simple_safety_distances,
     tb_16_thermal_dose,
+    tno_thermal_lethality_probit,
 )
 from ammo_mc.terminal_frag import (
     tf_01_gurney_cyl_sphere,
@@ -105,6 +107,7 @@ from ammo_mc.vulnerability import (
     tv_02_cookie_cutter_damage,
     tv_03_sspk_cookie_cutter,
     tv_04_sspk_carleton,
+    tv_04_sspk_carleton_elliptical,
     tv_05_multi_round_independent,
     tv_06_area_fractional_damage,
     tv_07_lethal_area_from_field,
@@ -469,16 +472,18 @@ def _run_batch_occasions(
     elif ammo.fuze.type == "none":
         p_dud_base = 0.0
     else:
-        # Draw epistemic lot dud rate from Beta(failures, successes) via FZ-03
-        p_dud_base = float(
-            fz_03_bayesian_dud_rate(
-                failures=max(rel_spec.b - 1.0, 0.0),
+        # BetaReliabilitySpec(a=success_alpha, b=fail_beta): use posterior mean directly in 1-loop aleatory MC
+        # (and record FZ-03 provenance when b >= 1.0) so a=99.5, b=0.5 yields exact p_dud=0.005 instead of 0.010
+        p_dud_base = float(rel_spec.b / max(rel_spec.a + rel_spec.b, 1e-6))
+        if rel_spec.b >= 1.0:
+            _ = fz_03_bayesian_dud_rate(
+                failures=rel_spec.b - 1.0,
                 n_tests=max(rel_spec.a + rel_spec.b - 2.0, 1.0),
                 a0=1.0,
                 b0=1.0,
                 rng=rng_fuze,
             )
-        )
+        _, _ = fz_01_system_reliability([1.0 - p_dud_base])
 
     if ammo.fuze.type in ("PD", "PIBD", "delay") and ammo.launch.mode != "static" and scenario.fidelity != "L0":
         graze_res = fz_06_impact_graze_function(
@@ -567,7 +572,14 @@ def _run_batch_occasions(
         fp_eff = (wh.fill.f_tnt_p_override or kb_exp["f_tnt_p"]) * f_tnt_mult
         fi_eff = (wh.fill.f_tnt_i_override or kb_exp["f_tnt_i"]) * f_tnt_mult
 
-        hob_eff = hob_trials if ammo.fuze.type in ("proximity", "time") else np.zeros(n_tot)
+        if ammo.fuze.type == "proximity":
+            hob_eff = np.maximum(hob_trials, 0.0)
+        elif ammo.fuze.type == "time":
+            terr_imp = terrain_fn(imp_range, -imp_defl) if terrain_fn is not None else np.zeros(n_tot, dtype=np.float64)
+            hob_eff = np.where(imp_alt > (terr_imp + 0.05), np.maximum(imp_alt - terr_imp, 0.0), np.maximum(hob_trials, 0.0))
+        else:
+            hob_eff = np.zeros(n_tot, dtype=np.float64)
+
         blast_res = evaluate_blast_field(
             R_m=eval_r,
             w_fill_kg=wh.fill.mass_kg,
@@ -593,13 +605,19 @@ def _run_batch_occasions(
         if wh.thermal_flux_kw_m2_at_100m > 0.0:
             q_r = wh.thermal_flux_kw_m2_at_100m * ((100.0 / np.maximum(eval_r, 5.0)) ** 2)
             th_res = tb_16_thermal_dose(q_r, wh.thermal_duration_s)
-            p_kill_therm = np.clip(np.asarray(th_res["dose"], dtype=np.float64) / 1000.0, 0.0, 1.0)
+            p_kill_therm = np.asarray(tno_thermal_lethality_probit(th_res["dose"])["probability"], dtype=np.float64)
 
         # Fragmentation effects
         if wh.geometry != "bare" and wh.case.mass_kg > 0.0:
             gurney_c = wh.gurney_mps or kb_exp["gurney_mps"]
+            # For multi-item stacks (ST-01), divide total NEQ by stack_total_items to get single-round C/M for Gurney launch
+            fill_item_kg = (
+                wh.fill.mass_kg / float(wh.stack_total_items)
+                if (wh.stack_total_items > 1 and wh.fill.mass_kg > wh.case.mass_kg * 1.5)
+                else wh.fill.mass_kg
+            )
             v0_gurney = float(
-                tf_01_gurney_cyl_sphere(gurney_c, wh.case.mass_kg, wh.fill.mass_kg, wh.geometry)
+                tf_01_gurney_cyl_sphere(gurney_c, wh.case.mass_kg, fill_item_kg, wh.geometry)
             )
             det_vel = float(kb_exp.get("det_vel_mps") or kb_exp.get("detonation_velocity_mps") or 6900.0)
             ax_info = tf_03_gurney_estimate_axial(
@@ -610,23 +628,26 @@ def _run_batch_occasions(
                 v_gurney_mps=v0_gurney,
             )
             v0_eff = float(ax_info["v_axial_mps"])
+            mott_b_base = kb_exp["mott_b"] if abs(wh.mott_B - 0.0779) < 1e-6 else wh.mott_B
             mott_info = tf_04_mott_distribution(
                 M0_kg=wh.case.mass_kg,
                 t_in=wh.case.t_in,
                 d_in=wh.case.d_in,
-                B=wh.mott_B * mott_b_mult,
+                B=mott_b_base * mott_b_mult,
             )
             nt_frags = float(mott_info["total_fragments"])
             m_avg_kg = float(mott_info["m_avg_kg"])
             area_f = tf_06_fragment_presented_area(m_kg=m_avg_kg, shape=wh.frag_shape)
             _ = tf_08_taylor_angle(v0_eff, det_vel)
 
+            # Evaluate 3D slant distance from airburst point to target for velocity decay and spray density
+            slant_eval_r = np.hypot(eval_r, hob_eff)
             v_rem = np.asarray(
-                eb_17_fragment_velocity_decay(v0_eff, eval_r, m_avg_kg, float(area_f["A_m2"])),
+                eb_17_fragment_velocity_decay(v0_eff, slant_eval_r, m_avg_kg, float(area_f["A_m2"])),
                 dtype=np.float64,
             )
             is_haz, ke_rem = tf_11_hazardous_fragment_ke(m_avg_kg, v_rem)
-            rho_f = np.asarray(tf_07_fragment_spray_density(nt_frags, eval_r), dtype=np.float64)
+            rho_f = np.asarray(tf_07_fragment_spray_density(nt_frags, slant_eval_r), dtype=np.float64)
 
             a_targ = float(scenario.target.geometry.get("presented_area_m2", 0.56))
             if scenario.target.posture == "prone":
@@ -686,7 +707,7 @@ def _run_batch_occasions(
         hx = float(scenario.target.geometry.get("half_width_x_m", 1.2))
         hy = float(scenario.target.geometry.get("half_width_y_m", 1.5))
         # For direct-fire vertical target plane at aim.range_m, convert range error via tan(aof) to vertical error
-        vert_miss = miss_x * np.tan(np.maximum(aof_rad, 0.02)) if scenario.fidelity != "L0" else miss_x
+        vert_miss = miss_x * np.tan(np.maximum(aof_rad, 1e-4)) if scenario.fidelity != "L0" else miss_x
         hit_box = (np.abs(vert_miss) <= hx) & (np.abs(miss_y) <= hy)
 
         if pen_spec.type == "long_rod":
@@ -700,6 +721,7 @@ def _run_batch_occasions(
                 bhn_t=bhn_trials,
                 obliquity_rad=obliq_rad,
                 rod_material=pen_spec.rod_material,
+                mode="Perforation (finite)",
             )
             penetration_depths = np.asarray(lo_res["penetration"], dtype=np.float64)
             # TP-01 computes oblique channel depth directly; compare against LOS thickness
@@ -721,8 +743,9 @@ def _run_batch_occasions(
             penetration_depths = v_impact  # remaining striking speed proxy
             perforated_flags = v_impact >= pen_spec.v50_mps
 
-        p_kill_pen = np.where(hit_box, p_perf, 0.0)
-        p_kill_round = np.maximum(p_kill_round, p_kill_pen)
+        if scenario.target.type == "armour":
+            p_kill_pen = np.where(hit_box, p_perf, 0.0)
+            p_kill_round = np.maximum(p_kill_round, p_kill_pen)
 
     # Apply FMEA terminal effects (Premature Airburst, Rocket Motor Burnout Anomaly & Low-Order Partial Detonation)
     if ammo.launch.mode == "rocket" and np.any(fm_propulsion):
@@ -853,6 +876,7 @@ def run_simulation(
                 cfg=traj_cfg,
                 high_angle=scenario.aim.high_angle,
                 z0_m=scenario.weapon_location.alt,
+                form_factor=ammo.aero.form_factor.mu,
             )
             if scenario.vacuum:
                 _ = eb_11_vacuum_range(ammo.launch.mv.mu, qe_solved)
@@ -961,13 +985,7 @@ def run_simulation(
                 p_d = (
                     float(rel_s.p_dud_mean)
                     if rel_s.p_dud_mean is not None
-                    else float(
-                        fz_03_bayesian_dud_rate(
-                            max(rel_s.b - 1.0, 0.1),
-                            max(rel_s.a + rel_s.b - 2.0, 1.0),
-                            rng=rng_ep,
-                        )
-                    )
+                    else float(rng_ep.beta(max(rel_s.b, 1e-4), max(rel_s.a, 1e-4)))
                 )
                 return {
                     "p_dud": p_d,
@@ -1017,6 +1035,7 @@ def run_simulation(
         rep_m = float(da_02_pe_to_sigma(sigma=std_r))
         dep_m = float(da_02_pe_to_sigma(sigma=std_d))
         cep_ellip = float(da_04_cep_elliptical(std_r, std_d))
+        cep_exact_val = compute_exact_elliptical_cep(std_r, std_d)["cep50_exact_m"]
         cep_circ_eq = float(da_03_cep_circular(0.5 * (std_r + std_d)))
         radial_from_mpi = np.hypot(imp_range - rng_ci["mean"], imp_defl - defl_ci["mean"])
         cep_emp = float(np.median(radial_from_mpi))
@@ -1038,10 +1057,11 @@ def run_simulation(
             "rep_m": rep_m,
             "dep_m": dep_m,
             "cep_m": cep_ellip,
+            "cep_exact_m": float(cep_exact_val),
             "cep_empirical_m": cep_emp,
             "cep_circular_ref_m": cep_circ_eq,
             "mpi_offset_m": mpi_offset_m,
-            "p_within_25m": float(da_05_radial_miss_cdf(25.0, cep=max(cep_ellip, 1e-6))),
+            "p_within_25m": float(da_05_radial_miss_cdf(25.0, cep=max(cep_exact_val, 1e-6))),
             "mean_v_impact_mps": float(np.mean(v_impact)),
             "mean_tof_s": float(np.mean(tof_s)),
             "unstable_fraction": float(np.mean(unstable)),
@@ -1050,30 +1070,40 @@ def run_simulation(
             dispersion["miller_sg"] = miller_sg
 
         # Effectiveness & Salvo Statistics
-        # Sample Bernoulli kill realizations from p_kill_round for exact Wilson score CI (MC-02)
-        kill_rng = streams[8]
-        kill_draws = kill_rng.random(size=n_tot) < p_kill_round
-        wilson_single = mc_02_wilson_interval(int(np.sum(kill_draws)), n_tot)
+        # Rao-Blackwellized sspk_mean + occasion-cluster robust SE when r_per_occ > 1
         sspk_mean = float(np.mean(p_kill_round))
+        wilson_single = mc_02_wilson_interval(int(round(sspk_mean * n_tot)), n_tot)
+        pk_by_occ = p_kill_round.reshape(n_occ_tot, r_per_occ).mean(axis=1)
+        sspk_cluster_se = float(np.std(pk_by_occ, ddof=1) / math.sqrt(n_occ_tot)) if n_occ_tot > 1 else 0.0
         salvo_ci = mc_01_estimator_mean_se(salvo_pk_per_occ)
         salvo_indep_ref = tv_05_multi_round_independent(sspk_mean, n_rounds=r_per_occ)
 
-        # Analytic comparison metrics (DA-06, TV-03, TV-04)
+        # Analytic comparison metrics (DA-06, TV-03, TV-04 elliptical+biased)
         hx = float(scenario.target.geometry.get("half_width_x_m", 25.0))
         hy = float(scenario.target.geometry.get("half_width_y_m", 25.0))
-        p_rect_hit = (
-            da_06_rect_hit_probability(-hx, hx, -hy, hy, max(std_r, 0.1), max(std_d, 0.1), rng_ci["mean"] - scenario.aim.range_m, defl_ci["mean"])
-            if ammo.launch.mode != "static"
-            else 1.0
-        )
+        if ammo.launch.mode == "static":
+            p_rect_hit = 1.0
+        elif ammo.penetrator is not None and ammo.warhead is None and scenario.fidelity != "L0":
+            vert_all = (imp_range - scenario.aim.range_m) * np.tan(np.maximum(aof_rad, 1e-4))
+            std_v = float(np.std(vert_all, ddof=1)) if vert_all.size > 1 else 0.1
+            p_rect_hit = da_06_rect_hit_probability(
+                -hx, hx, -hy, hy, max(std_v, 0.02), max(std_d, 0.02), float(np.mean(vert_all)), defl_ci["mean"]
+            )
+        else:
+            p_rect_hit = da_06_rect_hit_probability(
+                -hx, hx, -hy, hy, max(std_r, 0.1), max(std_d, 0.1), rng_ci["mean"] - scenario.aim.range_m, defl_ci["mean"]
+            )
 
         lr_ref = ammo.warhead.lethal_radius_m if ammo.warhead is not None else 5.0
-        analytic_sspk_cc = float(tv_03_sspk_cookie_cutter(lr_ref, cep_m=max(cep_ellip, 0.1)))
+        analytic_sspk_cc = float(tv_03_sspk_cookie_cutter(lr_ref, cep_m=max(cep_exact_val, 0.1)))
         analytic_sspk_carl = float(
-            tv_04_sspk_carleton(
-                ammo.warhead.carleton_rx_m if ammo.warhead else lr_ref,
-                0.5 * (std_r + std_d),
-                bias_m=0.0,
+            tv_04_sspk_carleton_elliptical(
+                rx_m=ammo.warhead.carleton_rx_m if ammo.warhead else lr_ref,
+                ry_m=ammo.warhead.carleton_ry_m if ammo.warhead else lr_ref,
+                sigma_x_m=std_r,
+                sigma_y_m=std_d,
+                bias_x_m=rng_ci["mean"] - scenario.aim.range_m,
+                bias_y_m=defl_ci["mean"],
                 p_dud=float(np.mean(is_dud)),
             )
         )
@@ -1115,8 +1145,14 @@ def run_simulation(
 
             if wh.geometry != "bare" and wh.case.mass_kg > 0.0:
                 kb_e = get_kb().get_explosive_properties(wh.fill.explosive)
-                v0_g = float(tf_01_gurney_cyl_sphere(wh.gurney_mps or kb_e["gurney_mps"], wh.case.mass_kg, wh.fill.mass_kg, wh.geometry))
-                mt_g = tf_04_mott_distribution(M0_kg=wh.case.mass_kg, t_in=wh.case.t_in, d_in=wh.case.d_in, B=wh.mott_B)
+                fill_item_g = (
+                    wh.fill.mass_kg / float(wh.stack_total_items)
+                    if (wh.stack_total_items > 1 and wh.fill.mass_kg > wh.case.mass_kg * 1.5)
+                    else wh.fill.mass_kg
+                )
+                v0_g = float(tf_01_gurney_cyl_sphere(wh.gurney_mps or kb_e["gurney_mps"], wh.case.mass_kg, fill_item_g, wh.geometry))
+                mott_b_g = kb_e["mott_b"] if abs(wh.mott_B - 0.0779) < 1e-6 else wh.mott_B
+                mt_g = tf_04_mott_distribution(M0_kg=wh.case.mass_kg, t_in=wh.case.t_in, d_in=wh.case.d_in, B=mott_b_g)
                 af_g = tf_06_fragment_presented_area(m_kg=float(mt_g["m_avg_kg"]), shape=wh.frag_shape)
                 vr_g = np.asarray(eb_17_fragment_velocity_decay(v0_g, rr, float(mt_g["m_avg_kg"]), float(af_g["A_m2"])), dtype=np.float64)
                 hz_g, ke_g = tf_11_hazardous_fragment_ke(float(mt_g["m_avg_kg"]), vr_g)
@@ -1138,6 +1174,7 @@ def run_simulation(
 
         effectiveness = {
             "sspk": sspk_mean,
+            "sspk_cluster_se": sspk_cluster_se,
             "sspk_wilson_ci_low": wilson_single["ci_low"],
             "sspk_wilson_ci_high": wilson_single["ci_high"],
             "sspk_wilson_half_width": wilson_single["half_width"],
@@ -1157,13 +1194,16 @@ def run_simulation(
         blast_and_safety: dict[str, Any] = {}
         if ammo.warhead is not None and ammo.warhead.fill.mass_kg > 0.0:
             wh = ammo.warhead
+            kb_b = get_kb().get_explosive_properties(wh.fill.explosive)
+            fp_b = wh.fill.f_tnt_p_override or kb_b["f_tnt_p"]
+            neq_tnt_p = wh.fill.mass_kg * fp_b
             auw = wh.auw_kg if wh.auw_kg is not None else ammo.mass_kg
-            tb15 = tb_15_simple_safety_distances(auw_kg=auw, neq_kg=wh.fill.mass_kg)
+            tb15 = tb_15_simple_safety_distances(auw_kg=auw, neq_kg=neq_tnt_p)
             es_dist = max(float(scenario.target.geometry.get("exposed_site_distance_m", 300.0)), 2.0)
             es_blast = evaluate_blast_field(es_dist, wh.fill.mass_kg, wh.fill.explosive)
             glass = tb_11_glass_breakage_swiss(float(es_blast["Ps_kPa"]), float(es_blast["Is_kPa_ms"]), scenario.target.window_size)
             axel = tb_13_axelsson_chest_wall(float(es_blast["Ps_kPa"]), float(es_blast["td_ms"]), float(es_blast["Is_kPa_ms"]))
-            brick_cb = float(tb_10_brick_house_damage_range(wh.fill.mass_kg, category=scenario.target.brick_damage_category))
+            brick_cb = float(tb_10_brick_house_damage_range(neq_tnt_p, category=scenario.target.brick_damage_category))
 
             blast_and_safety = {
                 "mean_ps_at_target_kPa": float(np.mean(ps_at_target)),
@@ -1182,8 +1222,14 @@ def run_simulation(
         if ammo.warhead is not None and ammo.warhead.geometry != "bare" and ammo.warhead.case.mass_kg > 0.0:
             wh = ammo.warhead
             kb_e = get_kb().get_explosive_properties(wh.fill.explosive)
-            v0_g = float(tf_01_gurney_cyl_sphere(wh.gurney_mps or kb_e["gurney_mps"], wh.case.mass_kg, wh.fill.mass_kg, wh.geometry))
-            mt_g = tf_04_mott_distribution(M0_kg=wh.case.mass_kg, t_in=wh.case.t_in, d_in=wh.case.d_in, B=wh.mott_B)
+            fill_item_f = (
+                wh.fill.mass_kg / float(wh.stack_total_items)
+                if (wh.stack_total_items > 1 and wh.fill.mass_kg > wh.case.mass_kg * 1.5)
+                else wh.fill.mass_kg
+            )
+            v0_g = float(tf_01_gurney_cyl_sphere(wh.gurney_mps or kb_e["gurney_mps"], wh.case.mass_kg, fill_item_f, wh.geometry))
+            mott_b_f = kb_e["mott_b"] if abs(wh.mott_B - 0.0779) < 1e-6 else wh.mott_B
+            mt_g = tf_04_mott_distribution(M0_kg=wh.case.mass_kg, t_in=wh.case.t_in, d_in=wh.case.d_in, B=mott_b_f)
             fragmentation.update({
                 "gurney_v0_mps": v0_g,
                 "mott_total_fragments": mt_g["total_fragments"],
@@ -1216,6 +1262,7 @@ def run_simulation(
                     N_surface=wh.stack_surface_items,
                     N_total=wh.stack_total_items,
                     storage_mode=wh.storage_mode,
+                    mean_frag_mass_kg=mt_g["m_avg_kg"],
                 )
                 fragmentation["stack_qf_at_es_m2"] = st_res["q_f_m2"]
                 fragmentation["stack_exceeds_1_per_56m2"] = st_res["exceeds_1_per_56m2"]

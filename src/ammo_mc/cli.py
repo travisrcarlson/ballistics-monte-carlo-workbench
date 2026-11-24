@@ -14,7 +14,12 @@ from ammo_mc.mcdrag import McDragInputs, estimate_mcdrag
 from ammo_mc.pipeline import run_simulation
 from ammo_mc.presets import get_preset, list_presets
 from ammo_mc.schemas import AmmoDefinition, Scenario
-from ammo_mc.validation import run_validation_suite
+from ammo_mc.validation import (
+    generate_vv_certificate_html,
+    generate_vv_certificate_markdown,
+    run_extended_vv_benchmarks,
+    run_validation_suite,
+)
 
 app = typer.Typer(
     name="ammo-mc",
@@ -39,8 +44,56 @@ def cmd_validate(
     seed: int = typer.Option(42, help="RNG seed for stochastic validation cases (e.g. V-08)."),
     n_mc: int = typer.Option(100_000, help="Trial count for stochastic validation cases."),
     as_json: bool = typer.Option(False, "--json", help="Output validation results as raw JSON."),
+    extended: bool = typer.Option(False, "--extended", help="Run extended 40-check V&V suite (22 workbook + 18 physics benchmarks)."),
+    out_html: Optional[Path] = typer.Option(None, "--out-html", help="Write self-contained HTML V&V audit certificate."),
+    out_md: Optional[Path] = typer.Option(None, "--out-md", help="Write Markdown V&V audit certificate."),
 ) -> None:
-    """Run the Ammunition Monte Carlo Knowledge Base validation suite (V-01a..V-12)."""
+    """Run the Ammunition Monte Carlo Knowledge Base validation suite (V-01a..V-12 & B-01..B-18)."""
+    run_ext = bool(extended or out_html is not None or out_md is not None)
+    if run_ext:
+        typer.echo("Running extended 40-check V&V suite (workbook V-01a..V-12 + physics B-01..B-18)...\n")
+        report = run_extended_vv_benchmarks(seed=seed, n_mc_v08=n_mc)
+        if out_html is not None:
+            out_html.parent.mkdir(parents=True, exist_ok=True)
+            out_html.write_text(generate_vv_certificate_html(report), encoding="utf-8")
+            typer.echo(f"Wrote HTML V&V certificate -> {out_html}")
+        if out_md is not None:
+            out_md.parent.mkdir(parents=True, exist_ok=True)
+            out_md.write_text(generate_vv_certificate_markdown(report), encoding="utf-8")
+            typer.echo(f"Wrote Markdown V&V certificate -> {out_md}")
+        if as_json:
+            typer.echo(json.dumps(report, indent=2))
+            return
+
+        typer.echo(f"{'ID':<7} {'Domain':<22} {'Status':<8} {'Computed':<14} {'Reference':<14} {'Util %':<9} {'Benchmark'}")
+        typer.echo("=" * 105)
+        all_passed = True
+        for b in report["physics_benchmarks"]:
+            status_color = typer.colors.GREEN if b["passed"] else typer.colors.RED
+            if not b["passed"]:
+                all_passed = False
+            status_styled = typer.style(f"{b['status']:<8}", fg=status_color, bold=True)
+            typer.echo(
+                f"{b['benchmark_id']:<7} {b['domain']:<22} {status_styled} {b['computed']:<14.5g} {b['reference']:<14.5g} "
+                f"{b['utilization_pct']:<8.2f}% {b['title']}"
+            )
+        for w in report["workbook_cases"]:
+            if "FAIL" in str(w["status"]):
+                all_passed = False
+        s = report["summary"]
+        typer.echo("=" * 105)
+        typer.echo(
+            f"Summary: Physics {s['physics_passed']}/{s['physics_total']} PASS | "
+            f"Workbook Excel {s['workbook_excel_passed']}/{s['workbook_total']} PASS | "
+            f"Literature {s['literature']['total_sources']} sources ({s['literature']['linked_source_coverage_pct']:.0f}%)"
+        )
+        if all_passed:
+            typer.secho("\nExtended V&V Suite: ALL CHECKS PASSED.", fg=typer.colors.GREEN, bold=True)
+        else:
+            typer.secho("\nExtended V&V Suite: FAILURES DETECTED.", fg=typer.colors.RED, bold=True)
+            raise typer.Exit(code=1)
+        return
+
     typer.echo("Running validation suite against Excel formulas and source literature...\n")
     results = run_validation_suite(seed=seed, n_mc_v08=n_mc)
 

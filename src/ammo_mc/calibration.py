@@ -162,7 +162,7 @@ def calibrate_shotgun_pattern_from_csv(
     radii = np.hypot(y_arr - bias_y, z_arr - bias_z)
     r_sorted = np.sort(radii)
 
-    sigma_mle = float(math.sqrt(float(np.mean(r_sorted * r_sorted)) / 2.0))
+    sigma_mle = float(math.sqrt(float(np.sum(r_sorted * r_sorted)) / max(2.0 * (n_pts - 1), 1.0)))
     ecdf = (np.arange(1, n_pts + 1, dtype=np.float64) - 0.5) / float(n_pts)
 
     def _res_rayleigh(params: np.ndarray) -> np.ndarray:
@@ -172,6 +172,16 @@ def calibrate_shotgun_pattern_from_csv(
 
     ls_res = sp_opt.least_squares(_res_rayleigh, x0=[max(sigma_mle, 0.02)], bounds=([1e-3], [10.0]))
     sigma_fit = float(ls_res.x[0])
+    # Nonlinear LS standard error & 95% CI from (J^T J)^-1 * s^2
+    dof_r = max(n_pts - 1, 1)
+    s2_r = float(np.sum(ls_res.fun ** 2)) / dof_r
+    try:
+        jtj_r = ls_res.jac.T @ ls_res.jac
+        sigma_se = float(math.sqrt(max(float(np.linalg.pinv(jtj_r)[0, 0]) * s2_r, 0.0)))
+    except Exception:
+        sigma_se = sigma_fit / math.sqrt(max(4.0 * dof_r, 1.0))
+    t_crit_r = float(sp_stats.t.ppf(0.975, df=dof_r))
+    sigma_ci_half = t_crit_r * sigma_se
 
     choke_defs = get_choke_definitions()
     c_nom = choke_defs.get(nominal_choke, choke_defs["Modified"])
@@ -209,6 +219,8 @@ def calibrate_shotgun_pattern_from_csv(
         "poi_bias_z_mrad": round(bias_z_mrad, 2),
         "sigma_mle_m": round(sigma_mle, 4),
         "sigma_fit_m": round(sigma_fit, 4),
+        "sigma_fit_se_m": round(sigma_se, 4),
+        "sigma_fit_ci95_m": [round(max(0.0, sigma_fit - sigma_ci_half), 4), round(sigma_fit + sigma_ci_half, 4)],
         "sigma_nominal_m": round(sigma_nom_at_range, 4),
         "calibrated_spread_factor": round(spread_factor, 3),
         "fitted_40yd_30in_pct": round(p30_fit * 100.0, 1),
@@ -261,10 +273,13 @@ def calibrate_chronograph_from_csv(
             vv = float(row[v_col]) * v_scale
             if not math.isfinite(vv):
                 continue
-            vels.append(vv)
             if t_col is not None and row.get(t_col, "") != "":
                 tv = float(row[t_col])
-                temps.append((tv - 32.0) * (5.0 / 9.0) if t_is_f else tv)
+                tv_c = (tv - 32.0) * (5.0 / 9.0) if t_is_f else tv
+                if not math.isfinite(tv_c):
+                    continue
+                temps.append(tv_c)
+            vels.append(vv)
         except (TypeError, ValueError):
             continue
 
@@ -279,6 +294,8 @@ def calibrate_chronograph_from_csv(
 
     has_temp_fit = len(temps) == len(vels) and float(np.ptp(temps)) > 2.0
     dv_dt = 0.0
+    dv_dt_se = 0.0
+    dv_dt_ci_half = 0.0
     v_std_fit = mean_mv
     residuals = v_arr - mean_mv
     r2_temp = 0.0
@@ -296,6 +313,14 @@ def calibrate_chronograph_from_csv(
         residuals = v_arr - v_pred
         ss_tot = float(np.sum((v_arr - mean_mv) ** 2))
         r2_temp = float(1.0 - np.sum(residuals ** 2) / max(ss_tot, 1e-12))
+        dof_t = max(len(v_arr) - 2, 1)
+        s2_t = float(np.sum(residuals ** 2)) / dof_t
+        try:
+            cov_t = np.linalg.pinv(fit.jac.T @ fit.jac) * s2_t
+            dv_dt_se = float(math.sqrt(max(float(cov_t[1, 1]), 0.0)))
+            dv_dt_ci_half = float(sp_stats.t.ppf(0.975, df=dof_t)) * dv_dt_se
+        except Exception:
+            pass
 
     resid_sd = float(np.std(residuals, ddof=2 if has_temp_fit else 1))
     return {
@@ -311,6 +336,8 @@ def calibrate_chronograph_from_csv(
         "has_temp_fit": bool(has_temp_fit),
         "std_temp_c": float(std_temp_c),
         "dv_dt_mps_per_c": round(dv_dt, 4),
+        "dv_dt_se_mps_per_c": round(dv_dt_se, 4),
+        "dv_dt_ci95_mps_per_c": [round(dv_dt - dv_dt_ci_half, 4), round(dv_dt + dv_dt_ci_half, 4)],
         "r2_temp_fit": round(r2_temp, 4),
         "velocities_mps": [round(float(v), 2) for v in v_arr],
         "temps_c": [round(float(t), 2) for t in temps] if has_temp_fit else [],
@@ -364,8 +391,17 @@ def calibrate_drag_form_factor_from_csv(
     r_arr = np.asarray(rs, dtype=np.float64)[order]
     d_arr = np.asarray(drops_obs, dtype=np.float64)[order]
     v_arr = np.asarray(vels_obs, dtype=np.float64)[order]
-    has_drop = bool(np.all(np.isfinite(d_arr)))
-    has_vel = bool(np.all(np.isfinite(v_arr)))
+    drop_mask = np.isfinite(d_arr)
+    vel_mask = np.isfinite(v_arr)
+    has_drop = int(np.sum(drop_mask)) >= 2
+    has_vel = int(np.sum(vel_mask)) >= 2
+    if not has_drop and not has_vel:
+        raise ValueError("Range calibration CSV has fewer than 2 finite drop or velocity observations.")
+
+    auto_negated_drop = False
+    if has_drop and float(np.median(d_arr[drop_mask])) > 0.05:
+        d_arr[drop_mask] = -d_arr[drop_mask]
+        auto_negated_drop = True
 
     ammo, _scn = get_preset(preset_id)
     env = AtmosphereEnvironment()
@@ -410,11 +446,11 @@ def calibrate_drag_form_factor_from_csv(
         dp, vp = _eval_model(ff_m, mv_m)
         parts: list[np.ndarray] = []
         if has_drop:
-            scale_d = max(float(np.ptp(d_arr)), 0.1)
-            parts.append((dp - d_arr) / scale_d)
+            scale_d = max(float(np.ptp(d_arr[drop_mask])), 0.1)
+            parts.append((dp[drop_mask] - d_arr[drop_mask]) / scale_d)
         if has_vel:
-            scale_v = max(float(np.ptp(v_arr)), 10.0)
-            parts.append((vp - v_arr) / scale_v)
+            scale_v = max(float(np.ptp(v_arr[vel_mask])), 10.0)
+            parts.append((vp[vel_mask] - v_arr[vel_mask]) / scale_v)
         return np.concatenate(parts)
 
     x0 = [1.0, 1.0] if fit_mv else [1.0]
@@ -427,31 +463,46 @@ def calibrate_drag_form_factor_from_csv(
     mv_calibrated = mv_nom * mv_mult_fit
     d_cal_pred, v_cal_pred = _eval_model(ff_mult_fit, mv_mult_fit)
 
-    rmse_drop_nom = float(math.sqrt(float(np.mean((d_nom_pred - d_arr) ** 2)))) if has_drop else None
-    rmse_drop_cal = float(math.sqrt(float(np.mean((d_cal_pred - d_arr) ** 2)))) if has_drop else None
-    rmse_vel_nom = float(math.sqrt(float(np.mean((v_nom_pred - v_arr) ** 2)))) if has_vel else None
-    rmse_vel_cal = float(math.sqrt(float(np.mean((v_cal_pred - v_arr) ** 2)))) if has_vel else None
+    # Nonlinear LS covariance & 95% confidence interval for i_mult
+    n_obs = len(opt.fun)
+    dof_d = max(n_obs - len(opt.x), 1)
+    s2_d = float(np.sum(opt.fun ** 2)) / dof_d
+    try:
+        cov_d = np.linalg.pinv(opt.jac.T @ opt.jac) * s2_d
+        ff_mult_se = float(math.sqrt(max(float(cov_d[0, 0]), 0.0)))
+    except Exception:
+        ff_mult_se = 0.0
+    ff_ci_half = float(sp_stats.t.ppf(0.975, df=dof_d)) * ff_mult_se
+
+    rmse_drop_nom = float(math.sqrt(float(np.mean((d_nom_pred[drop_mask] - d_arr[drop_mask]) ** 2)))) if has_drop else None
+    rmse_drop_cal = float(math.sqrt(float(np.mean((d_cal_pred[drop_mask] - d_arr[drop_mask]) ** 2)))) if has_drop else None
+    rmse_vel_nom = float(math.sqrt(float(np.mean((v_nom_pred[vel_mask] - v_arr[vel_mask]) ** 2)))) if has_vel else None
+    rmse_vel_cal = float(math.sqrt(float(np.mean((v_cal_pred[vel_mask] - v_arr[vel_mask]) ** 2)))) if has_vel else None
 
     if has_drop:
-        ss_tot = float(np.sum((d_arr - np.mean(d_arr)) ** 2))
-        r2_fit = float(1.0 - np.sum((d_cal_pred - d_arr) ** 2) / max(ss_tot, 1e-12))
+        d_obs_valid = d_arr[drop_mask]
+        ss_tot = float(np.sum((d_obs_valid - np.mean(d_obs_valid)) ** 2))
+        r2_fit = float(1.0 - np.sum((d_cal_pred[drop_mask] - d_obs_valid) ** 2) / max(ss_tot, 1e-12))
     else:
-        ss_tot = float(np.sum((v_arr - np.mean(v_arr)) ** 2))
-        r2_fit = float(1.0 - np.sum((v_cal_pred - v_arr) ** 2) / max(ss_tot, 1e-12))
+        v_obs_valid = v_arr[vel_mask]
+        ss_tot = float(np.sum((v_obs_valid - np.mean(v_obs_valid)) ** 2))
+        r2_fit = float(1.0 - np.sum((v_cal_pred[vel_mask] - v_obs_valid) ** 2) / max(ss_tot, 1e-12))
 
     stations: list[dict[str, Any]] = []
     for i in range(len(r_arr)):
+        d_valid = bool(drop_mask[i])
+        v_valid = bool(vel_mask[i])
         stations.append(
             {
                 "range_m": round(float(r_arr[i]), 1),
-                "drop_obs_m": round(float(d_arr[i]), 4) if has_drop else None,
+                "drop_obs_m": round(float(d_arr[i]), 4) if d_valid else None,
                 "drop_nom_m": round(float(d_nom_pred[i]), 4),
                 "drop_cal_m": round(float(d_cal_pred[i]), 4),
-                "drop_resid_cal_m": round(float(d_arr[i] - d_cal_pred[i]), 4) if has_drop else None,
-                "vel_obs_mps": round(float(v_arr[i]), 2) if has_vel else None,
+                "drop_resid_cal_m": round(float(d_arr[i] - d_cal_pred[i]), 4) if d_valid else None,
+                "vel_obs_mps": round(float(v_arr[i]), 2) if v_valid else None,
                 "vel_nom_mps": round(float(v_nom_pred[i]), 2),
                 "vel_cal_mps": round(float(v_cal_pred[i]), 2),
-                "vel_resid_cal_mps": round(float(v_arr[i] - v_cal_pred[i]), 2) if has_vel else None,
+                "vel_resid_cal_mps": round(float(v_arr[i] - v_cal_pred[i]), 2) if v_valid else None,
             }
         )
 
@@ -462,8 +513,11 @@ def calibrate_drag_form_factor_from_csv(
         "n_stations": len(r_arr),
         "has_drop": has_drop,
         "has_vel": has_vel,
+        "auto_negated_drop": auto_negated_drop,
         "nominal_form_factor": round(ff_nom, 4),
         "calibrated_form_factor_multiplier": round(ff_mult_fit, 4),
+        "form_factor_se": round(ff_mult_se * ff_nom, 4),
+        "form_factor_ci95": [round((ff_mult_fit - ff_ci_half) * ff_nom, 4), round((ff_mult_fit + ff_ci_half) * ff_nom, 4)],
         "calibrated_form_factor": round(ff_calibrated, 4),
         "nominal_mv_mps": round(mv_nom, 2),
         "calibrated_mv_mps": round(mv_calibrated, 2),

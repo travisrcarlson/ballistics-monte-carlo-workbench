@@ -76,10 +76,16 @@ def audit_crest_clearance_and_dead_space(
     if trajectory_x_m is not None and trajectory_z_m is not None:
         tx = np.asarray(trajectory_x_m, dtype=np.float64)
         tz = np.asarray(trajectory_z_m, dtype=np.float64)
-        # Interpolate trajectory altitude directly over the crest
         if np.min(tx) <= crest_x <= np.max(tx):
             crest_traj_z = float(np.interp(crest_x, tx, tz))
-            actual_clearance_m = crest_traj_z - crest_z
+            # Check terrain clearance across ALL sampled trajectory points (not only ridge_pos_m)
+            terr_z_all = evaluate_terrain_profile(tx, ridge_pos_m, ridge_height_m, ridge_width_m, base_elev_m=gun_elev_m)
+            # Exclude launch/impact ground endpoints within 10 m of z=0
+            mask_mid = (tx > 5.0) & (tx < max(target_dist_m - 5.0, tx.max() - 5.0))
+            if np.any(mask_mid):
+                actual_clearance_m = float(np.min(tz[mask_mid] - terr_z_all[mask_mid]))
+            else:
+                actual_clearance_m = crest_traj_z - crest_z
             clears_crest = actual_clearance_m >= required_clearance_m
         else:
             crest_traj_z = 0.0
@@ -113,6 +119,19 @@ def audit_crest_clearance_and_dead_space(
     }
 
 
+def _wgs84_meters_per_deg(lat_deg: float) -> tuple[float, float]:
+    """Return exact WGS-84 meridional and prime-vertical meters per degree at latitude."""
+    a = 6378137.0
+    e2 = 0.00669437999014
+    sin_phi = math.sin(math.radians(lat_deg))
+    cos_phi = math.cos(math.radians(lat_deg))
+    w = math.sqrt(max(1.0 - e2 * (sin_phi ** 2), 1e-9))
+    rm = a * (1.0 - e2) / (w ** 3)
+    rn = a / w
+    deg_to_rad = math.pi / 180.0
+    return rm * deg_to_rad, rn * max(abs(cos_phi), 1e-4) * deg_to_rad
+
+
 def export_trajectory_to_kml(
     trajectory_x_m: list[float],
     trajectory_y_m: list[float],
@@ -125,10 +144,7 @@ def export_trajectory_to_kml(
     iatg_ibd_m: float = 240.0,
 ) -> str:
     """Generates an OGC KML 2.2 XML document string for Google Earth Pro and Google Earth Web."""
-    # Approximate WGS-84 coordinate conversion (meters to degrees)
-    # 1 deg lat ~ 111,139 m, 1 deg lon ~ 111,139 * cos(lat)
-    m_per_lat = 111139.0
-    m_per_lon = 111139.0 * math.cos(math.radians(origin_lat))
+    m_per_lat, m_per_lon = _wgs84_meters_per_deg(origin_lat)
 
     kml_coords = []
     for x, y, z in zip(trajectory_x_m, trajectory_y_m, trajectory_z_m):
@@ -245,11 +261,11 @@ def export_trajectory_to_czml(
     name: str = "Projectile_Flight",
 ) -> str:
     """Generates a Cesium CZML JSON stream for 3D time-dynamic geospatial browsers."""
-    m_per_lat = 111139.0
-    m_per_lon = 111139.0 * math.cos(math.radians(origin_lat))
+    m_per_lat, m_per_lon = _wgs84_meters_per_deg(origin_lat)
 
     epoch = "2026-11-15T08:00:00Z"
     total_time = float(time_s[-1]) if time_s else 60.0
+    iso_interval = f"{epoch}/PT{total_time:.1f}S"
 
     cartographic_degrees = []
     for t, x, y, z in zip(time_s, trajectory_x_m, trajectory_y_m, trajectory_z_m):
@@ -264,7 +280,7 @@ def export_trajectory_to_czml(
             "name": name,
             "version": "1.0",
             "clock": {
-                "interval": f"{epoch}/{total_time}S",
+                "interval": iso_interval,
                 "currentTime": epoch,
                 "multiplier": 1.0,
                 "range": "LOOP_STOP",
@@ -273,7 +289,7 @@ def export_trajectory_to_czml(
         {
             "id": "projectile_entity",
             "name": name,
-            "availability": f"{epoch}/{total_time}S",
+            "availability": iso_interval,
             "position": {
                 "epoch": epoch,
                 "cartographicDegrees": cartographic_degrees,
