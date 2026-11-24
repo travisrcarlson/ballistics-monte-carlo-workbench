@@ -99,6 +99,8 @@ FEATURE_NAMES: list[str] = [
     "blue_sensor_latency_ms",
     "blue_kalman_3state",
     "blue_ammo_unit_cost_usd",
+    "blue_hybrid_mode",
+    "blue_hybrid_switch_range_m",
     "red_swarm_size",
     "red_drone_speed_mps",
     "red_maneuver_g",
@@ -112,7 +114,7 @@ FEATURE_NAMES: list[str] = [
     "red_popup_jink",
 ]
 
-FEATURE_SIDES: list[str] = (["Blue"] * 15) + (["Red"] * 11)
+FEATURE_SIDES: list[str] = (["Blue"] * 17) + (["Red"] * 11)
 
 
 def _format_blue_label(cfg: dict[str, Any]) -> str:
@@ -123,7 +125,8 @@ def _format_blue_label(cfg: dict[str, Any]) -> str:
         "12G_FLECHETTE_SABOT_C_UAS": "Flech",
     }.get(str(cfg.get("ammunition_preset", "")), str(cfg.get("ammunition_preset", ""))[:6])
     pt = str(cfg.get("pointing_mode", "convergent"))[:4]
-    return f"{int(cfg['n_barrels'])}b/{int(cfg['barrels_per_burst'])}s {ammo_short} {cfg['choke'][:3]} {pt}"
+    hyb = " Hyb" if bool(cfg.get("hybrid_mode", False)) else ""
+    return f"{int(cfg['n_barrels'])}b/{int(cfg['barrels_per_burst'])}s {ammo_short} {cfg['choke'][:3]} {pt}{hyb}"
 
 
 def _format_red_label(cfg: dict[str, Any]) -> str:
@@ -183,6 +186,22 @@ def normalize_blue_config(cfg: dict[str, Any], max_barrels: int = 12) -> dict[st
     if pol not in BLUE_SEARCH_SPACE["priority_policy"]:
         pol = "minimum_time_to_breach"
 
+    hyb = bool(cfg.get("hybrid_mode", False)) and n_b >= 4
+    if hyb:
+        in_ammo = str(cfg.get("inner_ammunition_preset") or "12G_TSS_NO2_C_UAS")
+        if in_ammo not in BLUE_SEARCH_SPACE["ammunition_preset"]:
+            in_ammo = "12G_TSS_NO2_C_UAS"
+        in_chk = str(cfg.get("inner_choke") or "Extra Full")
+        if in_chk not in BLUE_SEARCH_SPACE["choke"]:
+            in_chk = "Extra Full"
+        in_frac = float(max(0.20, min(0.60, float(cfg.get("inner_barrel_fraction", 0.35)))))
+        sw_rng = float(max(25.0, min(65.0, float(cfg.get("hybrid_switch_range_m", 42.0)))))
+    else:
+        in_ammo = ""
+        in_chk = ""
+        in_frac = 0.35
+        sw_rng = 42.0
+
     splay_deg = round(math.degrees(splay / 1000.0), 2)
     out = {
         "name": str(cfg.get("name", "")).strip(),
@@ -206,6 +225,11 @@ def normalize_blue_config(cfg: dict[str, Any], max_barrels: int = 12) -> dict[st
         "reload_time_s": round(rel, 2),
         "priority_policy": pol,
         "burst_count": int(cfg.get("burst_count", 1)),
+        "hybrid_mode": hyb,
+        "inner_ammunition_preset": in_ammo,
+        "inner_choke": in_chk,
+        "inner_barrel_fraction": round(in_frac, 2),
+        "hybrid_switch_range_m": round(sw_rng, 1),
     }
     if not out["name"]:
         out["name"] = _format_blue_label(out)
@@ -293,6 +317,9 @@ def get_default_blue_seed_pool(
                 "sensor_preset": "Sensor_Fused_Radar_EOIR",
                 "predictor_mode": "kalman_alpha_beta_gamma",
                 "max_engagement_range_m": min(75.0, max(38.0, float(stage1_profile.get("target_distance_m", 35.0)) + 20.0)),
+                "hybrid_mode": bool(stage1_profile.get("hybrid_mode", False)),
+                "inner_ammunition_preset": stage1_profile.get("inner_ammunition_preset", "12G_TSS_NO2_C_UAS"),
+                "inner_choke": stage1_profile.get("inner_choke", "Extra Full"),
             },
             max_barrels=max_barrels,
         )
@@ -495,6 +522,8 @@ def encode_matchup_features(blue: dict[str, Any], red: dict[str, Any]) -> np.nda
             float(sensor["fcs_latency_ms"]),
             1.0 if blue["predictor_mode"] == "kalman_alpha_beta_gamma" else 0.0,
             float(econ["unit_cost_usd"]),
+            1.0 if bool(blue.get("hybrid_mode", False)) else 0.0,
+            float(blue.get("hybrid_switch_range_m", 42.0)),
             float(red["swarm_size"]),
             float(red["drone_speed_mps"]),
             float(red["maneuver_g"]),
@@ -832,6 +861,8 @@ def evaluate_red_vs_blue_matchup_mc(
     seed: int = 42,
     _recoil_cache: dict[tuple[Any, ...], float] | None = None,
     _geom_cache: dict[tuple[str, str], float] | None = None,
+    calibration_profile: dict[str, Any] | None = None,
+    robust_uncertainty_mode: bool = False,
 ) -> dict[str, Any]:
     """Evaluate one (Blue turret, Red swarm) pairing with coupled recoil, FCS & swarm MC."""
     rng = np.random.default_rng(seed)
@@ -889,29 +920,40 @@ def evaluate_red_vs_blue_matchup_mc(
     e_core = float(d_spec.get("lethal_energy_core_j", 24.0))
     n_crit = int(d_spec.get("critical_hits_for_kill", 3))
 
-    # 3. Ammo & Dispersion Constants
-    _, ammo = _resolve_shotgun_ammo(blue_n["ammunition_preset"])
-    econ = CUAS_AMMO_ECONOMICS_CATALOG.get(blue_n["ammunition_preset"], CUAS_AMMO_ECONOMICS_CATALOG["12G_NO4_BUCK_C_UAS"])
-    unit_cost_usd = float(econ["unit_cost_usd"])
-    pellets_per_shot = int(ammo["pellets_per_shot"])
-    d_m = float(ammo["pellet_diameter_mm"]) / 1000.0
-    m_kg = float(ammo["pellet_mass_g"]) / 1000.0
-    v0_nom = float(ammo["v0_mps"])
-    base_cd = float(ammo.get("effective_cd", 0.47))
-    area_p = math.pi * 0.25 * (d_m ** 2)
-    rho_air = 1.225
-    kappa = (rho_air * base_cd * area_p) / (2.0 * max(m_kg, 1e-6))
-
+    # 3. Ammo & Dispersion Constants (uniform builder supports homogeneous & dual-ring hybrid turrets)
     choke_defs = get_choke_definitions()
-    c_info = choke_defs.get(blue_n["choke"], choke_defs["Modified"])
-    p_bench = float(c_info["benchmark_40yd_30in_pct"])
-    sigma_ref = 0.381 / math.sqrt(-2.0 * math.log(1.0 - p_bench))
-    theta_choke = sigma_ref / 36.58
-
     sensor = CUAS_SENSOR_PRESETS.get(blue_n["sensor_preset"], CUAS_SENSOR_PRESETS["Sensor_Fused_Radar_EOIR"])
     sigma_az_rad = float(sensor["sigma_az_mrad"]) / 1000.0
     t_lat = float(sensor["fcs_latency_ms"]) / 1000.0
     slew_rad_s = math.radians(blue_n["slew_rate_deg_s"])
+    rho_air = 1.225
+
+    def _build_ring_physics(ammo_key: str, choke_key: str) -> dict[str, float]:
+        _, a_spec = _resolve_shotgun_ammo(ammo_key)
+        ec_spec = CUAS_AMMO_ECONOMICS_CATALOG.get(ammo_key, CUAS_AMMO_ECONOMICS_CATALOG["12G_NO4_BUCK_C_UAS"])
+        d_m = float(a_spec["pellet_diameter_mm"]) / 1000.0
+        m_kg = float(a_spec["pellet_mass_g"]) / 1000.0
+        cd_val = float(a_spec.get("effective_cd", 0.47))
+        area_p = math.pi * 0.25 * (d_m ** 2)
+        c_inf = choke_defs.get(choke_key, choke_defs["Modified"])
+        sigma_ref = 0.381 / math.sqrt(-2.0 * math.log(1.0 - float(c_inf["benchmark_40yd_30in_pct"])))
+        return {
+            "unit_cost_usd": float(ec_spec["unit_cost_usd"]),
+            "pellets_per_shot": float(a_spec["pellets_per_shot"]),
+            "m_kg": m_kg,
+            "v0_nom": float(a_spec["v0_mps"]),
+            "kappa": (rho_air * cd_val * area_p) / (2.0 * max(m_kg, 1e-6)),
+            "theta_choke": sigma_ref / 36.58,
+        }
+
+    outer_phys = _build_ring_physics(blue_n["ammunition_preset"], blue_n["choke"])
+    is_hybrid = bool(blue_n.get("hybrid_mode", False))
+    inner_phys = (
+        _build_ring_physics(blue_n["inner_ammunition_preset"], blue_n["inner_choke"])
+        if is_hybrid
+        else outer_phys
+    )
+    hybrid_switch_m = float(blue_n.get("hybrid_switch_range_m", 42.0))
 
     prof_mult = {
         "linear_cruise": 0.0,
@@ -922,27 +964,50 @@ def evaluate_red_vs_blue_matchup_mc(
     a_eff = float(red_n["maneuver_g"]) * 9.80665 * prof_mult
     r_eq_sq = area_vuln / math.pi
 
-    def _sample_burst_pk(slant_range_m: float, d_speed_mps: float, e_lead_draw: float) -> float:
+    cal = dict(calibration_profile or {})
+    use_uncert = bool(robust_uncertainty_mode or calibration_profile is not None)
+    spread_factor_nom = float(cal.get("spread_factor", 1.0))
+    spread_factor_se = float(cal.get("spread_factor_se", 0.06 if robust_uncertainty_mode else 0.0))
+    aim_bias_mrad = float(cal.get("aim_bias_mrad", 0.0))
+    mv_scale_nom = float(cal.get("mv_scale", 1.0))
+    mv_sd_mps = float(cal.get("mv_sd_mps", 4.5 if robust_uncertainty_mode else 0.0))
+    dv_dt_cal = float(cal.get("dv_dt_mps_per_c", 0.72))
+    ambient_temp_c = float(cal.get("ambient_temp_c", 21.1))
+    wind_gust_nom = float(cal.get("wind_gust_mps", 3.5 if robust_uncertainty_mode else 0.0))
+    platform_jitter_mrad = float(cal.get("platform_jitter_mrad", 1.6 if robust_uncertainty_mode else 0.0))
+
+    def _sample_burst_pk(
+        slant_range_m: float,
+        d_speed_mps: float,
+        e_lead_draw: float,
+        ring_phys: dict[str, float],
+        n_shot_bbls: int,
+        ep_spread_mult: float = 1.0,
+        ep_mv_shift: float = 0.0,
+        ep_mv_scale: float = 1.0,
+        ep_wind_mps: float = 0.0,
+    ) -> tuple[float, str]:
         R = max(slant_range_m, breach_keepout_radius_m)
-        t_tof, v_imp = exact_quadratic_drag_tof_and_velocity(R, v0_nom, kappa)
-        ke_j = 0.5 * m_kg * (v_imp ** 2)
+        v0_eff = max(180.0, ring_phys["v0_nom"] * ep_mv_scale + ep_mv_shift)
+        t_tof, v_imp = exact_quadratic_drag_tof_and_velocity(R, v0_eff, ring_phys["kappa"])
+        ke_j = 0.5 * ring_phys["m_kg"] * (v_imp ** 2)
         if ke_j < e_rotor:
-            return 0.0
+            return 0.0, "insufficient_lethality_spread"
 
         t_eff = t_tof + t_lat
-        # Unmodeled maneuvering acceleration residual during latency + flight time
         if blue_n["predictor_mode"] == "kalman_alpha_beta_gamma":
             e_maneuver = 0.24 * a_eff * (t_eff ** 2)
         else:
             e_maneuver = 0.52 * a_eff * (t_eff ** 2)
 
-        # Angular servo tracking lag when crossing speed approaches/exceeds gimbal rate
         omega_req = 0.55 * d_speed_mps / R
         servo_lag_m = max(0.0, omega_req - slew_rad_s) * t_eff * R
-        sigma_meas = max(0.02, sigma_az_rad * R * 1.15)
-        e_lead_tot = e_maneuver + servo_lag_m + e_lead_draw * sigma_meas
+        sigma_az_eff = math.hypot(sigma_az_rad, platform_jitter_mrad / 1000.0) if use_uncert else sigma_az_rad
+        sigma_meas = max(0.02, sigma_az_eff * R * 1.15)
+        bias_wind_m = ((aim_bias_mrad / 1000.0) * R + ep_wind_mps * 0.012 * R) if use_uncert else 0.0
+        e_lead_tot = e_maneuver + servo_lag_m + e_lead_draw * sigma_meas + 0.35 * bias_wind_m
 
-        sigma_r = 0.00463 + theta_choke * R * ((R / 36.58) ** 0.15)
+        sigma_r = (0.00463 + ring_phys["theta_choke"] * R * ((R / 36.58) ** 0.15)) * ep_spread_mult
         if blue_n["pointing_mode"] == "divergent_curtain":
             sigma_curt = 0.58 * (float(blue_n["splay_angle_mrad"]) / 1000.0) * R
             sigma_eff = math.hypot(sigma_r, sigma_curt)
@@ -954,28 +1019,37 @@ def evaluate_red_vs_blue_matchup_mc(
         sigma_eff_sq = max(sigma_eff ** 2, 1e-6)
         p_pel_center = 1.0 - math.exp(-r_eq_sq / (2.0 * sigma_eff_sq))
         off_axis_atten = math.exp(-(e_lead_tot ** 2) / (2.0 * sigma_eff_sq))
-        # Curtains dilute peak center density slightly unless lead offset is caught by spread
         density_dilution = sigma_r / max(sigma_eff, sigma_r)
         p_pel = p_pel_center * off_axis_atten * (0.45 + 0.55 * density_dilution)
 
         energy_fac = 0.55 + 0.45 * min(1.0, max(0.0, ke_j - e_rotor) / max(e_core - e_rotor, 1.0))
-        lam = blue_n["barrels_per_burst"] * pellets_per_shot * p_pel * 0.80 * energy_fac
+        lam = n_shot_bbls * ring_phys["pellets_per_shot"] * p_pel * 0.80 * energy_fac
         lam = min(lam, 60.0)
         p_surv = 0.0
         term = math.exp(-lam)
         for k in range(n_crit):
             p_surv += term
             term *= lam / float(k + 1)
-        return float(max(0.0, min(1.0, 1.0 - p_surv)))
+        pk_val = float(max(0.0, min(1.0, 1.0 - p_surv)))
+        fail_tag = "tracking_evasion_miss" if e_lead_tot > sigma_eff else "insufficient_lethality_spread"
+        return pk_val, fail_tag
 
     # 4. Event-Driven Swarm Timeline Across N Episodes
     zero_leaker_eps = 0
     killed_counts: list[int] = []
     leaker_counts: list[int] = []
     rounds_counts: list[int] = []
+    costs_eps: list[float] = []
     reloads_counts: list[int] = []
+    episode_utilities: list[float] = []
     burst_pks: list[float] = []
     intercept_ranges: list[float] = []
+    fail_counts = {
+        "reload_gap": 0,
+        "slew_bottleneck": 0,
+        "tracking_evasion_miss": 0,
+        "insufficient_lethality_spread": 0,
+    }
 
     eff_engage_range = min(
         float(blue_n["max_engagement_range_m"]),
@@ -984,6 +1058,12 @@ def evaluate_red_vs_blue_matchup_mc(
     eff_engage_range = max(breach_keepout_radius_m + 6.0, eff_engage_range)
 
     n_barrels = int(blue_n["n_barrels"])
+    if is_hybrid:
+        n_inner = max(1, min(n_barrels - 1, round(n_barrels * float(blue_n["inner_barrel_fraction"]))))
+        n_outer = n_barrels - n_inner
+    else:
+        n_inner = 0
+        n_outer = n_barrels
     bpb = int(blue_n["barrels_per_burst"])
     rel_t = float(blue_n["reload_time_s"])
     settle_t = 0.08 + float(blue_n["ripple_delay_ms"]) * max(0, bpb - 1) / 2500.0
@@ -991,6 +1071,7 @@ def evaluate_red_vs_blue_matchup_mc(
     slew_accel = max(420.0, slew_rate * 4.0)
     pol = blue_n["priority_policy"]
     nom_spd = float(red_n["drone_speed_mps"])
+    recoil_pen = recoil_penalty_per_kn * max(0.0, peak_mount_kn - mount_load_limit_kn)
 
     for _ in range(n_episodes):
         drones: list[dict[str, Any]] = []
@@ -1008,19 +1089,56 @@ def evaluate_red_vs_blue_matchup_mc(
                 el_d = float(rng.uniform(10.0, 48.0))
                 r0 = float(eff_engage_range + 6.0 + _di * 0.62 * nom_spd + rng.uniform(0.0, 14.0))
             spd_d = float(max(8.0, rng.normal(nom_spd, 0.10 * nom_spd)))
-            drones.append({"az": az_d, "el": el_d, "r0": r0, "spd": spd_d, "alive": True, "leaked": False})
+            drones.append(
+                {
+                    "az": az_d,
+                    "el": el_d,
+                    "r0": r0,
+                    "spd": spd_d,
+                    "alive": True,
+                    "leaked": False,
+                    "shots_taken": 0,
+                    "last_fail_reason": "slew_bottleneck",
+                }
+            )
+
+        if use_uncert:
+            if robust_uncertainty_mode:
+                ep_spread_mult = float(np.clip(rng.normal(spread_factor_nom, max(spread_factor_se, 0.06)), 0.72, 1.45))
+                ep_temp = float(ambient_temp_c + rng.uniform(-15.0, 15.0))
+                ep_mv_shift = dv_dt_cal * (ep_temp - 21.1) + float(rng.normal(0.0, max(mv_sd_mps, 3.0)))
+                ep_wind = float(abs(rng.normal(wind_gust_nom, 2.5)))
+            else:
+                ep_spread_mult = spread_factor_nom
+                ep_mv_shift = dv_dt_cal * (ambient_temp_c - 21.1) + (float(rng.normal(0.0, mv_sd_mps)) if mv_sd_mps > 0.0 else 0.0)
+                ep_wind = wind_gust_nom
+            ep_mv_scale = mv_scale_nom
+        else:
+            ep_spread_mult = 1.0
+            ep_mv_shift = 0.0
+            ep_mv_scale = 1.0
+            ep_wind = 0.0
 
         t_now = 0.0
+        inner_ready = n_inner
+        outer_ready = n_outer
         b_ready = n_barrels
         tur_az, tur_el = 0.0, 24.0
         ep_reloads = 0
         ep_rounds = 0
+        ep_cost = 0.0
+        just_reloaded = False
 
         while True:
             for dr in drones:
                 if dr["alive"] and (dr["r0"] - dr["spd"] * t_now) <= breach_keepout_radius_m:
                     dr["alive"] = False
                     dr["leaked"] = True
+                    reason = "reload_gap" if just_reloaded else (
+                        "slew_bottleneck" if dr["shots_taken"] == 0 else dr["last_fail_reason"]
+                    )
+                    fail_counts[reason] += 1
+            just_reloaded = False
 
             alive = [dr for dr in drones if dr["alive"]]
             if not alive:
@@ -1028,8 +1146,11 @@ def evaluate_red_vs_blue_matchup_mc(
 
             if b_ready <= 0:
                 t_now += rel_t
+                inner_ready = n_inner
+                outer_ready = n_outer
                 b_ready = n_barrels
                 ep_reloads += 1
+                just_reloaded = True
                 continue
 
             in_range = [dr for dr in alive if (dr["r0"] - dr["spd"] * t_now) <= eff_engage_range]
@@ -1063,14 +1184,44 @@ def evaluate_red_vs_blue_matchup_mc(
             if r_fire <= breach_keepout_radius_m:
                 tgt["alive"] = False
                 tgt["leaked"] = True
+                fail_counts["slew_bottleneck"] += 1
                 continue
 
-            rounds_fired = min(b_ready, bpb)
-            b_ready -= rounds_fired
+            if is_hybrid:
+                use_inner = (r_fire > hybrid_switch_m and inner_ready > 0) or (outer_ready <= 0)
+                if use_inner:
+                    rounds_fired = min(inner_ready, bpb)
+                    inner_ready -= rounds_fired
+                    ring_p = inner_phys
+                else:
+                    rounds_fired = min(outer_ready, bpb)
+                    outer_ready -= rounds_fired
+                    ring_p = outer_phys
+                b_ready = inner_ready + outer_ready
+                shot_bbls = rounds_fired
+            else:
+                rounds_fired = min(b_ready, bpb)
+                b_ready -= rounds_fired
+                ring_p = outer_phys
+                shot_bbls = bpb
+
             ep_rounds += rounds_fired
+            ep_cost += rounds_fired * ring_p["unit_cost_usd"]
+            tgt["shots_taken"] += 1
 
             ray_draw = float(rng.rayleigh(1.0))
-            pk_burst = _sample_burst_pk(r_fire, tgt["spd"], ray_draw)
+            pk_burst, fail_tag = _sample_burst_pk(
+                r_fire,
+                tgt["spd"],
+                ray_draw,
+                ring_phys=ring_p,
+                n_shot_bbls=shot_bbls,
+                ep_spread_mult=ep_spread_mult,
+                ep_mv_shift=ep_mv_shift,
+                ep_mv_scale=ep_mv_scale,
+                ep_wind_mps=ep_wind,
+            )
+            tgt["last_fail_reason"] = fail_tag
             burst_pks.append(pk_burst)
             if rng.random() < pk_burst:
                 tgt["alive"] = False
@@ -1083,28 +1234,55 @@ def evaluate_red_vs_blue_matchup_mc(
         killed_counts.append(n_killed)
         leaker_counts.append(n_leaked)
         rounds_counts.append(ep_rounds)
+        costs_eps.append(ep_cost)
         reloads_counts.append(ep_reloads)
+        ep_raw = (
+            w_zero_breach * (100.0 if n_leaked == 0 else 0.0)
+            + w_kill_rate * (100.0 * n_killed / max(1, int(red_n["swarm_size"])))
+            - cost_penalty_weight * ep_cost
+            - recoil_pen
+        )
+        episode_utilities.append(float(max(0.0, min(100.0, ep_raw))))
 
     zero_breach_pct = 100.0 * zero_leaker_eps / max(1, n_episodes)
     kill_rate_pct = 100.0 * float(np.mean(killed_counts)) / max(1, int(red_n["swarm_size"]))
     leaker_rate_pct = 100.0 - kill_rate_pct
-    mean_cost_wave = float(np.mean(rounds_counts)) * unit_cost_usd
+    mean_cost_wave = float(np.mean(costs_eps))
     mean_killed = float(np.mean(killed_counts))
     cost_per_kill = mean_cost_wave / max(mean_killed, 0.25)
 
-    recoil_pen = recoil_penalty_per_kn * max(0.0, peak_mount_kn - mount_load_limit_kn)
     raw_utility = (
         w_zero_breach * zero_breach_pct
         + w_kill_rate * kill_rate_pct
         - cost_penalty_weight * mean_cost_wave
         - recoil_pen
     )
-    blue_utility = float(max(0.0, min(100.0, raw_utility)))
+    sorted_u = sorted(episode_utilities)
+    k20 = max(1, int(math.ceil(0.20 * len(sorted_u))))
+    cvar20_u = float(np.mean(sorted_u[:k20]))
+    if robust_uncertainty_mode:
+        blue_utility = float(max(0.0, min(100.0, 0.65 * raw_utility + 0.35 * cvar20_u)))
+    else:
+        blue_utility = float(max(0.0, min(100.0, raw_utility)))
+
+    total_leakers = sum(fail_counts.values())
+    denom = max(total_leakers, 1)
+    failure_modes = {
+        "reload_gap_pct": round(100.0 * fail_counts["reload_gap"] / denom, 1) if total_leakers > 0 else 0.0,
+        "slew_bottleneck_pct": round(100.0 * fail_counts["slew_bottleneck"] / denom, 1) if total_leakers > 0 else 0.0,
+        "tracking_evasion_miss_pct": round(100.0 * fail_counts["tracking_evasion_miss"] / denom, 1) if total_leakers > 0 else 0.0,
+        "insufficient_lethality_spread_pct": round(100.0 * fail_counts["insufficient_lethality_spread"] / denom, 1) if total_leakers > 0 else 0.0,
+        "total_leakers": int(total_leakers),
+        "counts": dict(fail_counts),
+    }
 
     return {
         "blue_utility": round(blue_utility, 2),
         "utility_score": round(blue_utility, 2),
         "red_utility": round(100.0 - blue_utility, 2),
+        "cvar20_utility": round(cvar20_u, 2),
+        "robust_uncertainty_mode": bool(robust_uncertainty_mode),
+        "hybrid_mode": is_hybrid,
         "zero_breach_pct": round(zero_breach_pct, 1),
         "breach_rate_pct": round(100.0 - zero_breach_pct, 1),
         "kill_rate_pct": round(kill_rate_pct, 1),
@@ -1117,6 +1295,7 @@ def evaluate_red_vs_blue_matchup_mc(
         "mean_reloads_per_wave": round(float(np.mean(reloads_counts)), 2),
         "mean_intercept_range_m": round(float(np.mean(intercept_ranges)), 1) if intercept_ranges else 0.0,
         "presented_area_cm2": round(area_vuln * 10000.0, 1),
+        "failure_modes": failure_modes,
     }
 
 
@@ -1130,6 +1309,7 @@ def _sample_blue_candidates(
     max_barrels: int,
     elite_pool: list[dict[str, Any]],
     rng: np.random.Generator,
+    allow_hybrid: bool = False,
 ) -> list[dict[str, Any]]:
     cands: list[dict[str, Any]] = []
     n_mutate = n_candidates // 2
@@ -1156,18 +1336,27 @@ def _sample_blue_candidates(
             base["max_engagement_range_m"] = float(np.clip(float(base["max_engagement_range_m"]) + rng.normal(0.0, 8.0), 40.0, 80.0))
             base["slew_rate_deg_s"] = float(np.clip(float(base["slew_rate_deg_s"]) + rng.normal(0.0, 25.0), 100.0, 260.0))
             base["reload_time_s"] = float(np.clip(float(base["reload_time_s"]) + rng.normal(0.0, 0.7), 1.8, 5.2))
+            if allow_hybrid and base["n_barrels"] >= 4 and rng.random() < 0.32:
+                base["hybrid_mode"] = True
+                if base["layout_type"] not in ("concentric", "honeycomb"):
+                    base["layout_type"] = str(rng.choice(["concentric", "honeycomb"]))
+                base["inner_ammunition_preset"] = str(rng.choice(["12G_TSS_NO2_C_UAS", "12G_FLECHETTE_SABOT_C_UAS"]))
+                base["inner_choke"] = str(rng.choice(["Full", "Extra Full"]))
+                base["hybrid_switch_range_m"] = float(rng.uniform(32.0, 56.0))
             cands.append(normalize_blue_config(base, max_barrels=max_barrels))
         else:
             n_b = int(rng.integers(2, max_barrels + 1))
             bpb = int(rng.integers(1, min(n_b, 6) + 1))
             pm = str(rng.choice(BLUE_SEARCH_SPACE["pointing_mode"]))
             fm = str(rng.choice(BLUE_SEARCH_SPACE["firing_mode"]))
+            use_hyb = bool(allow_hybrid and n_b >= 4 and rng.random() < 0.32)
+            lt = str(rng.choice(["concentric", "honeycomb"])) if use_hyb else str(rng.choice(BLUE_SEARCH_SPACE["layout_type"]))
             raw = {
-                "layout_type": str(rng.choice(BLUE_SEARCH_SPACE["layout_type"])),
+                "layout_type": lt,
                 "n_barrels": n_b,
                 "barrels_per_burst": bpb,
-                "ammunition_preset": str(rng.choice(BLUE_SEARCH_SPACE["ammunition_preset"])),
-                "choke": str(rng.choice(BLUE_SEARCH_SPACE["choke"])),
+                "ammunition_preset": "12G_NO4_BUCK_C_UAS" if use_hyb else str(rng.choice(BLUE_SEARCH_SPACE["ammunition_preset"])),
+                "choke": str(rng.choice(["Cylinder", "Modified"])) if use_hyb else str(rng.choice(BLUE_SEARCH_SPACE["choke"])),
                 "pointing_mode": pm,
                 "splay_angle_mrad": float(rng.uniform(2.0, 9.0)) if pm == "divergent_curtain" else 0.0,
                 "firing_mode": fm,
@@ -1178,6 +1367,10 @@ def _sample_blue_candidates(
                 "slew_rate_deg_s": float(rng.uniform(110.0, 255.0)),
                 "reload_time_s": float(rng.uniform(1.8, 5.0)),
                 "priority_policy": str(rng.choice(BLUE_SEARCH_SPACE["priority_policy"])),
+                "hybrid_mode": use_hyb,
+                "inner_ammunition_preset": str(rng.choice(["12G_TSS_NO2_C_UAS", "12G_FLECHETTE_SABOT_C_UAS"])) if use_hyb else "",
+                "inner_choke": str(rng.choice(["Full", "Extra Full"])) if use_hyb else "",
+                "hybrid_switch_range_m": float(rng.uniform(32.0, 56.0)) if use_hyb else 42.0,
             }
             cands.append(normalize_blue_config(raw, max_barrels=max_barrels))
     return cands
@@ -1237,6 +1430,9 @@ def run_adversarial_coevolution_ml(
     cost_penalty_weight: float = 0.08,
     stage1_profile: dict[str, Any] | None = None,
     seed: int = 42,
+    allow_hybrid: bool = False,
+    robust_uncertainty_mode: bool = False,
+    calibration_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run adversarial Red-vs-Blue co-evolution backed by GP Bayesian optimization & LP Nash solver."""
     rng = np.random.default_rng(seed)
@@ -1244,6 +1440,33 @@ def run_adversarial_coevolution_ml(
     geom_cache: dict[tuple[str, str], float] = {}
 
     blue_pool = get_default_blue_seed_pool(max_barrels=max_barrels, stage1_profile=stage1_profile)
+    if allow_hybrid and max_barrels >= 6:
+        hyb_seed = normalize_blue_config(
+            {
+                "name": "8-Bbl Concentric Hybrid #4+TSS2",
+                "layout_type": "concentric",
+                "n_barrels": min(max_barrels, 8),
+                "barrels_per_burst": 2,
+                "ammunition_preset": "12G_NO4_BUCK_C_UAS",
+                "choke": "Modified",
+                "pointing_mode": "divergent_curtain",
+                "splay_angle_mrad": 4.0,
+                "firing_mode": "balanced_pair_ripple",
+                "ripple_delay_ms": 8.0,
+                "sensor_preset": "Sensor_Fused_Radar_EOIR",
+                "predictor_mode": "kalman_alpha_beta_gamma",
+                "max_engagement_range_m": 66.0,
+                "slew_rate_deg_s": 165.0,
+                "reload_time_s": 3.0,
+                "hybrid_mode": True,
+                "inner_ammunition_preset": "12G_TSS_NO2_C_UAS",
+                "inner_choke": "Extra Full",
+                "hybrid_switch_range_m": 42.0,
+            },
+            max_barrels=max_barrels,
+        )
+        if not any(b["name"] == hyb_seed["name"] for b in blue_pool):
+            blue_pool.append(hyb_seed)
     red_pool = get_default_red_seed_pool(max_swarm_size=max_swarm_size)
     n_base_blue = len(blue_pool)
 
@@ -1268,6 +1491,8 @@ def run_adversarial_coevolution_ml(
             seed=seed + bi * 97 + rj * 31,
             _recoil_cache=recoil_cache,
             _geom_cache=geom_cache,
+            calibration_profile=calibration_profile,
+            robust_uncertainty_mode=robust_uncertainty_mode,
         )
         eval_cache[(bi, rj)] = m_res
         feat_vec = encode_matchup_features(b_cfg, r_cfg)
@@ -1283,6 +1508,8 @@ def run_adversarial_coevolution_ml(
                 "blue_burst": b_cfg["barrels_per_burst"],
                 "blue_ammo": b_cfg["ammunition_preset"],
                 "blue_choke": b_cfg["choke"],
+                "blue_hybrid": bool(b_cfg.get("hybrid_mode", False)),
+                "blue_inner_ammo": b_cfg.get("inner_ammunition_preset", ""),
                 "blue_pointing": b_cfg["pointing_mode"],
                 "blue_splay_mrad": b_cfg["splay_angle_mrad"],
                 "blue_firing": b_cfg["firing_mode"],
@@ -1298,6 +1525,7 @@ def run_adversarial_coevolution_ml(
                 "red_fiber_optic_frac": r_cfg["fiber_optic_fraction"],
                 "blue_utility": m_res["blue_utility"],
                 "utility_score": m_res["blue_utility"],
+                "cvar20_utility": m_res["cvar20_utility"],
                 "zero_breach_pct": m_res["zero_breach_pct"],
                 "kill_rate_pct": m_res["kill_rate_pct"],
                 "leaker_rate_pct": m_res["leaker_rate_pct"],
@@ -1357,7 +1585,13 @@ def run_adversarial_coevolution_ml(
         elite_blue = [blue_pool[int(i)] for i in top_b_indices]
 
         # Score 120 Blue candidates against all current Red threats using GP UCB minimax objective
-        blue_cands = _sample_blue_candidates(120, max_barrels=max_barrels, elite_pool=elite_blue, rng=rng)
+        blue_cands = _sample_blue_candidates(
+            120,
+            max_barrels=max_barrels,
+            elite_pool=elite_blue,
+            rng=rng,
+            allow_hybrid=allow_hybrid,
+        )
         seen_blue_names = {b["name"] for b in blue_pool}
         novel_blue_cands = [b for b in blue_cands if b["name"] not in seen_blue_names] or blue_cands
 
@@ -1497,6 +1731,9 @@ def run_adversarial_coevolution_ml(
             "mount_load_limit_kn": mount_load_limit_kn,
             "max_barrels": max_barrels,
             "max_swarm_size": max_swarm_size,
+            "allow_hybrid": bool(allow_hybrid),
+            "robust_uncertainty_mode": bool(robust_uncertainty_mode),
+            "calibrated_digital_twin": bool(calibration_profile is not None),
         },
     }
 
@@ -1529,7 +1766,15 @@ def recommend_ml_defense_policy(
     rng = np.random.default_rng(seed)
 
     existing_pool = [normalize_blue_config(b, max_barrels=max_barrels) for b in actual_res.get("blue_pool", [])]
-    sampled = _sample_blue_candidates(max(20, int(n_candidates)), max_barrels=max_barrels, elite_pool=existing_pool, rng=rng)
+    adv_sm = actual_res.get("summary", {})
+    allow_hybrid = bool(adv_sm.get("allow_hybrid", False)) or any(bool(b.get("hybrid_mode")) for b in existing_pool)
+    sampled = _sample_blue_candidates(
+        max(20, int(n_candidates)),
+        max_barrels=max_barrels,
+        elite_pool=existing_pool,
+        rng=rng,
+        allow_hybrid=allow_hybrid,
+    )
     all_cands: list[dict[str, Any]] = []
     seen: set[str] = set()
     for c in existing_pool + sampled:
@@ -1537,7 +1782,8 @@ def recommend_ml_defense_policy(
             f"{c['layout_type']}|{c['n_barrels']}|{c['barrels_per_burst']}|{c['ammunition_preset']}|"
             f"{c['choke']}|{c['pointing_mode']}|{c['splay_angle_mrad']}|{c['firing_mode']}|"
             f"{c['ripple_delay_ms']}|{c['sensor_preset']}|{c['predictor_mode']}|{c['max_engagement_range_m']}|"
-            f"{c['slew_rate_deg_s']}|{c['reload_time_s']}|{c['priority_policy']}"
+            f"{c['slew_rate_deg_s']}|{c['reload_time_s']}|{c['priority_policy']}|"
+            f"{c.get('hybrid_mode', False)}|{c.get('inner_ammunition_preset', '')}|{c.get('inner_choke', '')}"
         )
         if key not in seen:
             seen.add(key)
@@ -1645,6 +1891,9 @@ def recommend_ml_defense_policy(
                 "firing_mode": cfg["firing_mode"],
                 "ripple_delay_ms": cfg["ripple_delay_ms"],
                 "burst_count": cfg.get("burst_count", 1),
+                "hybrid_mode": bool(cfg.get("hybrid_mode", False)),
+                "inner_ammunition_preset": cfg.get("inner_ammunition_preset", ""),
+                "inner_choke": cfg.get("inner_choke", ""),
             },
             "predicted_defense_score": r["pred_utility"],
             "predicted_std": r["pred_std"],

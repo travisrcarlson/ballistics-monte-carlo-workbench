@@ -297,6 +297,51 @@ def _make_sources_figure(source_rows: list[dict[str, Any]]) -> Figure:
     return fig
 
 
+def _make_adversarial_ml_chart_fig(adv_res: dict[str, Any]) -> Figure:
+    fig = Figure(figsize=(11.0, 6.2), facecolor="#0F172A")
+    hist = adv_res.get("generation_history", [])
+    imp = adv_res.get("feature_importance", [])[:8]
+    sm = adv_res.get("summary", {})
+    best_b = adv_res.get("best_blue_config", {})
+
+    ax1 = fig.add_subplot(1, 2, 1, facecolor="#1E293B")
+    if hist:
+        gens = [int(h["generation"]) for h in hist]
+        ax1.plot(gens, [float(h["nash_value"]) for h in hist], "-o", color="#10B981", linewidth=2.4, label="Nash Floor V*")
+        ax1.plot(gens, [float(h["best_blue_worst_case"]) for h in hist], "-s", color="#38BDF8", linewidth=2.0, label="Best Evolved Worst-Case")
+        ax1.plot(gens, [float(h["baseline_blue_worst_case"]) for h in hist], "--^", color="#F59E0B", linewidth=1.8, label="Baseline Worst-Case")
+    ax1.set_ylim(0, 102)
+    ax1.set_xlabel("Co-Evolution Generation", color="#CBD5E1")
+    ax1.set_ylabel("Defense Utility (0-100)", color="#CBD5E1")
+    ax1.tick_params(colors="#CBD5E1")
+    ax1.set_title(
+        f"Adversarial Arms Race (Nash V*={sm.get('nash_value', 0.0):.2f} | GP R2={sm.get('cv_r2', 0.0):.3f})",
+        color="#F8FAFC",
+        fontsize=10.5,
+        fontweight="bold",
+    )
+    ax1.legend(facecolor="#0F172A", labelcolor="#E2E8F0", fontsize=8)
+    ax1.grid(color="#334155", alpha=0.45)
+
+    ax2 = fig.add_subplot(1, 2, 2, facecolor="#1E293B")
+    if imp:
+        lbls = [str(r["feature"]).replace("blue_", "B: ").replace("red_", "R: ")[:26] for r in imp]
+        vals = [float(r["importance_pct"]) for r in imp]
+        cols = ["#38BDF8" if r.get("side") == "Blue" else "#EF4444" for r in imp]
+        ypos = np.arange(len(lbls))
+        ax2.barh(ypos, vals, color=cols, height=0.58)
+        ax2.set_yticks(ypos)
+        ax2.set_yticklabels(lbls, color="#E2E8F0", fontsize=8.5)
+        ax2.invert_yaxis()
+    ax2.set_xlabel("GP Surrogate Permutation Share (%)", color="#CBD5E1")
+    ax2.tick_params(colors="#CBD5E1")
+    best_lbl = str(best_b.get("name", "Nash Turret"))[:42]
+    ax2.set_title(f"ML Feature Drivers | Top: {best_lbl}", color="#F8FAFC", fontsize=10.0, fontweight="bold")
+    ax2.grid(axis="x", color="#334155", alpha=0.45)
+    fig.tight_layout(pad=2.0)
+    return fig
+
+
 def _resolve_citations(source_ids: list[str] | None) -> list[dict[str, Any]]:
     cat = get_literature_catalog()
     by_id = {r["source_id"]: r for r in cat}
@@ -314,6 +359,7 @@ def _collect_briefing_sections(
     raid_result: dict[str, Any] | None = None,
     simulator_summary: dict[str, Any] | None = None,
     source_ids: list[str] | None = None,
+    adversarial_result: dict[str, Any] | None = None,
 ) -> tuple[list[tuple[str, str, str]], list[tuple[str, Figure]], list[dict[str, Any]]]:
     kpis: list[tuple[str, str, str]] = []
     if simulator_summary:
@@ -342,6 +388,15 @@ def _collect_briefing_sections(
     if tornado_result:
         tsm = tornado_result.get("summary", {})
         kpis.append(("Sensitivity Tornado (M11)", "#1 Bottleneck Driver", f"{tsm.get('top_driver', 'N/A')} (Swing {tsm.get('top_swing', 0.0):.1f})"))
+    if adversarial_result:
+        asm = adversarial_result.get("summary", {})
+        kpis.append(
+            (
+                "Adversarial ML (M14)",
+                "Nash Equilibrium V* / GP CV R2",
+                f"{asm.get('nash_value', 0.0):.2f} / {asm.get('cv_r2', 0.0):.3f} ({asm.get('best_blue_name', 'Nash')})",
+            )
+        )
     if not kpis:
         kpis.append(("Workbench Baseline", "Status", "Ready — execute modules to populate quantitative KPIs"))
 
@@ -356,6 +411,8 @@ def _collect_briefing_sections(
         figs.append(("Sensitivity & Engineering Bottleneck Tornado", _make_tornado_chart_fig(tornado_result)))
     if logistics_result and logistics_result.get("economics_comparison"):
         figs.append(("Sustained Logistics & Payload Economics", _make_logistics_chart_fig(logistics_result)))
+    if adversarial_result and (adversarial_result.get("generation_history") or adversarial_result.get("feature_importance")):
+        figs.append(("Adversarial ML Co-Evolution & Nash Drivers", _make_adversarial_ml_chart_fig(adversarial_result)))
 
     citations = _resolve_citations(source_ids)
     figs.append(("Scientific Literature & Provenance Citations", _make_sources_figure(citations)))
@@ -372,6 +429,7 @@ def generate_executive_briefing_pdf(
     raid_result: dict[str, Any] | None = None,
     simulator_summary: dict[str, Any] | None = None,
     source_ids: list[str] | None = None,
+    adversarial_result: dict[str, Any] | None = None,
 ) -> bytes:
     """Render multi-page landscape executive PDF briefing into raw bytes."""
     _, figs, _ = _collect_briefing_sections(
@@ -384,6 +442,7 @@ def generate_executive_briefing_pdf(
         raid_result=raid_result,
         simulator_summary=simulator_summary,
         source_ids=source_ids,
+        adversarial_result=adversarial_result,
     )
     buf = io.BytesIO()
     with PdfPages(buf) as pdf:
@@ -402,6 +461,7 @@ def generate_executive_briefing_pptx(
     raid_result: dict[str, Any] | None = None,
     simulator_summary: dict[str, Any] | None = None,
     source_ids: list[str] | None = None,
+    adversarial_result: dict[str, Any] | None = None,
 ) -> bytes:
     """Build native 16:9 widescreen PowerPoint (.pptx) deck with charts, tables & citations."""
     kpis, figs, citations = _collect_briefing_sections(
@@ -414,6 +474,7 @@ def generate_executive_briefing_pptx(
         raid_result=raid_result,
         simulator_summary=simulator_summary,
         source_ids=source_ids,
+        adversarial_result=adversarial_result,
     )
     prs = Presentation()
     prs.slide_width = Inches(13.333)

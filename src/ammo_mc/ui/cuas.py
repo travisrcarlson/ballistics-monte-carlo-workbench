@@ -289,6 +289,23 @@ from ammo_mc.cuas_adversarial import (
     export_adversarial_dataset_csv,
     recommend_ml_defense_policy,
 )
+from ammo_mc.cuas_hardware import (
+    CARRIER_OTM_PROFILES,
+    GYRO_STABILIZATION_GRADES,
+    estimate_turret_swap_c,
+    export_muzzle_plate_dxf,
+    export_muzzle_plate_svg,
+)
+from ammo_mc.cuas_track_replay import generate_sample_drone_track_csv
+from ammo_mc.cuas_wizard import run_red_vs_blue_duel_diagnostic
+from ammo_mc.vis_cuas_advanced import (
+    create_battlespace_coevolution_figure,
+    create_duel_root_cause_figure,
+    create_recorded_track_replay_figure,
+    create_rl_action_heatmap_figure,
+    create_rl_policy_benchmark_figure,
+    create_swap_c_and_otm_figure,
+)
 from ammo_mc.vis_cuas_adversarial import (
     create_coevolution_trajectory_figure,
     create_ml_feature_importance_figure,
@@ -311,6 +328,7 @@ from ammo_mc.ui.common import (
     _cached_antidrone_array_mc,
     _cached_antidrone_range_envelope,
     _cached_antidrone_range_speed_heatmap,
+    _cached_battlespace_coevolution,
     _cached_benchmark_drone_aspect,
     _cached_benchmark_multibarrel_aspect,
     _cached_closed_loop_fcs,
@@ -324,10 +342,13 @@ from ammo_mc.ui.common import (
     _cached_kill_chain,
     _cached_layered_defense,
     _cached_optimize_antidrone_array,
+    _cached_otm_stabilization,
     _cached_pellet_fallout_sdz,
+    _cached_recorded_track_replay,
     _cached_site_defense,
     _cached_sustained_logistics,
     _cached_swarm_saturation,
+    _cached_train_rl_policy,
     _cached_unified_raid,
     _navigate_to,
     _render_sidebar_header,
@@ -528,6 +549,150 @@ def _render_effective_range_tab(
         st.plotly_chart(create_antidrone_range_speed_heatmap_figure(hm_res), width="stretch")
         st.dataframe(pd.DataFrame(hm_res["r80_by_speed_m"]), width="stretch")
     return env_res
+
+
+def _render_stage1_hardware_cad_tab(
+    layout_type: str,
+    n_barrels: int,
+    mount_radius_m: float,
+    spacing_y_m: float,
+    spacing_z_m: float,
+    n_cols: int,
+    n_rows: int,
+    ammunition_preset: str,
+    default_choke: str,
+    default_barrel_length_in: float,
+    pointing_mode: str,
+    splay_angle_mrad: float,
+    firing_mode: str,
+    ripple_delay_ms: float,
+    drone_model: str,
+    crosswind_mps: float,
+    hybrid_mode: bool,
+    custom_barrel_specs: list[dict[str, Any]] | None = None,
+) -> None:
+    """Render Stage 1 SWaP-C mass/power/BOM budget, OTM stabilization, and 2D DXF/SVG muzzle CAD."""
+    swap_res = estimate_turret_swap_c(
+        n_barrels=int(n_barrels),
+        barrel_length_in=float(default_barrel_length_in),
+        layout_type=str(layout_type),
+        mount_radius_m=float(mount_radius_m),
+        spacing_y_m=float(spacing_y_m),
+        spacing_z_m=float(spacing_z_m),
+        ammunition_preset=str(ammunition_preset),
+        firing_mode=str(firing_mode),
+        ripple_delay_ms=float(ripple_delay_ms),
+        hybrid_mode=bool(hybrid_mode),
+    )
+    sw = swap_res["summary"]
+    hm1, hm2, hm3, hm4 = st.columns(4)
+    hm1.metric("Total Turret Mass", f"{sw['total_mass_kg']:.1f} kg", delta=sw["recommended_mount_class"][:28])
+    hm2.metric("Peak Servo / Bus Power", f"{sw['peak_power_w']:.0f} W", delta=f"{sw['bus_current_24v_a']:.1f} A @ 24V | Torque {sw['peak_torque_nm']:.0f} Nm")
+    hm3.metric("Peak Recoil Mount Load", f"{sw['peak_recoil_force_kn']:.2f} kN", delta=f"Inertia Az/El: {sw['inertia_az_kg_m2']:.2f} kg·m²")
+    hm4.metric("Hardware BOM Estimate", f"${sw['unit_bom_usd']:,.0f}", delta=f"Standby: {sw['standby_power_w']:.0f} W")
+
+    st.dataframe(pd.DataFrame(swap_res["compatibility_table"]), width="stretch", hide_index=True)
+
+    oc1, oc2, oc3, oc4 = st.columns(4)
+    with oc1:
+        otm_carrier = st.selectbox(
+            "Carrier Platform",
+            list(CARRIER_OTM_PROFILES.keys()),
+            format_func=lambda k: CARRIER_OTM_PROFILES[k]["name"],
+            index=2,
+            key="cuas_hw_carrier",
+        )
+    with oc2:
+        otm_gyro = st.selectbox(
+            "Gimbal Stabilization Grade",
+            list(GYRO_STABILIZATION_GRADES.keys()),
+            format_func=lambda k: GYRO_STABILIZATION_GRADES[k]["name"],
+            index=1,
+            key="cuas_hw_gyro",
+        )
+    with oc3:
+        otm_wx = st.selectbox("Weather Regime", ["clear_day", "overcast_dusk", "night_clear", "heavy_fog_rain"], key="cuas_hw_wx")
+    with oc4:
+        otm_temp = st.slider("Ambient Propellant Temp (°C)", -20.0, 50.0, 21.1, 2.0, key="cuas_hw_temp")
+
+    otm_cfg_json = json.dumps(
+        {
+            "n_barrels": int(n_barrels),
+            "barrels_per_burst": min(int(n_barrels), 3),
+            "ammunition_preset": str(ammunition_preset),
+            "choke": str(default_choke),
+        },
+        sort_keys=True,
+    )
+    otm_res = _cached_otm_stabilization(
+        turret_config_json=otm_cfg_json,
+        carrier_profile=str(otm_carrier),
+        gyro_grade=str(otm_gyro),
+        weather=str(otm_wx),
+        ambient_temp_c=float(otm_temp),
+        crosswind_mps=float(crosswind_mps),
+        drone_model=str(drone_model if drone_model != "CUSTOM_DRONE" else "fpv_quad_small"),
+    )
+    st.caption(
+        f"Active LOS Stabilization Jitter: **{otm_res['residual_los_jitter_mrad']:.2f} mrad** | "
+        f"Static R80: **{otm_res['r80_static_m']:.1f} m** -> Active OTM R80: **{otm_res['r80_active_m']:.1f} m** "
+        f"(-{otm_res['range_loss_pct']:.1f}% range reduction)"
+    )
+    st.plotly_chart(create_swap_c_and_otm_figure(swap_res, otm_res), width="stretch")
+
+    st.divider()
+    st.markdown("##### 📐 Parametric 2D Muzzle-Clamp Blueprint (`.dxf` AutoCAD & `.svg`)")
+    barrels_cad = generate_multishotgun_array_layout(
+        layout_type=str(layout_type),
+        n_barrels=int(n_barrels),
+        mount_radius_m=float(mount_radius_m),
+        spacing_y_m=float(spacing_y_m),
+        spacing_z_m=float(spacing_z_m),
+        n_cols=int(n_cols),
+        n_rows=int(n_rows),
+        default_choke=str(default_choke),
+        default_barrel_length_in=float(default_barrel_length_in),
+        custom_specs=custom_barrel_specs,
+        default_ammunition_preset=str(ammunition_preset),
+    )
+    svg_txt = export_muzzle_plate_svg(
+        barrels=barrels_cad,
+        layout_type=str(layout_type),
+        title=f"{int(n_barrels)}B {layout_type.title()} Muzzle Clamp",
+        splay_angle_mrad=float(splay_angle_mrad),
+        pointing_mode=str(pointing_mode),
+    )
+    dxf_txt = export_muzzle_plate_dxf(
+        barrels=barrels_cad,
+        layout_type=str(layout_type),
+        title=f"{int(n_barrels)}B {layout_type.title()} Muzzle Clamp",
+        splay_angle_mrad=float(splay_angle_mrad),
+        pointing_mode=str(pointing_mode),
+    )
+    st.markdown(svg_txt, unsafe_allow_html=True)
+    cad_c1, cad_c2 = st.columns(2)
+    cad_c1.download_button(
+        "📥 Download Manufacturing Drawing (.dxf)",
+        data=dxf_txt.encode("utf-8"),
+        file_name=f"cuas_{layout_type}_{n_barrels}bbl_muzzle_plate.dxf",
+        mime="application/dxf",
+        width="stretch",
+        key="cuas_stage1_dl_dxf",
+    )
+    cad_c2.download_button(
+        "📥 Download Scaled Vector Blueprint (.svg)",
+        data=svg_txt.encode("utf-8"),
+        file_name=f"cuas_{layout_type}_{n_barrels}bbl_muzzle_plate.svg",
+        mime="image/svg+xml",
+        width="stretch",
+        key="cuas_stage1_dl_svg",
+    )
+
+
+def _launch_battlespace_to_raid(payload: dict[str, Any]) -> None:
+    """Store 3D Nash battlespace handoff payload and navigate directly into Raid Simulator."""
+    st.session_state["_adversarial_raid_handoff"] = payload
+    _navigate_to("cuas", None, "raid")
 
 
 def _on_site_anchor_change() -> None:
@@ -1648,12 +1813,16 @@ def tab_cuas_and_small_arms() -> None:
             st.session_state["_active_cuas_profile"] = {
                 "layout_type": str(cuas_layout if cuas_layout in ["circular", "concentric", "honeycomb", "grid", "fan_horizontal"] else "circular"),
                 "n_barrels": int(cuas_n_barrels),
+                "mount_radius_m": float(cuas_mount_r),
                 "pointing_mode": str(cuas_pointing),
                 "splay_angle_mrad": float(cuas_splay),
                 "firing_mode": str(cuas_fire_mode),
                 "ripple_delay_ms": float(cuas_ripple_dt),
                 "choke": str(cuas_choke),
                 "ammunition_preset": str(cuas_ammo),
+                "hybrid_mode": bool(cuas_mixed_loadout and not custom_shell_spec),
+                "inner_ammunition_preset": str(cuas_inner_ammo or "") if not custom_shell_spec else "",
+                "inner_choke": str(cuas_inner_choke or "") if not custom_shell_spec else "",
                 "drone_model": str(cuas_drone_model),
                 "aspect_mode": str(cuas_aspect_mode),
                 "target_distance_m": float(cuas_dist),
@@ -1763,12 +1932,13 @@ def tab_cuas_and_small_arms() -> None:
 
             if not expert:
                 st.session_state.setdefault("_report_aspect_table", [])
-                s_tab1, s_tab2, s_tab_env, s_tab3 = st.tabs(
+                s_tab1, s_tab2, s_tab_env, s_tab3, s_tab_hw = st.tabs(
                     [
                         "2D Drone Intercept & Silhouette",
                         "3D Intercept Volume",
                         "Effective Range (R80) & Heatmap",
                         "Layout, Aspect & Barrel Breakdown",
+                        "📐 Hardware SWaP-C, OTM & CAD",
                     ]
                 )
                 with s_tab1:
@@ -1838,8 +2008,29 @@ def tab_cuas_and_small_arms() -> None:
                             st.session_state["_report_aspect_bench"] = aspect_bench
                             st.plotly_chart(create_drone_aspect_radar_figure(aspect_bench), width="stretch")
                             st.dataframe(pd.DataFrame(aspect_bench["comparison_table"]), width="stretch")
+                with s_tab_hw:
+                    _render_stage1_hardware_cad_tab(
+                        layout_type=str(cuas_layout),
+                        n_barrels=int(cuas_n_barrels),
+                        mount_radius_m=float(cuas_mount_r),
+                        spacing_y_m=float(cuas_sp_y),
+                        spacing_z_m=float(cuas_sp_z),
+                        n_cols=int(cuas_cols),
+                        n_rows=int(cuas_rows),
+                        ammunition_preset="CUSTOM_SHELL" if custom_shell_spec else str(cuas_ammo),
+                        default_choke=str(cuas_choke),
+                        default_barrel_length_in=float(cuas_b_len),
+                        pointing_mode=str(cuas_pointing),
+                        splay_angle_mrad=float(cuas_splay),
+                        firing_mode=str(cuas_fire_mode),
+                        ripple_delay_ms=float(cuas_ripple_dt),
+                        drone_model="CUSTOM_DRONE" if custom_drone_spec else str(cuas_drone_model),
+                        crosswind_mps=float(cuas_wind),
+                        hybrid_mode=bool(cuas_mixed_loadout and not custom_shell_spec),
+                        custom_barrel_specs=parsed_custom,
+                    )
             else:
-                cuas_tab1, cuas_tab2, cuas_tab_env, cuas_tab3, cuas_tab4, cuas_tab5, cuas_tab6 = st.tabs([
+                cuas_tab1, cuas_tab2, cuas_tab_env, cuas_tab3, cuas_tab4, cuas_tab5, cuas_tab6, cuas_tab_hw = st.tabs([
                     "🎯 2D Drone Intercept & Damage Silhouette",
                     "🛸 3D Muzzle Array & Intercept Volume",
                     "📏 Effective Range (R80) & Heatmap",
@@ -1847,6 +2038,7 @@ def tab_cuas_and_small_arms() -> None:
                     "📈 Array Architecture Benchmark (Geometry Comparison)",
                     "🌐 Aspect Angle Benchmark (Cross-Section Sweep)",
                     "🎬 3D Animated Intercept Replay",
+                    "📐 Hardware SWaP-C, OTM Stabilization & CAD",
                 ])
 
                 with cuas_tab1:
@@ -1974,6 +2166,28 @@ def tab_cuas_and_small_arms() -> None:
                     rk_b.metric("Tracked Impact Summary", f"{r_sm['final_hits']} hits ({r_sm['final_lethal_hits']} lethal)", delta=f"{r_sm['total_pellets_tracked']} sampled pellets")
                     rk_c.metric("Replay Horizon", f"{r_sm['t_end_ms']:.0f} ms", delta="NEUTRALIZED" if r_sm["drone_neutralized"] else "TRACKING")
                     st.plotly_chart(create_3d_animated_intercept_figure(cuas_replay), width="stretch")
+
+                with cuas_tab_hw:
+                    _render_stage1_hardware_cad_tab(
+                        layout_type=str(cuas_layout),
+                        n_barrels=int(cuas_n_barrels),
+                        mount_radius_m=float(cuas_mount_r),
+                        spacing_y_m=float(cuas_sp_y),
+                        spacing_z_m=float(cuas_sp_z),
+                        n_cols=int(cuas_cols),
+                        n_rows=int(cuas_rows),
+                        ammunition_preset="CUSTOM_SHELL" if custom_shell_spec else str(cuas_ammo),
+                        default_choke=str(cuas_choke),
+                        default_barrel_length_in=float(cuas_b_len),
+                        pointing_mode=str(cuas_pointing),
+                        splay_angle_mrad=float(cuas_splay),
+                        firing_mode=str(cuas_fire_mode),
+                        ripple_delay_ms=float(cuas_ripple_dt),
+                        drone_model="CUSTOM_DRONE" if custom_drone_spec else str(cuas_drone_model),
+                        crosswind_mps=float(cuas_wind),
+                        hybrid_mode=bool(cuas_mixed_loadout and not custom_shell_spec),
+                        custom_barrel_specs=parsed_custom,
+                    )
 
             st.divider()
             st.markdown("##### 1-Click Stage 1 Engineering Spec Sheet & Preset Export")
@@ -3078,6 +3292,7 @@ def tab_cuas_and_small_arms() -> None:
                     tornado_result=st.session_state.get("_report_tornado_result"),
                     logistics_result=log_res,
                     raid_result=st.session_state.get("_report_raid_result"),
+                    adversarial_result=st.session_state.get("_report_adversarial_result"),
                 )
                 st.download_button(
                     "📑 Executive Briefing (.pdf)",
@@ -3096,6 +3311,7 @@ def tab_cuas_and_small_arms() -> None:
                     tornado_result=st.session_state.get("_report_tornado_result"),
                     logistics_result=log_res,
                     raid_result=st.session_state.get("_report_raid_result"),
+                    adversarial_result=st.session_state.get("_report_adversarial_result"),
                 )
                 st.download_button(
                     "📊 PowerPoint Deck (.pptx)",
@@ -3432,17 +3648,43 @@ def tab_cuas_and_small_arms() -> None:
             mag_cat_12 = get_magazine_system_specs()
 
             saved_site = st.session_state.get("_site_active_layout")
+            handoff_bs = st.session_state.get("_adversarial_raid_handoff")
+            use_handoff = False
+            if handoff_bs is not None:
+                hc1, hc2 = st.columns([3.0, 1.0])
+                with hc1:
+                    use_handoff = st.checkbox(
+                        f"🚀 Use Active Nash Battlespace Handoff ({handoff_bs.get('label', 'Evolved Site')})",
+                        value=True,
+                        key="cuas18_raid_use_handoff",
+                    )
+                with hc2:
+                    if st.button("✖ Clear Handoff", key="cuas18_raid_clear_handoff", width="stretch"):
+                        st.session_state.pop("_adversarial_raid_handoff", None)
+                        st.rerun()
+
             use_m7 = False
-            if saved_site is not None:
+            if saved_site is not None and not use_handoff:
                 use_m7 = st.checkbox(
                     f"Use Active Site & DEM Layout Configured in Module 7 ({saved_site.get('site_preset', 'custom')})",
                     value=True,
                     key="cuas18_raid_use_m7",
                 )
 
+            swarm_pkg_json = ""
+            r_outer_layer = "none"
             rd1, rd2, rd3 = st.columns(3)
             with rd1:
-                if use_m7 and saved_site is not None:
+                if use_handoff and handoff_bs is not None:
+                    r_site = str(handoff_bs.get("site_preset", "fob_compound_4_turret"))
+                    r_tur_json = json.dumps(handoff_bs.get("custom_turrets", []))
+                    r_obs_json, r_nfz_json = "", ""
+                    t_pk = str(handoff_bs.get("terrain_preset", "rolling_hills_fob"))
+                    r_dem_obj = None if t_pk == "flat_airfield" else build_preset_terrain_dem(t_pk)
+                    r_dem_json = r_dem_obj.to_json() if r_dem_obj is not None else ""
+                    swarm_pkg_json = json.dumps(handoff_bs.get("swarm_package", []))
+                    r_outer_layer = str(handoff_bs.get("outer_layer_type", "none"))
+                elif use_m7 and saved_site is not None:
                     r_site = str(saved_site.get("site_preset", "fob_compound_4_turret"))
                     r_tur_json = json.dumps(saved_site.get("turrets", []))
                     r_obs_json = json.dumps(saved_site.get("obstacles", []))
@@ -3480,7 +3722,7 @@ def tab_cuas_and_small_arms() -> None:
                 )
 
             with rd2:
-                r_n_drones = st.slider("Inbound Swarm Size", 4, 24, 10, 1, key="cuas18_raid_nd")
+                r_n_drones = st.slider("Inbound Swarm Size", 4, 24, int(handoff_bs.get("n_drones", 10)) if (use_handoff and handoff_bs) else 10, 1, key="cuas18_raid_nd")
                 r_fo_pct = st.slider("Fiber-Optic (RF-Dark) Share (%)", 0, 100, 30, 5, key="cuas18_raid_fo")
                 r_pattern = st.selectbox(
                     "Approach Vector Doctrine",
@@ -3494,11 +3736,13 @@ def tab_cuas_and_small_arms() -> None:
                 )
 
             with rd3:
+                ammo_keys_12 = list(sg_presets_18.keys())
+                def_ammo_12 = str(handoff_bs.get("ammunition_preset", "12G_NO4_BUCK_C_UAS")) if (use_handoff and handoff_bs) else "12G_NO4_BUCK_C_UAS"
                 r_ammo = st.selectbox(
                     "Turret Ammunition Load",
-                    list(sg_presets_18.keys()),
+                    ammo_keys_12,
                     format_func=lambda k: sg_presets_18[k]["name"],
-                    index=list(sg_presets_18.keys()).index("12G_NO4_BUCK_C_UAS") if "12G_NO4_BUCK_C_UAS" in sg_presets_18 else 0,
+                    index=ammo_keys_12.index(def_ammo_12) if def_ammo_12 in ammo_keys_12 else 0,
                     key="cuas18_raid_ammo",
                 )
                 r_mag = st.selectbox(
@@ -3508,8 +3752,16 @@ def tab_cuas_and_small_arms() -> None:
                     index=1,
                     key="cuas18_raid_mag",
                 )
-                r_speed = st.slider("Swarm Speed (m/s)", 10.0, 42.0, 22.0, 1.0, key="cuas18_raid_spd")
-                r_rmax = st.slider("Turret Engagement Range (m)", 35.0, 95.0, 65.0, 5.0, key="cuas18_raid_rmax")
+                r_speed = st.slider("Swarm Speed (m/s)", 10.0, 42.0, float(handoff_bs.get("threat_speed_mps", 22.0)) if (use_handoff and handoff_bs) else 22.0, 1.0, key="cuas18_raid_spd")
+                r_rmax = st.slider("Turret Engagement Range (m)", 35.0, 95.0, float(handoff_bs.get("weapon_max_range_m", 65.0)) if (use_handoff and handoff_bs) else 65.0, 5.0, key="cuas18_raid_rmax")
+                if is_expert_mode():
+                    outer_opts_12 = ["none", "rf_gnss_jammer", "hpm_screen", "airburst_35mm"]
+                    r_outer_layer = st.selectbox(
+                        "Outer Defense Layer",
+                        outer_opts_12,
+                        index=outer_opts_12.index(r_outer_layer) if r_outer_layer in outer_opts_12 else 0,
+                        key="cuas18_raid_outer",
+                    )
 
             with st.spinner("Running 30-Trial Cooperative 3D Multi-Turret Raid Simulation..."):
                 raid_res = _cached_unified_raid(
@@ -3524,7 +3776,7 @@ def tab_cuas_and_small_arms() -> None:
                     fiber_optic_fraction=float(r_fo_pct) / 100.0,
                     drone_model="fpv_quad_small",
                     approach_pattern=str(r_pattern),
-                    evasion_profile=str(r_evasion),
+                    evasion_profile=str(handoff_bs.get("evasion_profile", r_evasion)) if (use_handoff and handoff_bs) else str(r_evasion),
                     maneuver_g=1.6,
                     threat_speed_mps=float(r_speed),
                     threat_altitude_m=22.0,
@@ -3535,6 +3787,8 @@ def tab_cuas_and_small_arms() -> None:
                     weapon_max_range_m=float(r_rmax),
                     n_mc_trials=30,
                     seed=42,
+                    swarm_package_json=swarm_pkg_json,
+                    outer_layer_type=str(r_outer_layer),
                 )
             st.session_state["_report_raid_result"] = raid_res
 
@@ -3570,10 +3824,11 @@ def tab_cuas_and_small_arms() -> None:
                 "Upload range CSV measurements (or load realistic synthetic field logs) to fit choke spread multipliers, "
                 "chronograph MV & FM 6-40 temperature sensitivity, and exterior ballistic drag form factors via SciPy nonlinear least squares."
             )
-            cal_t1, cal_t2, cal_t3 = st.tabs([
+            cal_t1, cal_t2, cal_t3, cal_t4 = st.tabs([
                 "🎯 Shotgun Patterning-Board Fit",
                 "📏 Chronograph MV & Temp Lot Fit",
                 "🚀 Exterior Drag Form-Factor (i) Fit",
+                "🛰️ Recorded Drone-Track Replay (CSV / MAVLink)",
             ])
 
             with cal_t1:
@@ -3602,13 +3857,17 @@ def tab_cuas_and_small_arms() -> None:
                     pm4.metric("Rayleigh Goodness-of-Fit", f"R²={pat_res['r2_cdf']:.3f}", delta=f"KS p={pat_res['ks_pvalue']:.3f} (RMSE={pat_res['rmse_cdf']:.3f})")
                     st.plotly_chart(create_pattern_calibration_figure(pat_res), width="stretch")
                     if st.button("✅ Apply Calibrated Choke & Aim Bias to C-UAS Workbench", type="primary", key="cal_pat_apply_btn"):
+                        rad_bias = round(math.hypot(pat_res["poi_bias_y_mrad"], pat_res["poi_bias_z_mrad"]), 2)
                         st.session_state["cuas_choke"] = pat_res["closest_standard_choke"]
-                        st.session_state["_calibrated_aim_bias_mrad"] = round(
-                            math.hypot(pat_res["poi_bias_y_mrad"], pat_res["poi_bias_z_mrad"]), 2
-                        )
+                        st.session_state["_calibrated_aim_bias_mrad"] = rad_bias
+                        twin = dict(st.session_state.get("_calibrated_digital_twin", {}))
+                        twin["spread_factor"] = float(pat_res["calibrated_spread_factor"])
+                        twin["spread_factor_se"] = float(pat_res["sigma_fit_se_m"] / max(pat_res["sigma_nominal_m"], 1e-4))
+                        twin["aim_bias_mrad"] = rad_bias
+                        st.session_state["_calibrated_digital_twin"] = twin
                         st.success(
-                            f"Applied closest choke `{pat_res['closest_standard_choke']}` & radial bias "
-                            f"{st.session_state['_calibrated_aim_bias_mrad']:.2f} mrad to session!"
+                            f"Applied closest choke `{pat_res['closest_standard_choke']}`, spread={pat_res['calibrated_spread_factor']:.2f}x, "
+                            f"and radial bias {rad_bias:.2f} mrad to Digital Twin!"
                         )
                 except Exception as exc:
                     st.error(f"Pattern calibration error: {exc}")
@@ -3634,10 +3893,15 @@ def tab_cuas_and_small_arms() -> None:
                     if st.button("✅ Apply Calibrated MV & SD to Monte Carlo Simulator", type="primary", key="cal_ch_apply_btn"):
                         st.session_state["_calibrated_mv_mps"] = float(ch_res["v_std_fit_mps"])
                         st.session_state["_calibrated_mv_sd_mps"] = float(ch_res["residual_sd_mps"])
+                        twin = dict(st.session_state.get("_calibrated_digital_twin", {}))
+                        twin["mv_scale"] = round(float(ch_res["v_std_fit_mps"]) / max(float(ch_nom), 1.0), 4)
+                        twin["mv_sd_mps"] = float(ch_res["residual_sd_mps"])
                         if ch_res["has_temp_fit"]:
                             st.session_state["_calibrated_dv_dt"] = float(ch_res["dv_dt_mps_per_c"])
+                            twin["dv_dt_mps_per_c"] = float(ch_res["dv_dt_mps_per_c"])
+                        st.session_state["_calibrated_digital_twin"] = twin
                         st.success(
-                            f"Saved calibrated MV={ch_res['v_std_fit_mps']:.1f} m/s, SD={ch_res['residual_sd_mps']:.2f} m/s for Monte Carlo Simulator!"
+                            f"Saved calibrated MV={ch_res['v_std_fit_mps']:.1f} m/s, SD={ch_res['residual_sd_mps']:.2f} m/s for Monte Carlo & ML Digital Twin!"
                         )
                 except Exception as exc:
                     st.error(f"Chronograph calibration error: {exc}")
@@ -3679,6 +3943,50 @@ def tab_cuas_and_small_arms() -> None:
                 except Exception as exc:
                     st.error(f"Exterior drag calibration error: {exc}")
 
+            with cal_t4:
+                st.markdown("##### 🛰️ Recorded Drone Flight-Track Engagement Replay (CSV / MAVLink Log)")
+                st.caption(
+                    "Replay your Stage 1 active turret (plus any applied Calibration Digital Twin) directly against measured local ENU (`t_s, x_m, y_m, z_m`) or GPS/MAVLink (`lat_deg, lon_deg, alt_m`) flight tracks."
+                )
+                ts1, ts2, ts3, ts4 = st.columns(4)
+                if ts1.button("📋 Sample: Evasive FPV Dive", key="cal_trk_s1", width="stretch"):
+                    st.session_state["_cal_trk_csv"] = generate_sample_drone_track_csv("evasive_fpv_dive")
+                if ts2.button("📋 Sample: 3-Drone Pincer", key="cal_trk_s2", width="stretch"):
+                    st.session_state["_cal_trk_csv"] = generate_sample_drone_track_csv("multi_drone_pincer")
+                if ts3.button("📋 Sample: Ridge Pop-Up", key="cal_trk_s3", width="stretch"):
+                    st.session_state["_cal_trk_csv"] = generate_sample_drone_track_csv("low_altitude_terrain_pop")
+                with ts4:
+                    trk_breach_r = st.slider("Keepout Breach Radius (m)", 8.0, 20.0, 12.0, 1.0, key="cal_trk_breach")
+
+                trk_up = st.file_uploader("Upload Recorded Track CSV (`t_s,x_m,y_m,z_m` or `t_s,lat_deg,lon_deg,alt_m`)", type=["csv"], key="cal_trk_up")
+                trk_csv = trk_up.getvalue().decode("utf-8", errors="replace") if trk_up is not None else st.session_state.get("_cal_trk_csv") or generate_sample_drone_track_csv("evasive_fpv_dive")
+                trk_turret = dict(st.session_state.get("_active_cuas_profile") or {})
+                trk_twin = dict(st.session_state.get("_calibrated_digital_twin") or {})
+                if trk_twin:
+                    st.info(
+                        f"Calibrated Digital Twin Active: spread={trk_twin.get('spread_factor', 1.0):.2f}x, "
+                        f"MV_scale={trk_twin.get('mv_scale', 1.0):.3f}, aim_bias={trk_twin.get('aim_bias_mrad', 0.0):.1f} mrad"
+                    )
+                try:
+                    trk_res = _cached_recorded_track_replay(
+                        csv_text=trk_csv,
+                        turret_config_json=json.dumps(trk_turret, sort_keys=True),
+                        calibration_profile_json=json.dumps(trk_twin, sort_keys=True) if trk_twin else "",
+                        breach_radius_m=float(trk_breach_r),
+                        n_mc_trials=30,
+                        seed=42,
+                    )
+                    tsm = trk_res["summary"]
+                    tm1, tm2, tm3, tm4 = st.columns(4)
+                    tm1.metric("Zero-Breach Stop Rate", f"{tsm['zero_breach_pct']:.1f} %", delta=f"{tsm['n_tracks']} recorded tracks")
+                    tm2.metric("Mean Track Kill Rate", f"{tsm['mean_kill_rate_pct']:.1f} %", delta=f"Intercept: {tsm['mean_intercept_range_m']:.1f} m")
+                    tm3.metric("Measured Peak Speed / G", f"{tsm['peak_speed_mps']:.1f} m/s", delta=f"Lateral: {tsm['peak_lat_g']:.2f} G")
+                    tm4.metric("Rounds / Wave Cost", f"{tsm['mean_rounds_expended']:.1f} rds", delta=f"${tsm['mean_ammo_cost_usd']:.2f} ({tsm['turret_name'][:20]})")
+                    st.plotly_chart(create_recorded_track_replay_figure(trk_res), width="stretch")
+                    st.dataframe(pd.DataFrame(trk_res["tracks"]), width="stretch", hide_index=True)
+                except Exception as exc:
+                    st.error(f"Track replay error: {exc}")
+
         # --- TAB 18.14: ADVERSARIAL RED-VS-BLUE COMPETING MONTE CARLO & GP ML OPTIMIZER ---
         elif active_cuas_mod == _CUAS18_MODULES[13]:
             st.markdown("#### 🤖 Adversarial Red-vs-Blue Competing Monte Carlo & GP ML Protection Optimizer")
@@ -3700,7 +4008,30 @@ def tab_cuas_and_small_arms() -> None:
             with c_sw:
                 max_swarm_size = st.slider("Max Swarm Size (Red)", min_value=2, max_value=10, value=8, step=1, key="cuas_adv_max_swarm")
 
-            seed_s1 = st.checkbox("Seed Initial Generation with Stage 1 Active Profile", value=True, key="cuas_adv_seed_s1")
+            t_opt1, t_opt2, t_opt3 = st.columns(3)
+            with t_opt1:
+                seed_s1 = st.checkbox("Seed Gen 0 with Stage 1 Active Profile", value=True, key="cuas_adv_seed_s1")
+            with t_opt2:
+                allow_hybrid = st.checkbox(
+                    "Enable Hybrid Mixed-Load Barrels",
+                    value=False,
+                    key="cuas_adv_hybrid",
+                    help="Allows dual-ring turrets mixing wide #4 Buckshot perimeter + tight TSS #2 / Flechette core barrels.",
+                )
+            with t_opt3:
+                robust_mode = st.checkbox(
+                    "Uncertainty-Aware Robust Mode (Calibrated + OTM)",
+                    value=False,
+                    key="cuas_adv_robust",
+                    help="Optimizes CVaR-20% tail survivability across propellant temp swings, OTM gimbal jitter, gusts, and calibrated pattern spread.",
+                )
+
+            cal_twin = st.session_state.get("_calibrated_digital_twin")
+            if cal_twin:
+                st.caption(
+                    f"🔗 Linked Calibration Digital Twin: spread={cal_twin.get('spread_factor', 1.0):.2f}x, "
+                    f"MV_scale={cal_twin.get('mv_scale', 1.0):.3f}, aim_bias={cal_twin.get('aim_bias_mrad', 0.0):.1f} mrad"
+                )
 
             # Expert Mode Expander
             exp_beta = 1.5
@@ -3724,7 +4055,8 @@ def tab_cuas_and_small_arms() -> None:
 
             prof_json = ""
             if seed_s1 and st.session_state.get("_active_cuas_profile"):
-                prof_json = json.dumps(st.session_state["_active_cuas_profile"])
+                prof_json = json.dumps(st.session_state["_active_cuas_profile"], sort_keys=True)
+            cal_json = json.dumps(cal_twin, sort_keys=True) if cal_twin else ""
 
             with st.spinner("Executing Adversarial Competing Monte Carlo Co-Evolution & Fitting GP Surrogate..."):
                 try:
@@ -3740,12 +4072,16 @@ def tab_cuas_and_small_arms() -> None:
                         cost_penalty_weight=float(w_cost),
                         stage1_profile_json=prof_json,
                         seed=int(seed_val),
+                        allow_hybrid=bool(allow_hybrid),
+                        robust_uncertainty_mode=bool(robust_mode),
+                        calibration_profile_json=cal_json,
                     )
                 except Exception as exc:
                     st.error(f"Adversarial co-evolution simulation error: {exc}")
                     adv_res = None
 
             if adv_res is not None:
+                st.session_state["_report_adversarial_result"] = adv_res
                 # 4-metric scorecard
                 sm1, sm2, sm3, sm4 = st.columns(4)
                 with sm1:
@@ -3775,15 +4111,20 @@ def tab_cuas_and_small_arms() -> None:
                         delta=f"{adv_res['n_blue_pool']} Blue × {adv_res['n_red_pool']} Red",
                     )
 
-                # 1-Click Action to apply best Blue to Stage 1
+                # 1-Click Actions: Apply to Stage 1 + Save to Library + Download Muzzle CAD
                 best_blue = adv_res["best_blue_config"]
-                act_col1, act_col2 = st.columns([3.2, 1.4])
+                hyb_note = (
+                    f" + Inner `{best_blue.get('inner_ammunition_preset', '')}` ({best_blue.get('inner_choke', '')})"
+                    if best_blue.get("hybrid_mode")
+                    else ""
+                )
+                act_col1, act_col2, act_col3, act_col4 = st.columns([2.6, 1.0, 0.9, 0.9])
                 with act_col1:
                     act_col1.info(
-                        f"🏆 **ML-Evolved Defense Policy**: {best_blue['n_barrels']}× Barrels ({best_blue['layout']}), "
-                        f"Ammo: `{best_blue['ammo']}`, Choke: `{best_blue['choke']}`, "
-                        f"Splay: {best_blue['splay_angle_deg']}° ({best_blue['pointing']}), "
-                        f"Ripple: {best_blue['ripple_delay_ms']} ms ({best_blue['firing_mode']})"
+                        f"🏆 **ML-Evolved Policy**: {best_blue['n_barrels']}× ({best_blue['layout']}), "
+                        f"`{best_blue['ammo']}` ({best_blue['choke']}){hyb_note}, "
+                        f"Splay {best_blue['splay_angle_deg']}° ({best_blue['pointing']}), "
+                        f"Ripple {best_blue['ripple_delay_ms']} ms"
                     )
                 with act_col2:
                     if act_col2.button(
@@ -3791,6 +4132,7 @@ def tab_cuas_and_small_arms() -> None:
                         type="primary",
                         key="cuas_adv_apply_to_s1_btn",
                         help="Copy the evolved robust Blue configuration to Stage 1 active array setup",
+                        width="stretch",
                     ):
                         st.session_state["cuas_layout"] = str(best_blue["layout"])
                         st.session_state["cuas_n_barrels"] = int(best_blue["n_barrels"])
@@ -3800,6 +4142,10 @@ def tab_cuas_and_small_arms() -> None:
                         st.session_state["cuas_splay"] = float(best_blue["splay_angle_deg"])
                         st.session_state["cuas_fire_mode"] = str(best_blue["firing_mode"])
                         st.session_state["cuas_ripple_dt"] = float(best_blue["ripple_delay_ms"])
+                        st.session_state["cuas_mixed_loadout"] = bool(best_blue.get("hybrid_mode", False))
+                        if best_blue.get("hybrid_mode"):
+                            st.session_state["cuas_inner_ammo"] = str(best_blue.get("inner_ammunition_preset", "12G_TSS_NO2_C_UAS"))
+                            st.session_state["cuas_inner_choke"] = str(best_blue.get("inner_choke", "Extra Full"))
                         st.session_state["_active_cuas_profile"] = {
                             "label": f"ML-Optimized {best_blue['n_barrels']}B {best_blue['layout'].title()}",
                             "layout_type": best_blue["layout"],
@@ -3808,18 +4154,61 @@ def tab_cuas_and_small_arms() -> None:
                             "choke": best_blue["choke"],
                             "pointing_mode": best_blue["pointing"],
                             "splay_angle_deg": float(best_blue["splay_angle_deg"]),
+                            "splay_angle_mrad": float(best_blue.get("splay_angle_mrad", 0.0)),
                             "firing_mode": best_blue["firing_mode"],
                             "ripple_delay_ms": float(best_blue["ripple_delay_ms"]),
                             "burst_count": int(best_blue.get("burst_count", 1)),
+                            "hybrid_mode": bool(best_blue.get("hybrid_mode", False)),
+                            "inner_ammunition_preset": str(best_blue.get("inner_ammunition_preset", "")),
+                            "inner_choke": str(best_blue.get("inner_choke", "")),
                         }
-                        st.success("Successfully applied ML-optimized turret platform to Stage 1 Array Setup!")
+                        st.success("Applied evolved ML turret (including hybrid ring mix if enabled) to Stage 1!")
+                with act_col3:
+                    if act_col3.button("💾 Save Policy", key="cuas_adv_save_lib_btn", width="stretch"):
+                        ScenarioLibrary().save_scenario(
+                            name=f"ML Nash {best_blue['name']}",
+                            domain="cuas_ml",
+                            config=best_blue,
+                            metrics={
+                                "nash_value": adv_res["nash_value"],
+                                "cv_r2": adv_res["gp_surrogate_diagnostics"]["cv_r2"],
+                                "evolved_worst_case": wc_gain["evolved_worst_case"],
+                            },
+                            tags=["cuas", "ml", "nash"],
+                        )
+                        st.success("Saved policy to Scenario Library!")
+                with act_col4:
+                    adv_bbls = generate_multishotgun_array_layout(
+                        layout_type=str(best_blue["layout"]),
+                        n_barrels=int(best_blue["n_barrels"]),
+                        default_choke=str(best_blue["choke"]),
+                        default_ammunition_preset=str(best_blue["ammo"]),
+                    )
+                    adv_dxf = export_muzzle_plate_dxf(
+                        barrels=adv_bbls,
+                        layout_type=str(best_blue["layout"]),
+                        title=str(best_blue["name"]),
+                        splay_angle_mrad=float(best_blue.get("splay_angle_mrad", 0.0)),
+                        pointing_mode=str(best_blue["pointing"]),
+                    )
+                    act_col4.download_button(
+                        "📐 CAD (.dxf)",
+                        data=adv_dxf.encode("utf-8"),
+                        file_name="ml_evolved_muzzle_plate.dxf",
+                        mime="application/dxf",
+                        key="cuas_adv_dl_dxf_btn",
+                        width="stretch",
+                    )
 
-                # 4 Visualizer Sub-Tabs
-                adv_tab1, adv_tab2, adv_tab3, adv_tab4 = st.tabs([
+                # 7 Visualizer & Autonomy Sub-Tabs
+                adv_tab1, adv_tab2, adv_tab3, adv_tab4, adv_tab5, adv_tab6, adv_tab7 = st.tabs([
                     "📈 Arms-Race & GP Convergence",
                     "🎯 Red-vs-Blue Payoff Matrix (Nash)",
                     "🔬 ML Feature Importance & Dataset",
                     "🛡️ Live Threat Defense Recommender",
+                    "🧠 Dynamic Fire-Control ML Policy (RL)",
+                    "🗺️ Multi-Turret 3D Battlespace Co-Evolution",
+                    "⚔️ Beat the AI — Interactive Duel & Root-Cause",
                 ])
 
                 with adv_tab1:
@@ -3986,5 +4375,165 @@ def tab_cuas_and_small_arms() -> None:
                                 "firing_mode": p1["firing_mode"],
                                 "ripple_delay_ms": float(p1["ripple_delay_ms"]),
                                 "burst_count": int(p1.get("burst_count", 1)),
+                                "hybrid_mode": bool(p1.get("hybrid_mode", False)),
+                                "inner_ammunition_preset": str(p1.get("inner_ammunition_preset", "")),
+                                "inner_choke": str(p1.get("inner_choke", "")),
                             }
                             st.success(f"Applied Policy #1 ({p1['n_barrels']}B {p1['layout']}) to Stage 1 Array Setup!")
+
+                with adv_tab5:
+                    st.markdown("##### 🧠 Dynamic Shot-by-Shot Fire-Control ML Policy (Evolution Strategies)")
+                    st.caption(
+                        "Trains a 147-weight neural controller deciding target priority, adaptive burst size (1..max), "
+                        "and hold-fire gating in real time during active swarm engagements, benchmarked directly against heuristic rules."
+                    )
+                    rc1, rc2, rc3 = st.columns([1.0, 1.0, 1.4])
+                    with rc1:
+                        rl_gens = st.slider("Training Generations", 6, 20, 12, 2, key="cuas_rl_gens")
+                    with rc2:
+                        rl_eps = st.slider("Benchmark Episodes / Threat", 8, 24, 12, 4, key="cuas_rl_eps")
+                    with rc3:
+                        st.write("")
+                        if st.button("🚀 Train & Benchmark ML Fire-Control Policy", type="primary", key="cuas_rl_train_btn", width="stretch"):
+                            with st.spinner("Training Neural Fire-Control Policy via Antithetic ES..."):
+                                rl_res = _cached_train_rl_policy(
+                                    blue_config_json=json.dumps(best_blue, sort_keys=True),
+                                    n_generations=int(rl_gens),
+                                    pop_size=12,
+                                    n_eval_episodes=int(rl_eps),
+                                    seed=int(seed_val),
+                                )
+                            st.session_state["_cuas_rl_policy_res"] = rl_res
+
+                    rl_cur = st.session_state.get("_cuas_rl_policy_res")
+                    if rl_cur is not None:
+                        rsm = rl_cur["summary"]
+                        rk1, rk2, rk3, rk4 = st.columns(4)
+                        rk1.metric("RL Zero-Breach Rate", f"{rsm['rl_zero_breach_pct']:.1f}%", delta=f"{rsm['uplift_zero_breach_pp']:+.1f} pp vs {rsm['best_heuristic_name']}")
+                        rk2.metric("RL Swarm Kill Rate", f"{rsm['rl_kill_rate_pct']:.1f}%", delta=f"Avg Burst: {rsm['rl_mean_burst_size']:.2f} bbls")
+                        rk3.metric("Rounds / Kill", f"{rsm['rl_mean_rounds_per_kill']:.2f}", delta=f"{rsm['rounds_saved_pct']:+.1f}% rounds saved")
+                        rk4.metric("Hold-Fire Wait Gate", f"{rsm['rl_hold_fire_rate_pct']:.1f}%", delta="Long-range patience rate")
+                        st.plotly_chart(create_rl_policy_benchmark_figure(rl_cur), width="stretch")
+                        st.plotly_chart(create_rl_action_heatmap_figure(rl_cur), width="stretch")
+                        st.dataframe(pd.DataFrame(rl_cur["benchmark_rows"]), width="stretch", hide_index=True)
+                        st.download_button(
+                            "📥 Export Neural Fire-Control Weights (.json)",
+                            data=json.dumps(rl_cur["policy_dict"], indent=2).encode("utf-8"),
+                            file_name="cuas_neural_fire_control_policy.json",
+                            mime="application/json",
+                            key="cuas_rl_dl_btn",
+                            width="stretch",
+                        )
+
+                with adv_tab6:
+                    st.markdown("##### 🗺️ Multi-Turret 3D Battlespace & Heterogeneous Swarm Co-Evolution")
+                    st.caption(
+                        "Co-evolves multi-turret site geometry & layered defense pairings against decoy-sponge + fiber-optic + heavy-bomber packages over DEM terrain."
+                    )
+                    dem_opts = get_terrain_dem_presets()
+                    bc1, bc2, bc3 = st.columns([1.4, 0.9, 1.3])
+                    with bc1:
+                        bs_dem = st.selectbox(
+                            "Battlespace DEM Terrain",
+                            list(dem_opts.keys()),
+                            format_func=lambda k: dem_opts[k]["name"],
+                            index=1,
+                            key="cuas_bs_dem",
+                        )
+                    with bc2:
+                        bs_gens = st.slider("Battlespace Gens", 1, 5, 2, 1, key="cuas_bs_gens")
+                    with bc3:
+                        st.write("")
+                        if st.button("⚔️ Run Multi-Turret 3D Battlespace Co-Evolution", type="primary", key="cuas_bs_run_btn", width="stretch"):
+                            with st.spinner("Co-evolving Cooperative Multi-Turret Site & Mixed Red Swarms..."):
+                                bs_res = _cached_battlespace_coevolution(
+                                    terrain_preset=str(bs_dem),
+                                    n_generations=int(bs_gens),
+                                    n_mc_trials=5,
+                                    max_turrets=4,
+                                    seed=int(seed_val),
+                                )
+                            st.session_state["_cuas_bs_res"] = bs_res
+
+                    bs_cur = st.session_state.get("_cuas_bs_res")
+                    if bs_cur is not None:
+                        bsm = bs_cur["summary"]
+                        bm1, bm2, bm3, bm4 = st.columns(4)
+                        bm1.metric("Battlespace Nash V*", f"{bsm['nash_value']:.2f}", delta=bsm["terrain_preset"])
+                        bm2.metric("Best Site + Layer", bsm["best_outer_layer"], delta=bsm["best_blue_name"][:28])
+                        bm3.metric("Duel Zero-Breach", f"{bsm['duel_zero_breach_pct']:.1f}%", delta=f"Kill Rate: {bsm['duel_kill_rate_pct']:.1f}%")
+                        bm4.metric("Deadliest Red Package", bsm["deadliest_red_name"][:24], delta=f"Outer Kills: {bsm['duel_outer_kills']:.1f}")
+                        st.plotly_chart(create_battlespace_coevolution_figure(bs_cur), width="stretch")
+                        st.button(
+                            "🚀 Launch Nash Duel in 3D Tactical Raid Simulator",
+                            type="primary",
+                            on_click=_launch_battlespace_to_raid,
+                            args=(bs_cur["raid_handoff_payload"],),
+                            key="cuas_bs_launch_raid_btn",
+                            width="stretch",
+                        )
+
+                with adv_tab7:
+                    st.markdown("##### ⚔️ Beat the AI — Interactive Duel & Failure-Mode Root-Cause Diagnostic")
+                    st.caption(
+                        "Test your Stage 1 turret against the AI's deadliest evolved swarm, or design a custom Red attack to challenge the AI's Nash-optimal turret."
+                    )
+                    duel_mode = st.radio(
+                        "Duel Perspective",
+                        [
+                            "Test My Stage 1 Turret vs AI's Deadliest Red Threat",
+                            "Challenge AI's Nash-Optimal Turret with Custom Red Attack",
+                        ],
+                        horizontal=True,
+                        key="cuas_duel_mode",
+                    )
+                    s1_prof = st.session_state.get("_active_cuas_profile") or best_blue
+                    if duel_mode.startswith("Test My"):
+                        duel_blue = s1_prof
+                        duel_red = adv_res["deadliest_red_threat"]
+                    else:
+                        dc1, dc2, dc3, dc4 = st.columns(4)
+                        with dc1:
+                            d_mod = st.selectbox("Red Airframe", list(drone_specs_18.keys()), index=0, key="cuas_duel_mod")
+                        with dc2:
+                            d_sw = st.slider("Red Swarm Size", 1, 12, 7, 1, key="cuas_duel_sw")
+                        with dc3:
+                            d_mg = st.slider("Evasive Load (G)", 0.0, 4.5, 3.5, 0.5, key="cuas_duel_mg")
+                        with dc4:
+                            d_spd = st.slider("Attack Speed (m/s)", 14.0, 42.0, 32.0, 2.0, key="cuas_duel_spd")
+                        duel_blue = best_blue
+                        duel_red = {
+                            "drone_model": str(d_mod),
+                            "swarm_size": int(d_sw),
+                            "maneuver_profile": "terminal_popup_jink" if d_mg >= 2.5 else "sinusoidal_weave",
+                            "maneuver_g": float(d_mg),
+                            "drone_speed_mps": float(d_spd),
+                            "attack_tactic": "narrow_corridor_saturation",
+                            "fiber_optic_fraction": 0.6,
+                        }
+
+                    duel_out = run_red_vs_blue_duel_diagnostic(
+                        blue_config=duel_blue,
+                        red_config=duel_red,
+                        mount_load_limit_kn=float(mount_load_limit_kn),
+                        n_episodes=24,
+                        seed=int(seed_val),
+                    )
+                    dm = duel_out["matchup"]
+                    d1, d2, d3, d4 = st.columns(4)
+                    d1.metric("Duel Verdict", duel_out["verdict"], delta=f"Utility: {dm['blue_utility']:.1f}/100")
+                    d2.metric("Zero-Breach Stop Rate", f"{dm['zero_breach_pct']:.1f}%", delta=f"Swarm Kill Rate: {dm['kill_rate_pct']:.1f}%")
+                    d3.metric("Dominant Root Cause", max(
+                        [
+                            ("Reload Gap", duel_out["failure_modes"]["reload_gap_pct"]),
+                            ("Slew Bottleneck", duel_out["failure_modes"]["slew_bottleneck_pct"]),
+                            ("Tracking Lag", duel_out["failure_modes"]["tracking_evasion_miss_pct"]),
+                            ("Lethality/Spread", duel_out["failure_modes"]["insufficient_lethality_spread_pct"]),
+                        ],
+                        key=lambda x: x[1],
+                    )[0], delta=f"{duel_out['failure_modes']['total_leakers']} total leakers")
+                    d4.metric("Turret Mass / Recoil", f"{duel_out['swap_c_summary']['total_mass_kg']:.1f} kg", delta=f"{dm['peak_mount_force_kn']:.2f} kN peak")
+                    st.plotly_chart(create_duel_root_cause_figure(duel_out), width="stretch")
+                    st.markdown("**Actionable Engineering Prescriptions**")
+                    for pr in duel_out["prescriptions"]:
+                        st.info(pr)

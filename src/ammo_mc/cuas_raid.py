@@ -69,6 +69,8 @@ def simulate_unified_tactical_raid_mc(
     barrel_mass_kg: float = 1.25,
     n_mc_trials: int = 30,
     seed: int = 42,
+    swarm_package: list[dict[str, Any]] | None = None,
+    outer_layer_type: str = "none",
 ) -> dict[str, Any]:
     """Run Monte Carlo time-stepped cooperative multi-turret 3D C-UAS raid defense."""
     rng = np.random.default_rng(seed)
@@ -126,7 +128,10 @@ def simulate_unified_tactical_raid_mc(
     cap_per_bbl = int(mag_spec["capacity_per_barrel"])
     reload_dur_s = float(mag_spec["reload_time_s"])
     barrels_per_salvo = max(1, int(salvo_barrels))
-    n_dr = max(1, int(n_drones))
+    if swarm_package:
+        n_dr = max(1, sum(max(1, int(pkg.get("count", 1))) for pkg in swarm_package))
+    else:
+        n_dr = max(1, int(n_drones))
     n_trials = max(1, int(n_mc_trials))
 
     zero_breach_trials = 0
@@ -139,6 +144,8 @@ def simulate_unified_tactical_raid_mc(
     reload_fracs: list[float] = []
     handoffs_list: list[int] = []
     overheat_list: list[int] = []
+    outer_kills_list: list[int] = []
+    pkg_geom_cache: dict[str, tuple[dict[str, Any], dict[str, Any], float]] = {}
 
     turret_acc: dict[str, dict[str, float]] = {
         t["id"]: {"kills": 0.0, "rounds": 0.0, "reloads": 0.0, "peak_temp_c": 0.0, "handoffs": 0.0}
@@ -149,64 +156,152 @@ def simulate_unified_tactical_raid_mc(
     rep_timeline: list[dict[str, Any]] = []
     rep_event_log: list[dict[str, Any]] = []
     rep_idx = min(n_trials // 2, n_trials - 1)
+    norm_outer_layer = str(outer_layer_type or "none").strip().lower()
+    outer_engage_r = max(float(weapon_max_range_m) + 25.0, asset_r + 45.0)
 
     for tr_idx in range(n_trials):
-        n_fo = int(round(n_dr * float(np.clip(fiber_optic_fraction, 0.0, 1.0))))
-        fo_flags = np.array([i < n_fo for i in range(n_dr)], dtype=bool)
-        rng.shuffle(fo_flags)
-
         drones: list[dict[str, Any]] = []
-        for i in range(n_dr):
-            if approach_pattern == "concentrated_axis":
-                az = (45.0 + float(rng.normal(0.0, 14.0))) % 360.0
-            elif approach_pattern == "pincer_dual_axis":
-                base_az = 45.0 if (i % 2 == 0) else 225.0
-                az = (base_az + float(rng.normal(0.0, 12.0))) % 360.0
-            else:
-                az = ((i + float(rng.uniform(0.15, 0.85))) * (360.0 / n_dr)) % 360.0
+        if swarm_package:
+            d_counter = 0
+            for pkg in swarm_package:
+                cnt = max(1, int(pkg.get("count", 1)))
+                d_mod = str(pkg.get("drone_model", drone_model))
+                if d_mod not in pkg_geom_cache:
+                    d_sp = drone_specs.get(d_mod, drone_specs["fpv_quad_small"])
+                    d_ag = compute_drone_projected_geometry(d_sp, aspect_mode="head_on_frontal")
+                    pkg_geom_cache[d_mod] = (d_sp, d_ag, float(d_ag.get("presented_area_cm2", 250.0)))
+                d_sp, d_ag, d_pa = pkg_geom_cache[d_mod]
+                pkg_spd = float(pkg.get("speed_mps", threat_speed_mps))
+                pkg_alt = float(pkg.get("altitude_m", threat_altitude_m))
+                pkg_mg = float(pkg.get("maneuver_g", maneuver_g))
+                pkg_fo_frac = float(np.clip(pkg.get("fiber_optic_fraction", fiber_optic_fraction), 0.0, 1.0))
+                pkg_delay = float(pkg.get("spawn_delay_s", 0.0))
+                az_ctr = pkg.get("az_center_deg")
+                az_spr = float(pkg.get("az_spread_deg", 25.0))
+                role = str(pkg.get("role", "striker"))
+                n_fo_p = int(round(cnt * pkg_fo_frac))
+                fo_p = np.array([j < n_fo_p for j in range(cnt)], dtype=bool)
+                rng.shuffle(fo_p)
+                for j in range(cnt):
+                    d_counter += 1
+                    if az_ctr is not None:
+                        az = (float(az_ctr) + float(rng.uniform(-az_spr, az_spr))) % 360.0
+                    else:
+                        az = ((d_counter + float(rng.uniform(0.15, 0.85))) * (360.0 / n_dr)) % 360.0
+                    az_rad = math.radians(az)
+                    ux_in, uy_in = -math.cos(az_rad), -math.sin(az_rad)
+                    px0, py0 = start_r * math.cos(az_rad), start_r * math.sin(az_rad)
+                    is_fo = bool(fo_p[j])
+                    det_map = {
+                        s: _compute_sensor_nominal_range(s, KILL_CHAIN_SENSOR_CATALOG[s], d_pa, weather_condition, ambient_wind_mps, is_fo)
+                        for s in active_sensors
+                    }
+                    best_det_r = 0.0
+                    det_conf_s = 0.45
+                    for s in active_sensors:
+                        nr = det_map.get(s, 0.0)
+                        if nr <= 0.0:
+                            continue
+                        sig_f = float(KILL_CHAIN_SENSOR_CATALOG[s]["range_sigma_frac"])
+                        r_draw = max(0.0, float(rng.normal(nr, nr * sig_f)))
+                        if r_draw > best_det_r:
+                            best_det_r = r_draw
+                            det_conf_s = max(0.15, float(rng.normal(float(KILL_CHAIN_SENSOR_CATALOG[s]["confirm_latency_s"]), 0.07)))
+                    spawn_t = pkg_delay + (0.0 if stagger_window_s <= 0.0 else float(rng.uniform(0.0, max(1.0, stagger_window_s * 0.45))))
+                    g0 = center_ground_z if terrain_dem is None else float(terrain_dem.elevation_at(px0, py0))
+                    drones.append(
+                        {
+                            "id": f"D-{d_counter}",
+                            "role": role,
+                            "az_deg": az,
+                            "ux_in": ux_in,
+                            "uy_in": uy_in,
+                            "lat_x": -uy_in,
+                            "lat_y": ux_in,
+                            "x_m": px0,
+                            "y_m": py0,
+                            "z_m": max(g0 + 3.0, center_ground_z + pkg_alt),
+                            "spawn_t_s": spawn_t,
+                            "speed_mps": pkg_spd,
+                            "altitude_m": pkg_alt,
+                            "maneuver_g": pkg_mg,
+                            "drone_spec": d_sp,
+                            "aspect_geom": d_ag,
+                            "phase": float(rng.uniform(0.0, 2.0 * math.pi)),
+                            "is_fiber_optic": is_fo,
+                            "det_range_m": best_det_r,
+                            "c2_delay_s": det_conf_s + float(c2_handoff_s),
+                            "detected_at_s": None,
+                            "track_confirmed": False,
+                            "outer_checked": False,
+                            "status": "inbound",
+                            "engaged_by": None,
+                            "ever_assigned_by": set(),
+                        }
+                    )
+        else:
+            n_fo = int(round(n_dr * float(np.clip(fiber_optic_fraction, 0.0, 1.0))))
+            fo_flags = np.array([i < n_fo for i in range(n_dr)], dtype=bool)
+            rng.shuffle(fo_flags)
 
-            az_rad = math.radians(az)
-            ux_in, uy_in = -math.cos(az_rad), -math.sin(az_rad)
-            px0, py0 = start_r * math.cos(az_rad), start_r * math.sin(az_rad)
-            is_fo = bool(fo_flags[i])
-            det_map = nom_det_fo if is_fo else nom_det_rf
-            best_det_r = 0.0
-            det_conf_s = 0.45
-            for s in active_sensors:
-                nr = det_map.get(s, 0.0)
-                if nr <= 0.0:
-                    continue
-                sig_f = float(KILL_CHAIN_SENSOR_CATALOG[s]["range_sigma_frac"])
-                r_draw = max(0.0, float(rng.normal(nr, nr * sig_f)))
-                if r_draw > best_det_r:
-                    best_det_r = r_draw
-                    det_conf_s = max(0.15, float(rng.normal(float(KILL_CHAIN_SENSOR_CATALOG[s]["confirm_latency_s"]), 0.07)))
+            for i in range(n_dr):
+                if approach_pattern == "concentrated_axis":
+                    az = (45.0 + float(rng.normal(0.0, 14.0))) % 360.0
+                elif approach_pattern == "pincer_dual_axis":
+                    base_az = 45.0 if (i % 2 == 0) else 225.0
+                    az = (base_az + float(rng.normal(0.0, 12.0))) % 360.0
+                else:
+                    az = ((i + float(rng.uniform(0.15, 0.85))) * (360.0 / n_dr)) % 360.0
 
-            spawn_t = 0.0 if stagger_window_s <= 0.0 else float(rng.uniform(0.0, stagger_window_s))
-            g0 = center_ground_z if terrain_dem is None else float(terrain_dem.elevation_at(px0, py0))
-            drones.append(
-                {
-                    "id": f"D-{i+1}",
-                    "az_deg": az,
-                    "ux_in": ux_in,
-                    "uy_in": uy_in,
-                    "lat_x": -uy_in,
-                    "lat_y": ux_in,
-                    "x_m": px0,
-                    "y_m": py0,
-                    "z_m": max(g0 + 3.0, center_ground_z + float(threat_altitude_m)),
-                    "spawn_t_s": spawn_t,
-                    "phase": float(rng.uniform(0.0, 2.0 * math.pi)),
-                    "is_fiber_optic": is_fo,
-                    "det_range_m": best_det_r,
-                    "c2_delay_s": det_conf_s + float(c2_handoff_s),
-                    "detected_at_s": None,
-                    "track_confirmed": False,
-                    "status": "inbound",
-                    "engaged_by": None,
-                    "ever_assigned_by": set(),
-                }
-            )
+                az_rad = math.radians(az)
+                ux_in, uy_in = -math.cos(az_rad), -math.sin(az_rad)
+                px0, py0 = start_r * math.cos(az_rad), start_r * math.sin(az_rad)
+                is_fo = bool(fo_flags[i])
+                det_map = nom_det_fo if is_fo else nom_det_rf
+                best_det_r = 0.0
+                det_conf_s = 0.45
+                for s in active_sensors:
+                    nr = det_map.get(s, 0.0)
+                    if nr <= 0.0:
+                        continue
+                    sig_f = float(KILL_CHAIN_SENSOR_CATALOG[s]["range_sigma_frac"])
+                    r_draw = max(0.0, float(rng.normal(nr, nr * sig_f)))
+                    if r_draw > best_det_r:
+                        best_det_r = r_draw
+                        det_conf_s = max(0.15, float(rng.normal(float(KILL_CHAIN_SENSOR_CATALOG[s]["confirm_latency_s"]), 0.07)))
+
+                spawn_t = 0.0 if stagger_window_s <= 0.0 else float(rng.uniform(0.0, stagger_window_s))
+                g0 = center_ground_z if terrain_dem is None else float(terrain_dem.elevation_at(px0, py0))
+                drones.append(
+                    {
+                        "id": f"D-{i+1}",
+                        "role": "striker",
+                        "az_deg": az,
+                        "ux_in": ux_in,
+                        "uy_in": uy_in,
+                        "lat_x": -uy_in,
+                        "lat_y": ux_in,
+                        "x_m": px0,
+                        "y_m": py0,
+                        "z_m": max(g0 + 3.0, center_ground_z + float(threat_altitude_m)),
+                        "spawn_t_s": spawn_t,
+                        "speed_mps": float(threat_speed_mps),
+                        "altitude_m": float(threat_altitude_m),
+                        "maneuver_g": float(maneuver_g),
+                        "drone_spec": drone_spec,
+                        "aspect_geom": aspect_geom,
+                        "phase": float(rng.uniform(0.0, 2.0 * math.pi)),
+                        "is_fiber_optic": is_fo,
+                        "det_range_m": best_det_r,
+                        "c2_delay_s": det_conf_s + float(c2_handoff_s),
+                        "detected_at_s": None,
+                        "track_confirmed": False,
+                        "outer_checked": False,
+                        "status": "inbound",
+                        "engaged_by": None,
+                        "ever_assigned_by": set(),
+                    }
+                )
 
         t_states: list[dict[str, Any]] = []
         for ti, t in enumerate(turrets_in):
@@ -241,6 +336,8 @@ def simulate_unified_tactical_raid_mc(
             )
 
         trial_kills = 0
+        trial_outer_kills = 0
+        outer_ab_rounds = 8
         trial_leakers = 0
         trial_rounds = 0
         trial_handoffs = 0
@@ -259,8 +356,11 @@ def simulate_unified_tactical_raid_mc(
                 if d["status"] in ("killed", "breach"):
                     continue
                 active_alive += 1
+                d_spd = float(d["speed_mps"])
+                d_alt = float(d["altitude_m"])
+                d_mg = float(d["maneuver_g"])
                 t_fly = max(0.0, t_now - float(d["spawn_t_s"]))
-                r_nom = start_r - float(threat_speed_mps) * t_fly
+                r_nom = start_r - d_spd * t_fly
                 if r_nom <= breach_r:
                     d["status"] = "breach"
                     trial_leakers += 1
@@ -288,27 +388,27 @@ def simulate_unified_tactical_raid_mc(
                     "linear_cruise": "linear_cruise",
                 }.get(str(evasion_profile), "sinusoidal_weave")
                 t_ev = (
-                    (float(weapon_max_range_m) - r_nom) / max(float(threat_speed_mps), 1.0)
+                    (float(weapon_max_range_m) - r_nom) / max(d_spd, 1.0)
                     if ev_map == "terminal_popup_jink"
                     else t_fly
                 )
                 ev_off = evaluate_evasive_drone_state(
                     t_s=t_ev,
                     target_distance_m=start_r,
-                    velocity_mps=float(threat_speed_mps),
+                    velocity_mps=d_spd,
                     heading_deg=0.0,
                     maneuver_profile=ev_map,
-                    max_maneuver_g=float(maneuver_g),
+                    max_maneuver_g=d_mg,
                     phase_rad=float(d["phase"]),
                 )
                 lat_disp = 7.5 * math.tanh(float(ev_off["y"]) / 7.5)
                 vert_disp = 6.0 * math.tanh(float(ev_off["z"]) / 6.0)
-                d_cx = start_r * math.cos(math.radians(d["az_deg"])) + float(threat_speed_mps) * t_fly * d["ux_in"]
-                d_cy = start_r * math.sin(math.radians(d["az_deg"])) + float(threat_speed_mps) * t_fly * d["uy_in"]
+                d_cx = start_r * math.cos(math.radians(d["az_deg"])) + d_spd * t_fly * d["ux_in"]
+                d_cy = start_r * math.sin(math.radians(d["az_deg"])) + d_spd * t_fly * d["uy_in"]
                 px = d_cx + lat_disp * d["lat_x"]
                 py = d_cy + lat_disp * d["lat_y"]
                 g_pos = center_ground_z if terrain_dem is None else float(terrain_dem.elevation_at(px, py))
-                pz = max(g_pos + 3.0, center_ground_z + float(threat_altitude_m) + vert_disp)
+                pz = max(g_pos + 3.0, center_ground_z + d_alt + vert_disp)
                 d["x_m"], d["y_m"], d["z_m"] = px, py, pz
 
                 r_from_center = math.hypot(px, py)
@@ -326,6 +426,32 @@ def simulate_unified_tactical_raid_mc(
                 if d["detected_at_s"] is not None and (t_now - float(d["detected_at_s"])) >= float(d["c2_delay_s"]):
                     d["track_confirmed"] = True
                     tracked_now += 1
+
+                if norm_outer_layer != "none" and not d["outer_checked"] and r_from_center <= outer_engage_r:
+                    d["outer_checked"] = True
+                    o_hit = False
+                    if norm_outer_layer == "rf_gnss_jammer" and not d["is_fiber_optic"]:
+                        o_hit = float(rng.random()) < 0.68
+                    elif norm_outer_layer == "hpm_screen":
+                        o_hit = float(rng.random()) < 0.45
+                    elif norm_outer_layer == "airburst_35mm" and outer_ab_rounds > 0:
+                        outer_ab_rounds -= 1
+                        p_ab = 0.52 if d_alt >= 16.0 else 0.35
+                        o_hit = float(rng.random()) < p_ab
+                    if o_hit:
+                        d["status"] = "killed"
+                        trial_kills += 1
+                        trial_outer_kills += 1
+                        if is_rep:
+                            rep_event_log.append(
+                                {
+                                    "t_s": t_now,
+                                    "event": f"OUTER_{norm_outer_layer.upper()}",
+                                    "actor": norm_outer_layer,
+                                    "detail": f"Outer layer intercepted {d['id']} ({d['role']}) at r={r_from_center:.1f} m",
+                                }
+                            )
+                        continue
 
             # 2. Newton cooling & reload progression on all turrets
             frame_beams: list[dict[str, Any]] = []
@@ -457,7 +583,7 @@ def simulate_unified_tactical_raid_mc(
 
                 # Barrel thermal jitter penalty when hot + evasive residual
                 thermal_pen = max(0.65, 1.0 - max(0.0, ts["temp_c"] - 140.0) * 0.0025)
-                ev_pen = max(0.75, 1.0 - 0.06 * float(maneuver_g)) if evasion_profile != "straight_dive" else 1.0
+                ev_pen = max(0.75, 1.0 - 0.06 * float(chosen_d["maneuver_g"])) if evasion_profile != "straight_dive" else 1.0
                 pk_salvo = float(
                     np.clip(
                         _estimate_burst_pk_analytics(
@@ -468,10 +594,10 @@ def simulate_unified_tactical_raid_mc(
                             pellet_mass_g=float(ammo["pellet_mass_g"]),
                             v0_mps=float(ammo["v0_mps"]),
                             choke_name=choke,
-                            drone_spec=drone_spec,
+                            drone_spec=chosen_d["drone_spec"],
                             base_cd=float(ammo.get("effective_cd", 0.47)),
                             aspect_mode="head_on_frontal",
-                            aspect_geom=aspect_geom,
+                            aspect_geom=chosen_d["aspect_geom"],
                         )
                         * thermal_pen
                         * ev_pen,
@@ -571,6 +697,7 @@ def simulate_unified_tactical_raid_mc(
         costs_totals.append(trial_rounds * unit_cost_usd)
         handoffs_list.append(trial_handoffs)
         overheat_list.append(trial_overheats)
+        outer_kills_list.append(trial_outer_kills)
         if trial_int_ranges:
             intercept_ranges.extend(trial_int_ranges)
 
@@ -616,6 +743,8 @@ def simulate_unified_tactical_raid_mc(
             "ammo_name": ammo["name"],
             "weather_condition": weather_condition,
             "terrain_source": terrain_source,
+            "outer_layer_type": norm_outer_layer,
+            "outer_layer_kills": round(float(np.mean(outer_kills_list)), 2),
             "zero_breach_pct": round(100.0 * zero_breach_trials / n_trials, 1),
             "mean_kill_rate_pct": round(float(np.mean(kill_rates)), 1),
             "mean_leakers": round(float(np.mean(leakers_list)), 2),

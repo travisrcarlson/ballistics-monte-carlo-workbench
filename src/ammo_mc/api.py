@@ -59,7 +59,11 @@ from ammo_mc.mcdrag import McDragInputs, estimate_mcdrag
 from ammo_mc.pipeline import GovernanceError, run_simulation
 from ammo_mc.presets import get_preset, list_presets
 from ammo_mc.schemas import AmmoDefinition, Scenario, SimulationResult
-from ammo_mc.small_arms import get_drone_aspect_presets, get_drone_target_specs
+from ammo_mc.small_arms import (
+    generate_multishotgun_array_layout,
+    get_drone_aspect_presets,
+    get_drone_target_specs,
+)
 from ammo_mc.validation import (
     generate_vv_certificate_html,
     generate_vv_certificate_markdown,
@@ -460,6 +464,9 @@ class CuasAdversarialRequest(BaseModel):
     cost_penalty_weight: float = 0.20
     stage1_profile: Optional[dict[str, Any]] = None
     seed: int = 42
+    allow_hybrid: bool = False
+    robust_uncertainty_mode: bool = False
+    calibration_profile: Optional[dict[str, Any]] = None
 
 
 class CuasReportRequest(BaseModel):
@@ -606,6 +613,195 @@ def post_cuas_adversarial(req: CuasAdversarialRequest) -> dict[str, Any]:
     return _to_json_safe(run_adversarial_coevolution_ml(**req.model_dump()))
 
 
+class CuasRlPolicyRequest(BaseModel):
+    blue_config: Optional[dict[str, Any]] = None
+    n_generations: int = 10
+    pop_size: int = 12
+    n_eval_episodes: int = 12
+    seed: int = 42
+
+
+class CuasBattlespaceMlRequest(BaseModel):
+    terrain_preset: str = "rolling_hills_fob"
+    n_generations: int = 2
+    n_mc_trials: int = 4
+    max_turrets: int = 4
+    seed: int = 42
+
+
+class CuasTrackReplayRequest(BaseModel):
+    csv_text: Optional[str] = None
+    scenario: str = "evasive_fpv_dive"
+    turret_config: Optional[dict[str, Any]] = None
+    calibration_profile: Optional[dict[str, Any]] = None
+    breach_radius_m: float = 12.0
+    n_mc_trials: int = 25
+    seed: int = 42
+
+
+class CuasSwapCRequest(BaseModel):
+    n_barrels: int = 6
+    barrel_length_in: float = 24.0
+    layout_type: str = "circular"
+    mount_radius_m: float = 0.20
+    ammunition_preset: str = "12G_NO4_BUCK_C_UAS"
+    magazine_type: str = "box_10rd"
+    slew_rate_deg_s: float = 160.0
+    default_choke: str = "Modified"
+    pointing_mode: str = "convergent"
+    splay_angle_mrad: float = 0.0
+    firing_mode: str = "balanced_pair_ripple"
+    ripple_delay_ms: float = 10.0
+    hybrid_mode: bool = False
+
+
+class CuasWizardRequest(BaseModel):
+    drone_model: str = "fpv_quad_small"
+    threat_speed_mps: float = 25.0
+    required_range_m: float = 45.0
+    mount_class: str = "light_ugv"
+    budget_priority: str = "balanced"
+    seed: int = 42
+
+
+class CuasDuelRequest(BaseModel):
+    blue_config: dict[str, Any] = Field(default_factory=dict)
+    red_config: dict[str, Any] = Field(default_factory=dict)
+    mount_load_limit_kn: float = 4.0
+    n_episodes: int = 24
+    seed: int = 42
+
+
+@app.post("/cuas/rl-policy", tags=["C-UAS"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_rl_policy(req: CuasRlPolicyRequest) -> dict[str, Any]:
+    """Train and benchmark dynamic shot-by-shot neural fire-control policy."""
+    from ammo_mc.cuas_rl_policy import train_fire_control_policy_es
+
+    return _to_json_safe(train_fire_control_policy_es(**req.model_dump()))
+
+
+@app.post("/cuas/battlespace-ml", tags=["C-UAS"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_battlespace_ml(req: CuasBattlespaceMlRequest) -> dict[str, Any]:
+    """Co-evolve multi-turret 3D battlespace architectures against heterogeneous Red swarm packages."""
+    from ammo_mc.cuas_battlespace_ml import run_battlespace_coevolution_mc
+
+    return _to_json_safe(run_battlespace_coevolution_mc(**req.model_dump()))
+
+
+@app.post("/cuas/track-replay", tags=["C-UAS"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_track_replay(req: CuasTrackReplayRequest) -> dict[str, Any]:
+    """Replay recorded ENU/GPS drone flight tracks against calibrated multi-barrel turret."""
+    from ammo_mc.cuas_track_replay import (
+        generate_sample_drone_track_csv,
+        simulate_recorded_track_engagement_mc,
+    )
+
+    csv_txt = req.csv_text or generate_sample_drone_track_csv(scenario=req.scenario, seed=req.seed)
+    try:
+        res = simulate_recorded_track_engagement_mc(
+            csv_txt,
+            turret_config=req.turret_config,
+            calibration_profile=req.calibration_profile,
+            breach_radius_m=req.breach_radius_m,
+            n_mc_trials=req.n_mc_trials,
+            seed=req.seed,
+        )
+        return _to_json_safe(res)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@app.post("/cuas/swap-c", tags=["C-UAS"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_swap_c(req: CuasSwapCRequest) -> dict[str, Any]:
+    """Compute C-UAS turret sub-assembly SWaP-C mass, power, inertia & BOM budget."""
+    from ammo_mc.cuas_hardware import estimate_turret_swap_c
+
+    return _to_json_safe(
+        estimate_turret_swap_c(
+            n_barrels=req.n_barrels,
+            barrel_length_in=req.barrel_length_in,
+            layout_type=req.layout_type,
+            mount_radius_m=req.mount_radius_m,
+            ammunition_preset=req.ammunition_preset,
+            magazine_type=req.magazine_type,
+            slew_rate_deg_s=req.slew_rate_deg_s,
+            firing_mode=req.firing_mode,
+            ripple_delay_ms=req.ripple_delay_ms,
+            hybrid_mode=req.hybrid_mode,
+        )
+    )
+
+
+@app.post("/cuas/cad/dxf", tags=["C-UAS", "Export"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_cad_dxf(req: CuasSwapCRequest) -> Response:
+    """Export parametric 2D muzzle-clamp plate AutoCAD ASCII DXF drawing."""
+    from ammo_mc.cuas_hardware import export_muzzle_plate_dxf
+
+    bbls = generate_multishotgun_array_layout(
+        layout_type=req.layout_type,
+        n_barrels=req.n_barrels,
+        mount_radius_m=req.mount_radius_m,
+        default_choke=req.default_choke,
+        default_barrel_length_in=req.barrel_length_in,
+        default_ammunition_preset=req.ammunition_preset,
+    )
+    dxf_txt = export_muzzle_plate_dxf(
+        barrels=bbls,
+        layout_type=req.layout_type,
+        title=f"{req.n_barrels}B {req.layout_type.title()} Muzzle Clamp",
+        splay_angle_mrad=req.splay_angle_mrad,
+        pointing_mode=req.pointing_mode,
+    )
+    return Response(
+        content=dxf_txt.encode("utf-8"),
+        media_type="application/dxf",
+        headers={"Content-Disposition": "attachment; filename=cuas_muzzle_plate.dxf"},
+    )
+
+
+@app.post("/cuas/cad/svg", tags=["C-UAS", "Export"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_cad_svg(req: CuasSwapCRequest) -> Response:
+    """Export parametric 2D muzzle-clamp plate scaled vector SVG blueprint."""
+    from ammo_mc.cuas_hardware import export_muzzle_plate_svg
+
+    bbls = generate_multishotgun_array_layout(
+        layout_type=req.layout_type,
+        n_barrels=req.n_barrels,
+        mount_radius_m=req.mount_radius_m,
+        default_choke=req.default_choke,
+        default_barrel_length_in=req.barrel_length_in,
+        default_ammunition_preset=req.ammunition_preset,
+    )
+    svg_txt = export_muzzle_plate_svg(
+        barrels=bbls,
+        layout_type=req.layout_type,
+        title=f"{req.n_barrels}B {req.layout_type.title()} Muzzle Clamp",
+        splay_angle_mrad=req.splay_angle_mrad,
+        pointing_mode=req.pointing_mode,
+    )
+    return Response(
+        content=svg_txt.encode("utf-8"),
+        media_type="image/svg+xml",
+        headers={"Content-Disposition": "attachment; filename=cuas_muzzle_plate.svg"},
+    )
+
+
+@app.post("/cuas/wizard", tags=["C-UAS"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_wizard(req: CuasWizardRequest) -> dict[str, Any]:
+    """Run 3-Click C-UAS Turret Sizing Wizard across 12 turret archetypes & mount constraints."""
+    from ammo_mc.cuas_wizard import run_turret_sizing_wizard
+
+    return _to_json_safe(run_turret_sizing_wizard(**req.model_dump()))
+
+
+@app.post("/cuas/duel", tags=["C-UAS"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_duel(req: CuasDuelRequest) -> dict[str, Any]:
+    """Run Red-vs-Blue duel diagnostic with leaker failure-mode attribution & prescriptions."""
+    from ammo_mc.cuas_wizard import run_red_vs_blue_duel_diagnostic
+
+    return _to_json_safe(run_red_vs_blue_duel_diagnostic(**req.model_dump()))
+
+
 class CalibratePatternRequest(BaseModel):
     csv_text: str
     range_m: float = 36.58
@@ -680,6 +876,7 @@ class BriefingExportRequest(BaseModel):
     raid_result: Optional[dict[str, Any]] = None
     simulator_summary: Optional[dict[str, Any]] = None
     source_ids: Optional[list[str]] = None
+    adversarial_result: Optional[dict[str, Any]] = None
 
 
 @app.post("/cuas/briefing/pdf", tags=["C-UAS", "Export"], dependencies=[Depends(_verify_api_auth)])

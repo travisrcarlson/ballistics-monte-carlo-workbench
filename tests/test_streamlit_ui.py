@@ -154,3 +154,34 @@ def test_ui_cuas_adversarial_ml_tab_renders_and_syncs() -> None:
     assert "n_barrels" in prof
     assert "ammunition_preset" in prof
 
+    # Verify new Hybrid, Robust, and Duel controls render & toggle cleanly
+    assert at.checkbox(key="cuas_adv_hybrid") is not None
+    assert at.checkbox(key="cuas_adv_robust") is not None
+    at.checkbox(key="cuas_adv_hybrid").set_value(True).run()
+    assert not at.exception
+    assert at.radio(key="cuas_duel_mode") is not None
+
+
+def test_ui_home_wizard_and_calibration_track_replay() -> None:
+    """Verify Home 3-Click Turret Sizing Wizard & Tab 18.13 Track Replay / Twin."""
+    at_home = AppTest.from_file(ROOT_APP, default_timeout=60)
+    at_home.session_state["authenticated"] = True
+    at_home.query_params["wb"] = "home"
+    at_home.run()
+    assert not at_home.exception
+    assert at_home.slider(key="home_wiz_rng").value == 45.0
+    at_home.button(key="home_wiz_load_btn").click().run()
+    assert not at_home.exception
+    assert at_home.session_state["active_workbench"] == "C-UAS & Multi-Barrel"
+    assert at_home.session_state["cuas_stage_tool"] == "Anti-Drone Multi-Shotgun Array"
+
+    at_cal = AppTest.from_file(ROOT_APP, default_timeout=60)
+    at_cal.session_state["authenticated"] = True
+    at_cal.query_params["wb"] = "cuas"
+    at_cal.query_params["mod"] = "calibration"
+    at_cal.run()
+    assert not at_cal.exception
+    at_cal.button(key="cal_pat_apply_btn").click().run()
+    assert not at_cal.exception
+    assert "_calibrated_digital_twin" in at_cal.session_state
+

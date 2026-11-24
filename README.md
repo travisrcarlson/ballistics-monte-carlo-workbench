@@ -12,13 +12,12 @@ A physics-grounded stochastic Monte Carlo simulation engine and Streamlit workbe
 ## 🌟 Key Capabilities
 
 ### 1. Consolidated 6-Domain Focus Mode UX & Counter-UAS 4-Stage Workflow
-- **Task-First Navigation, Focus Mode & URL Deep-Linking**: Streamlined 6-domain workbench switcher (`Home`, `C-UAS & Multi-Barrel`, `Ballistics & 3D Sim`, `Physics & Aero Labs`, `Safety & IATG`, `Audit & Sources`) paired with a global **Standard / Expert Mode (`Focus Mode`)** toggle so engineers start cleanly with essential inputs while keeping full mathematical depth one click away. Supports shareable URL query parameters (`?wb=home`, `?wb=cuas&mod=array`, `?wb=cuas&mod=raid`, `?wb=validation`, `?wb=literature`).
+- **Task-First Navigation, 3-Click Turret Sizing Wizard, Focus Mode & URL Deep-Linking**: Streamlined 6-domain workbench switcher (`Home`, `C-UAS & Multi-Barrel`, `Ballistics & 3D Sim`, `Physics & Aero Labs`, `Safety & IATG`, `Audit & Sources`), instant **3-Click C-UAS Turret Sizing Wizard** on Home (outputs Top-3 feasible builds + 1-click PDF spec sheet & `.dxf` muzzle CAD), and global **Standard / Expert Mode (`Focus Mode`)** toggle. Supports shareable URL query parameters (`?wb=home`, `?wb=cuas&mod=array`, `?wb=cuas&mod=raid`, `?wb=cuas&mod=adversarial`, `?wb=validation`, `?wb=literature`).
 - **Scientific Literature, V&V Certificates & Model Provenance (`Audit & Sources`)**: Full module-by-module traceability mapping **80 verified primary sources (`S01`–`S80`)**, **96 governed equations**, empirical catalogs, and **40 automated V&V checks** with exportable V&V audit certificates and BibTeX/CSV/JSON exports (`GET /literature`, `ammo-mc literature`).
-- **Stage 1 — Multi-Shotgun Array Designer, Custom Builders & Effective Range Envelopes (`?wb=cuas&mod=array`)**:
-  - Flexible muzzle mount geometries (`circular`, `grid`, `concentric`, `honeycomb`, `fan_horizontal`, `fan_vertical`, `v_shape`, and custom `(Y, Z, choke)` coordinates), convergent/parallel/splay/staggered pointing, ripple schedules, and 3-axis Euler drone cross-section projection ($\psi, \theta, \phi$).
+- **Stage 1 — Multi-Shotgun Array Designer, Hardware SWaP-C/OTM & Muzzle-Plate CAD (`?wb=cuas&mod=array`)**:
+  - Flexible muzzle mount geometries (`circular`, `grid`, `concentric`, `honeycomb`, `fan_horizontal`, `fan_vertical`, `v_shape`, and custom `(Y, Z, choke)` coordinates), homogeneous or **hybrid dual-ring mixed-load barrels**, convergent/parallel/splay/staggered pointing, ripple schedules, and 3-axis Euler drone cross-section projection ($\psi, \theta, \phi$).
   - **Custom Drone & Custom Shell Builders**: Define custom quadcopter, hexacopter, octocopter, or fixed-wing threat geometries/lethality thresholds and custom pellet materials/diameters/charges/40-yd pattern percentages with JSON preset round-tripping.
-  - **Effective Range ($R_{80}$ / $R_{50}$) & Speed $\times$ Range Engagement Heatmap**: Compute single-load and multi-load $P_{\text{kill}}(R)$ curves alongside on-demand 2D crossing-speed $\times$ slant-range contour heatmaps.
-  - **1-Click Stage 1 Spec Sheets & Shared Profile Sync**: Cached `@st.cache_data` execution, standalone `.html`/`.pdf` engineering spec sheets, and automatic/1-click syncing of the active array & drone profile across Stages 1–4.
+  - **Effective Range ($R_{80}$ / $R_{50}$), Hardware SWaP-C, OTM Stabilization & Parametric CAD**: Compute single-load and multi-load $P_{\text{kill}}(R)$ curves, 2D crossing-speed $\times$ slant-range contours, full sub-assembly mass/inertia/servo power/BOM estimates, off-road UGV/4×4 gyro stabilization envelopes, and 1-click **AutoCAD `.dxf` & `.svg` muzzle-clamp manufacturing drawings**.
 - **Stage 2 — Tracking, Swarms, Airburst & Structural Recoil**:
   - **Closed-Loop FCS & Evasive Drones (`?wb=cuas&mod=fcs`)**: Radar / EO-IR / Fused $\alpha\text{-}\beta\text{-}\gamma$ Kalman lead prediction, servo slew/acceleration limits, and sinusoidal/corkscrew/pop-up jink evasion.
   - **Multi-Drone Swarm Saturation (`?wb=cuas&mod=swarm`)**: Timeline budgets, priority policies, sub-salvo allocation, and reload endurance.
@@ -28,12 +27,12 @@ A physics-grounded stochastic Monte Carlo simulation engine and Streamlit workbe
   - **Elevated-Fire Pellet Fallout & SDZ (`?wb=cuas&mod=sdz`)**: Vectorized 3-DoF missed-pellet ballistics with ISA 1976 atmosphere, 1/7 wind shear, ocular ($0.06\;\text{J/mm}^2$), skin, and IATG $79\;\text{J}$ footprints.
   - **Multi-Sensor Acquisition & Kill-Chain Timeline (`?wb=cuas&mod=kill_chain`)**: Aspect-RCS Ku-band radar, weather-attenuated EO/IR, acoustic array, and passive RF/C2 ESM (`0 m` vs fiber-optic threats).
   - **Multi-Turret Site Defense, DEM Terrain LOS Masking & GIS Map (`?wb=cuas&mod=site_defense`)**: Custom turret/obstacle/NFZ builder, synthetic/uploaded CSV & `.asc` / live Open-Meteo SRTM DEM ridge masking, terrain-adjusted Fallout SDZs, and GeoJSON/KML export.
-  - **Unified Dynamic 3D Tactical Raid & Intercept Replay (`?wb=cuas&mod=raid`)**: Time-stepped 3D cooperative multi-turret battlespace and animated 3D ripple shot-stringing replay.
-- **Stage 4 — Trade Studies, Calibration & Briefings**:
+  - **Unified Dynamic 3D Tactical Raid & Intercept Replay (`?wb=cuas&mod=raid`)**: Time-stepped 3D cooperative multi-turret battlespace supporting heterogeneous mixed swarm packages, optional outer layered effectors (`RF Jammer`, `HPM Screen`, `35mm Airburst`), and animated 3D ripple shot-stringing replay.
+- **Stage 4 — Trade Studies, Recorded-Track Calibration, Autonomy & Briefings**:
   - **A/B Comparator, Layered Defense & Sensitivity Tornado (`?wb=cuas&mod=comparator`, `sensitivity`)**: Multi-criteria scorecard, paired Outer Soft/Hard-Kill vs Inner Multi-Shotgun waves, and one-at-a-time Tornado sweeps.
-  - **Sustained Logistics, Scenario Library & Briefings (`.html`, `.pdf`, `.pptx`)**: Thermal cook-off margins, `$/Kill`, SQLite Scenario Library save/diff, multi-page PDF + 16:9 PowerPoint decks.
-  - **Field-Test Calibration & Residual Diagnostics (`?wb=cuas&mod=calibration`)**: Upload range CSVs to fit Rayleigh shotgun pattern spread factors, chronograph MV & FM 6-40 $dMV/dT$, and exterior drag form factors via SciPy nonlinear least squares.
-  - **Adversarial Red-vs-Blue Competing Monte Carlo & GP ML Protection Optimizer (`?wb=cuas&mod=adversarial`)**: Co-evolve adversarial drone threats (Red: kinematics, maneuver-g, stealth, tactics) against multi-barrel shotgun platforms (Blue: barrel count, choke, layout, ripple timing, pointing mode, ammunition). Pure NumPy/SciPy Gaussian Process (Matérn-5/2 kernel) Bayesian surrogate with marginal likelihood hyperparameter tuning, 5-fold cross-validation ($R^2$, RMSE), permutation feature importance ranking, exact two-player zero-sum LP Nash equilibrium solver (`scipy.optimize.linprog`), real-time context-adaptive ML defense policy recommender, and CSV dataset export.
+  - **Sustained Logistics, Scenario Library & Briefings (`.html`, `.pdf`, `.pptx`)**: Thermal cook-off margins, `$/Kill`, SQLite Scenario Library save/diff, multi-page PDF + 16:9 PowerPoint decks (including evolved Nash ML scorecard slides).
+  - **Field-Test Calibration, Digital Twin & Recorded Drone-Track Replay (`?wb=cuas&mod=calibration`)**: Fit Rayleigh pattern spread factors, chronograph MV & FM 6-40 $dMV/dT$, and exterior drag form factors via SciPy nonlinear least squares, link calibrated parameters into a session **Digital Twin**, and replay real ENU or GPS/MAVLink drone flight CSV logs.
+  - **Adversarial Red-vs-Blue Competing Monte Carlo, RL Fire Control & 3D Battlespace ML (`?wb=cuas&mod=adversarial`)**: Co-evolve homogeneous or hybrid dual-ring shotgun platforms against evasive drone threats under calibrated/weather/OTM CVaR-20% uncertainty using Gaussian Process (Matérn-5/2) Bayesian surrogates and exact LP Nash equilibria. Includes **Antithetic ES Dynamic Shot-by-Shot RL Fire Control**, **Multi-Turret 3D Battlespace Co-Evolution** (with 1-click Raid handoff), and **Interactive "Beat the AI" Duel Root-Cause Attribution**.
 
 ### 2. Multi-Stage Exterior, Interior & IATG Safety Engine (Dedicated Workbenches)
 - **Stages 0–8 Ballistics Pipeline**: Lumped-parameter STANAG 4367 interior ballistics, L0–L3 exterior trajectories (3-DoF + STANAG 4355 Modified Point Mass with spin/Coriolis drift + terrain), McCoy MCDRAG (Mach 0.5–5.0), fuze reliability & Beta epistemic UXO estimation, Kingery-Bulmash blast, Gurney/Mott fragmentation, Carleton SSPK, and two-loop epistemic/aleatory UQ (LHS, Sobol, MC).
@@ -73,10 +72,15 @@ ammo-mc cuas compare-ab --out-csv exports/scorecard.csv
 ammo-mc cuas layered --outer rf_gnss_jammer --fo-frac 0.30
 ammo-mc cuas unified-raid --terrain rolling_hills_fob --drones 12
 ammo-mc cuas sweep --param speed --start 15 --stop 40 --steps 6
-ammo-mc cuas adversarial --generations 5 --episodes 18 --mount-limit-kn 3.5 --out-csv exports/adversarial_dataset.csv
+ammo-mc cuas adversarial --generations 5 --episodes 18 --hybrid --robust --out-csv exports/adversarial_dataset.csv
+ammo-mc cuas rl-policy --generations 10 --barrels 8 --hybrid
+ammo-mc cuas battlespace-ml --terrain rolling_hills_fob --generations 2
+ammo-mc cuas track-replay --scenario evasive_fpv_dive --barrels 6
+ammo-mc cuas swap-c --barrels 8 --layout concentric --out-dxf exports/muzzle_plate.dxf
+ammo-mc cuas wizard --drone fpv_quad_small --range-m 45 --mount light_ugv
 ammo-mc literature --workbench cuas
 
-# FastAPI REST server (/literature, /cuas/unified-raid, /cuas/briefing/pdf, /cuas/briefing/pptx, /calibrate/*, etc.)
+# FastAPI REST server (/literature, /cuas/unified-raid, /cuas/adversarial, /cuas/rl-policy, /cuas/battlespace-ml, /cuas/track-replay, /cuas/cad/dxf, /cuas/wizard, /cuas/duel)
 # Optional Bearer / X-API-Key guard: set AMMO_MC_API_REQUIRE_AUTH=true and AMMO_MC_PASSWORD=<secret>
 uvicorn ammo_mc.api:app --reload
 ```
@@ -114,14 +118,19 @@ GitHub Actions (`.github/workflows/ci.yml`) runs syntax verification and `pytest
 │   ├── cuas_defense.py         # 5-module C-UAS FCS, swarms, airburst, recoil & SDZ
 │   ├── cuas_mission.py         # Kill chain, site defense, 3D replay, logistics, JSON & HTML reports
 │   ├── cuas_analytics.py       # A/B comparator, layered defense, GeoJSON/KML & Tornado sensitivity
-│   ├── cuas_raid.py            # Unified Dynamic 3D Cooperative Multi-Turret Raid Simulator
-│   ├── cuas_adversarial.py     # Competing Monte Carlo Co-Evolution & Gaussian Process ML Protection Optimizer
+│   ├── cuas_raid.py            # Unified Dynamic 3D Cooperative Multi-Turret Raid Simulator (Heterogeneous & Layered)
+│   ├── cuas_adversarial.py     # Competing Monte Carlo Co-Evolution, Hybrid/Robust & GP ML Protection Optimizer
+│   ├── cuas_rl_policy.py       # Dynamic Shot-by-Shot Neural Fire-Control Policy (Antithetic ES Trainer)
+│   ├── cuas_battlespace_ml.py  # Multi-Turret 3D Battlespace & Mixed Swarm Co-Evolution Engine
+│   ├── cuas_track_replay.py    # Recorded ENU / GPS-MAVLink Drone-Track Engagement Replay Engine
+│   ├── cuas_hardware.py        # SWaP-C Estimator, On-the-Move Gyro Stabilization & DXF/SVG Muzzle CAD
+│   ├── cuas_wizard.py          # 3-Click Turret Sizing Wizard & Beat-the-AI Duel Root-Cause Diagnostics
 │   ├── calibration.py          # Field-Test Pattern, Chronograph & Exterior Drag Form-Factor Fitting
 │   ├── scenario_library.py     # SQLite Persistent Scenario Library (Save / Load / Diff / JSON Sync)
 │   ├── briefing_export.py      # Multi-Page Landscape PDF, Stage 1 Spec Sheet PDF & 16:9 PPTX Engine
 │   ├── small_arms_pkg/         # Modular small-arms, custom builders, range/speed envelopes (+ small_arms.py)
 │   ├── vis_3d_pkg/             # Modular 3D/2D WebGL Plotly builders (+ facade vis_3d.py)
-│   ├── vis_cuas*.py            # C-UAS mission, analytics, range/heatmap, raid, calibration & adversarial visualizations
+│   ├── vis_cuas*.py            # C-UAS mission, analytics, range/heatmap, raid, calibration, adversarial & advanced visualizations
 │   ├── streamlit_app.py        # Contextual 6-domain workbench router & URL deep-link entrypoint
 │   ├── ui/                     # Consolidated 6-domain workbench views with Focus Mode & @st.cache_data
 │   └── ...                     # Core Stages 0–8 ballistics, IATG, V&V certificates, API & CLI modules

@@ -549,6 +549,8 @@ def cmd_cuas_adversarial(
     mount_limit_kn: float = typer.Option(3.5, "--mount-limit-kn", help="Structural mount force limit in kN."),
     max_barrels: int = typer.Option(10, "--max-barrels", help="Maximum allowable shotgun barrels."),
     max_swarm: int = typer.Option(8, "--max-swarm", help="Maximum Red swarm size."),
+    hybrid: bool = typer.Option(False, "--hybrid", help="Enable hybrid mixed-load inner/outer barrel search."),
+    robust: bool = typer.Option(False, "--robust", help="Enable CVaR-20% calibrated/OTM robust optimization."),
     out_csv: Optional[Path] = typer.Option(None, "--out-csv", help="Optional CSV export path for evaluated matchup dataset."),
     seed: int = typer.Option(42, "--seed", help="Random seed for reproducibility."),
     as_json: bool = typer.Option(False, "--json", help="Output complete co-evolution result as JSON."),
@@ -566,6 +568,8 @@ def cmd_cuas_adversarial(
         max_barrels=max_barrels,
         max_swarm_size=max_swarm,
         seed=seed,
+        allow_hybrid=hybrid,
+        robust_uncertainty_mode=robust,
     )
     if out_csv:
         out_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -588,6 +592,182 @@ def cmd_cuas_adversarial(
         f"  Best Evolved Blue Turret   : {b['n_barrels']}B {b['layout']} ({b['ammo']}, {b['choke']}, splay={b['splay_angle_deg']} deg, ripple={b['ripple_delay_ms']}ms)\n"
         f"  Deadliest Red Threat       : {r['drone_model']} (swarm={r['swarm_size']}, tactic={r['tactic']}, {r['maneuver_g']}G {r['evasion']})"
     )
+
+
+@cuas_app.command("rl-policy")
+def cmd_cuas_rl_policy(
+    generations: int = typer.Option(10, "--generations", "-g", help="Evolution Strategies training generations."),
+    episodes: int = typer.Option(12, "--episodes", "-e", help="Benchmark episodes per threat scenario."),
+    barrels: int = typer.Option(8, "--barrels", "-b", help="Turret barrel count."),
+    hybrid: bool = typer.Option(True, "--hybrid/--no-hybrid", help="Enable dual-ring hybrid loadouts."),
+    seed: int = typer.Option(42, "--seed", help="Random seed."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON training report."),
+) -> None:
+    """Train Dynamic Shot-by-Shot Neural Fire-Control Policy and benchmark against heuristics."""
+    from ammo_mc.cuas_rl_policy import train_fire_control_policy_es
+
+    res = train_fire_control_policy_es(
+        blue_config={
+            "layout_type": "concentric" if hybrid else "circular",
+            "n_barrels": barrels,
+            "barrels_per_burst": min(barrels, 3),
+            "hybrid_mode": hybrid,
+        },
+        n_generations=generations,
+        pop_size=12,
+        n_eval_episodes=episodes,
+        seed=seed,
+    )
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    sm = res["summary"]
+    typer.echo(
+        f"RL Fire-Control Training Complete ({generations} gen):\n"
+        f"  RL Zero-Breach : {sm['rl_zero_breach_pct']:.1f}% ({sm['uplift_zero_breach_pp']:+.1f} pp vs {sm['best_heuristic_name']})\n"
+        f"  RL Rounds/Kill : {sm['rl_mean_rounds_per_kill']:.2f} ({sm['rounds_saved_pct']:+.1f}% saved) | Avg Burst: {sm['rl_mean_burst_size']:.2f}"
+    )
+
+
+@cuas_app.command("battlespace-ml")
+def cmd_cuas_battlespace_ml(
+    terrain: str = typer.Option("rolling_hills_fob", "--terrain", help="DEM terrain preset."),
+    generations: int = typer.Option(2, "--generations", "-g", help="Battlespace co-evolution generations."),
+    trials: int = typer.Option(4, "--trials", "-n", help="Raid MC trials per evaluation."),
+    turrets: int = typer.Option(4, "--turrets", help="Max turrets per site."),
+    seed: int = typer.Option(42, "--seed", help="Random seed."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON battlespace Nash results."),
+) -> None:
+    """Co-evolve multi-turret 3D battlespace architectures against heterogeneous Red swarm packages."""
+    from ammo_mc.cuas_battlespace_ml import run_battlespace_coevolution_mc
+
+    res = run_battlespace_coevolution_mc(
+        terrain_preset=terrain,
+        n_generations=generations,
+        n_mc_trials=trials,
+        max_turrets=turrets,
+        seed=seed,
+    )
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    sm = res["summary"]
+    typer.echo(
+        f"3D Battlespace Co-Evolution Complete [{terrain}]:\n"
+        f"  Nash Game Value V*  : {sm['nash_value']:.2f}\n"
+        f"  Best Site + Layer   : {sm['best_blue_name']} ({sm['best_outer_layer']})\n"
+        f"  Deadliest Red Pkg   : {sm['deadliest_red_name']}"
+    )
+
+
+@cuas_app.command("track-replay")
+def cmd_cuas_track_replay(
+    csv_path: Optional[Path] = typer.Option(None, "--csv", help="Recorded ENU/GPS drone track CSV path."),
+    scenario: str = typer.Option("evasive_fpv_dive", "--scenario", help="Sample scenario if --csv omitted."),
+    barrels: int = typer.Option(6, "--barrels", "-b", help="Turret barrel count."),
+    breach_r: float = typer.Option(12.0, "--breach-r", help="Keepout breach radius (m)."),
+    trials: int = typer.Option(25, "--trials", "-n", help="MC replay episodes."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON replay summary."),
+) -> None:
+    """Replay recorded drone flight tracks (CSV/MAVLink) against a calibrated shotgun turret."""
+    from ammo_mc.cuas_track_replay import (
+        generate_sample_drone_track_csv,
+        simulate_recorded_track_engagement_mc,
+    )
+
+    csv_txt = csv_path.read_text(encoding="utf-8") if csv_path else generate_sample_drone_track_csv(scenario=scenario)
+    res = simulate_recorded_track_engagement_mc(
+        csv_txt,
+        turret_config={"n_barrels": barrels},
+        breach_radius_m=breach_r,
+        n_mc_trials=trials,
+    )
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    sm = res["summary"]
+    typer.echo(
+        f"Recorded Track Replay ({sm['n_tracks']} tracks, {sm['coord_mode']}): "
+        f"Zero-Breach={sm['zero_breach_pct']:.1f}% | Kill-Rate={sm['mean_kill_rate_pct']:.1f}% | Peak G={sm['peak_lat_g']:.2f}G"
+    )
+
+
+@cuas_app.command("swap-c")
+def cmd_cuas_swap_c(
+    barrels: int = typer.Option(6, "--barrels", "-b", help="Number of barrels."),
+    layout: str = typer.Option("circular", "--layout", help="Muzzle layout geometry."),
+    ammo: str = typer.Option("12G_NO4_BUCK_C_UAS", "--ammo", help="Ammunition preset."),
+    choke: str = typer.Option("Modified", "--choke", help="Default choke."),
+    pointing: str = typer.Option("convergent", "--pointing", help="Pointing mode."),
+    splay_mrad: float = typer.Option(0.0, "--splay-mrad", help="Curtain splay angle in mrad."),
+    out_dxf: Optional[Path] = typer.Option(None, "--out-dxf", help="Write parametric AutoCAD DXF drawing."),
+    out_svg: Optional[Path] = typer.Option(None, "--out-svg", help="Write parametric blueprint SVG."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON SWaP-C breakdown."),
+) -> None:
+    """Compute turret SWaP-C mass/power/BOM budget and export parametric 2D muzzle-plate CAD."""
+    from ammo_mc.cuas_hardware import (
+        estimate_turret_swap_c,
+        export_muzzle_plate_dxf,
+        export_muzzle_plate_svg,
+    )
+    from ammo_mc.small_arms import generate_multishotgun_array_layout
+
+    res = estimate_turret_swap_c(n_barrels=barrels, layout_type=layout, ammunition_preset=ammo)
+    bbls = generate_multishotgun_array_layout(
+        layout_type=layout, n_barrels=barrels, default_choke=choke, default_ammunition_preset=ammo
+    )
+    if out_dxf:
+        out_dxf.parent.mkdir(parents=True, exist_ok=True)
+        out_dxf.write_text(
+            export_muzzle_plate_dxf(bbls, layout_type=layout, splay_angle_mrad=splay_mrad, pointing_mode=pointing),
+            encoding="utf-8",
+        )
+        typer.echo(f"Wrote AutoCAD DXF to {out_dxf}")
+    if out_svg:
+        out_svg.parent.mkdir(parents=True, exist_ok=True)
+        out_svg.write_text(
+            export_muzzle_plate_svg(bbls, layout_type=layout, splay_angle_mrad=splay_mrad, pointing_mode=pointing),
+            encoding="utf-8",
+        )
+        typer.echo(f"Wrote SVG blueprint to {out_svg}")
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    sm = res["summary"]
+    typer.echo(
+        f"SWaP-C [{barrels}B {layout}]: Mass={sm['total_mass_kg']:.1f} kg | Power={sm['peak_power_w']:.0f} W | "
+        f"Recoil={sm['peak_recoil_force_kn']:.2f} kN | BOM=${sm['unit_bom_usd']:,.0f} | Mount={sm['recommended_mount_class']}"
+    )
+
+
+@cuas_app.command("wizard")
+def cmd_cuas_wizard(
+    drone: str = typer.Option("fpv_quad_small", "--drone", help="Target drone model."),
+    speed: float = typer.Option(25.0, "--speed", help="Threat speed (m/s)."),
+    range_m: float = typer.Option(45.0, "--range-m", help="Required intercept range (m)."),
+    mount: str = typer.Option("light_ugv", "--mount", help="Mount class constraint."),
+    priority: str = typer.Option("balanced", "--priority", help="Ranking priority (balanced|low_cost|max_lethality)."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON wizard ranking."),
+) -> None:
+    """Size and rank Top 3 feasible C-UAS multi-barrel turret configs from mission inputs."""
+    from ammo_mc.cuas_wizard import run_turret_sizing_wizard
+
+    res = run_turret_sizing_wizard(
+        drone_model=drone,
+        threat_speed_mps=speed,
+        required_range_m=range_m,
+        mount_class=mount,
+        budget_priority=priority,
+    )
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    typer.echo(f"Turret Sizing Wizard ({drone} @ {range_m:.0f}m, {mount}):")
+    for idx, row in enumerate(res["top_3"], start=1):
+        typer.echo(
+            f"  #{idx} {row['name']}: Pk={row['pk_at_range_pct']:.1f}% | R80={row['r80_m']:.0f}m | "
+            f"{row['mass_kg']:.1f}kg | {row['peak_recoil_kn']:.2f}kN | $/Kill=${row['cost_per_kill_usd']:.2f}"
+        )
 
 
 @app.command("literature")

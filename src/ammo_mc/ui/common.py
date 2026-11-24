@@ -1086,6 +1086,8 @@ def _cached_unified_raid(
     weapon_max_range_m: float,
     n_mc_trials: int = 30,
     seed: int = 42,
+    swarm_package_json: str = "",
+    outer_layer_type: str = "none",
 ) -> dict[str, Any]:
     from ammo_mc.cuas_raid import simulate_unified_tactical_raid_mc
     from ammo_mc.terrain_dem import TerrainDEMGrid
@@ -1113,6 +1115,8 @@ def _cached_unified_raid(
         weapon_max_range_m=weapon_max_range_m,
         n_mc_trials=n_mc_trials,
         seed=seed,
+        swarm_package=json.loads(swarm_package_json) if swarm_package_json else None,
+        outer_layer_type=outer_layer_type,
     )
 
 
@@ -1129,10 +1133,14 @@ def _cached_adversarial_coevolution(
     cost_penalty_weight: float,
     stage1_profile_json: str = "",
     seed: int = 42,
+    allow_hybrid: bool = False,
+    robust_uncertainty_mode: bool = False,
+    calibration_profile_json: str = "",
 ) -> dict[str, Any]:
     from ammo_mc.cuas_adversarial import run_adversarial_coevolution_ml
 
     stage1_profile = json.loads(stage1_profile_json) if stage1_profile_json else None
+    cal_profile = json.loads(calibration_profile_json) if calibration_profile_json else None
     return run_adversarial_coevolution_ml(
         n_generations=n_generations,
         n_mc_episodes=n_mc_episodes,
@@ -1145,6 +1153,113 @@ def _cached_adversarial_coevolution(
         cost_penalty_weight=cost_penalty_weight,
         stage1_profile=stage1_profile,
         seed=seed,
+        allow_hybrid=allow_hybrid,
+        robust_uncertainty_mode=robust_uncertainty_mode,
+        calibration_profile=cal_profile,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_turret_sizing_wizard(
+    drone_model: str,
+    threat_speed_mps: float,
+    required_range_m: float,
+    mount_class: str,
+    budget_priority: str = "balanced",
+    seed: int = 42,
+) -> dict[str, Any]:
+    from ammo_mc.cuas_wizard import run_turret_sizing_wizard
+
+    return run_turret_sizing_wizard(
+        drone_model=drone_model,
+        threat_speed_mps=threat_speed_mps,
+        required_range_m=required_range_m,
+        mount_class=mount_class,
+        budget_priority=budget_priority,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_train_rl_policy(
+    blue_config_json: str,
+    n_generations: int,
+    pop_size: int,
+    n_eval_episodes: int,
+    seed: int = 42,
+) -> dict[str, Any]:
+    from ammo_mc.cuas_rl_policy import train_fire_control_policy_es
+
+    blue_cfg = json.loads(blue_config_json) if blue_config_json else None
+    return train_fire_control_policy_es(
+        blue_config=blue_cfg,
+        n_generations=n_generations,
+        pop_size=pop_size,
+        n_eval_episodes=n_eval_episodes,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_battlespace_coevolution(
+    terrain_preset: str,
+    n_generations: int,
+    n_mc_trials: int,
+    max_turrets: int,
+    seed: int = 42,
+) -> dict[str, Any]:
+    from ammo_mc.cuas_battlespace_ml import run_battlespace_coevolution_mc
+
+    return run_battlespace_coevolution_mc(
+        terrain_preset=terrain_preset,
+        n_generations=n_generations,
+        n_mc_trials=n_mc_trials,
+        max_turrets=max_turrets,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_recorded_track_replay(
+    csv_text: str,
+    turret_config_json: str,
+    calibration_profile_json: str,
+    breach_radius_m: float,
+    n_mc_trials: int = 40,
+    seed: int = 42,
+) -> dict[str, Any]:
+    from ammo_mc.cuas_track_replay import simulate_recorded_track_engagement_mc
+
+    return simulate_recorded_track_engagement_mc(
+        csv_text_or_parsed=csv_text,
+        turret_config=json.loads(turret_config_json) if turret_config_json else None,
+        calibration_profile=json.loads(calibration_profile_json) if calibration_profile_json else None,
+        breach_radius_m=breach_radius_m,
+        n_mc_trials=n_mc_trials,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_otm_stabilization(
+    turret_config_json: str,
+    carrier_profile: str,
+    gyro_grade: str,
+    weather: str,
+    ambient_temp_c: float,
+    crosswind_mps: float,
+    drone_model: str,
+) -> dict[str, Any]:
+    from ammo_mc.cuas_hardware import evaluate_otm_stabilization_degradation
+
+    return evaluate_otm_stabilization_degradation(
+        turret_config=json.loads(turret_config_json) if turret_config_json else None,
+        carrier_profile=carrier_profile,
+        gyro_grade=gyro_grade,
+        weather=weather,
+        ambient_temp_c=ambient_temp_c,
+        crosswind_mps=crosswind_mps,
+        drone_model=drone_model,
     )
 
 
