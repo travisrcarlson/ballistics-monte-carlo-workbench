@@ -542,6 +542,54 @@ def cmd_cuas_unified_raid(
     )
 
 
+@cuas_app.command("adversarial")
+def cmd_cuas_adversarial(
+    generations: int = typer.Option(5, "--generations", "-g", help="Number of co-evolution generations."),
+    episodes: int = typer.Option(18, "--episodes", "-e", help="MC episodes per Red-vs-Blue matchup."),
+    mount_limit_kn: float = typer.Option(3.5, "--mount-limit-kn", help="Structural mount force limit in kN."),
+    max_barrels: int = typer.Option(10, "--max-barrels", help="Maximum allowable shotgun barrels."),
+    max_swarm: int = typer.Option(8, "--max-swarm", help="Maximum Red swarm size."),
+    out_csv: Optional[Path] = typer.Option(None, "--out-csv", help="Optional CSV export path for evaluated matchup dataset."),
+    seed: int = typer.Option(42, "--seed", help="Random seed for reproducibility."),
+    as_json: bool = typer.Option(False, "--json", help="Output complete co-evolution result as JSON."),
+) -> None:
+    """Run Adversarial Red-vs-Blue Competing Monte Carlo co-evolution & GP ML protection optimizer."""
+    from ammo_mc.cuas_adversarial import (
+        export_adversarial_dataset_csv,
+        run_adversarial_coevolution_ml,
+    )
+
+    res = run_adversarial_coevolution_ml(
+        n_generations=generations,
+        n_mc_episodes=episodes,
+        mount_load_limit_kn=mount_limit_kn,
+        max_barrels=max_barrels,
+        max_swarm_size=max_swarm,
+        seed=seed,
+    )
+    if out_csv:
+        out_csv.parent.mkdir(parents=True, exist_ok=True)
+        csv_data = export_adversarial_dataset_csv(res)
+        out_csv.write_text(csv_data, encoding="utf-8")
+        typer.echo(f"Exported adversarial dataset ({res['matchups_evaluated']} matchups) to {out_csv}")
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+
+    b = res["best_blue_config"]
+    r = res["deadliest_red_threat"]
+    wc = res["worst_case_defense_gain"]
+    diag = res["gp_surrogate_diagnostics"]
+    typer.echo(
+        f"Adversarial Co-Evolution Complete ({res['matchups_evaluated']} matchups, {generations} gen):\n"
+        f"  Nash Game Value V*         : {res['nash_value']:.2f} (Floor)\n"
+        f"  Evolved Worst-Case Defense : {wc['evolved_worst_case']:.1f}% (+{wc['worst_case_gain_pct']:.1f}% vs Gen 0)\n"
+        f"  GP Surrogate 5-Fold OOF    : R2={diag['cv_r2']:.3f} | RMSE={diag['cv_rmse']:.2f}\n"
+        f"  Best Evolved Blue Turret   : {b['n_barrels']}B {b['layout']} ({b['ammo']}, {b['choke']}, splay={b['splay_angle_deg']} deg, ripple={b['ripple_delay_ms']}ms)\n"
+        f"  Deadliest Red Threat       : {r['drone_model']} (swarm={r['swarm_size']}, tactic={r['tactic']}, {r['maneuver_g']}G {r['evasion']})"
+    )
+
+
 @app.command("literature")
 def cmd_literature(
     query: str = typer.Option("", "--query", "-q", help="Filter sources by keyword, author, DOI, or formula."),

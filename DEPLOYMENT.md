@@ -32,6 +32,7 @@ Share direct links into any consolidated workbench or C-UAS stage module via que
 - `?wb=cuas&mod=site_defense` — Custom Site Builder, DEM LOS Masking & Real-World OSM GIS Map
 - `?wb=cuas&mod=comparator` — A/B Turret Architecture Comparator & Layered Defense
 - `?wb=cuas&mod=sensitivity` — Automated OAT Sensitivity & Bottleneck Tornado
+- `?wb=cuas&mod=adversarial` — Stage 4 Adversarial Red-vs-Blue Competing Monte Carlo Co-Evolution & GP ML Protection Optimizer
 - `?wb=sim` / `?wb=3d` / `?wb=firing` — Ballistics & 3D Trajectory Simulation Domain
 - `?wb=physics` / `?wb=mcdrag` — Physics & Aero Labs + McCoy MCDRAG 3D CAD
 - `?wb=iatg` — UNODA IATG 01.80 / 02.20 Safety & Quantity-Distance Workbench

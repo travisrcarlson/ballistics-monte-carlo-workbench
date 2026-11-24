@@ -79,7 +79,7 @@ _WORKBENCH_SLUGS: dict[str, str] = {
 }
 
 _CUAS_SUITES = [
-    "C-UAS Turret Suite (13 Modules)",
+    "C-UAS Turret Suite (14 Modules)",
     "Small Arms & Multi-Barrel Array (5 Modes)",
 ]
 
@@ -97,6 +97,7 @@ _CUAS18_MODULES = [
     "📊 11. Sensitivity & Bottleneck Tornado",
     "⚔️ 12. Unified 3D Tactical Raid Simulator",
     "🧪 13. Field-Test Calibration & Residuals",
+    "🤖 14. Adversarial Red-vs-Blue ML Optimizer",
 ]
 
 _CUAS_MOD_SLUGS: dict[str, str] = {
@@ -113,6 +114,7 @@ _CUAS_MOD_SLUGS: dict[str, str] = {
     _CUAS18_MODULES[10]: "sensitivity",
     _CUAS18_MODULES[11]: "raid",
     _CUAS18_MODULES[12]: "calibration",
+    _CUAS18_MODULES[13]: "adversarial",
 }
 _SLUG_TO_CUAS_MOD: dict[str, str] = {v: k for k, v in _CUAS_MOD_SLUGS.items()}
 
@@ -157,6 +159,7 @@ _CUAS_STAGE_TOOLS: dict[str, list[str]] = {
         "Sensitivity & Bottleneck Tornado",
         "Logistics, Heat, $/Kill & Report",
         "Field-Test Calibration & Residuals",
+        "Adversarial Red-vs-Blue ML Optimizer",
     ],
 }
 
@@ -180,6 +183,7 @@ _CUAS_TOOL_TO_INTERNAL: dict[str, tuple[str, str, str]] = {
     "Sensitivity & Bottleneck Tornado": (_CUAS_SUITES[0], _CUAS18_MODULES[10], "sensitivity"),
     "Unified 3D Tactical Raid Simulator": (_CUAS_SUITES[0], _CUAS18_MODULES[11], "raid"),
     "Field-Test Calibration & Residuals": (_CUAS_SUITES[0], _CUAS18_MODULES[12], "calibration"),
+    "Adversarial Red-vs-Blue ML Optimizer": (_CUAS_SUITES[0], _CUAS18_MODULES[13], "adversarial"),
 }
 
 _CUAS_SLUG_TO_STAGE_TOOL: dict[str, tuple[str, str]] = {}
@@ -1108,6 +1112,38 @@ def _cached_unified_raid(
         magazine_type=magazine_type,
         weapon_max_range_m=weapon_max_range_m,
         n_mc_trials=n_mc_trials,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_adversarial_coevolution(
+    n_generations: int,
+    n_mc_episodes: int,
+    mount_load_limit_kn: float,
+    max_barrels: int,
+    max_swarm_size: int,
+    exploration_beta: float,
+    w_zero_breach: float,
+    w_kill_rate: float,
+    cost_penalty_weight: float,
+    stage1_profile_json: str = "",
+    seed: int = 42,
+) -> dict[str, Any]:
+    from ammo_mc.cuas_adversarial import run_adversarial_coevolution_ml
+
+    stage1_profile = json.loads(stage1_profile_json) if stage1_profile_json else None
+    return run_adversarial_coevolution_ml(
+        n_generations=n_generations,
+        n_mc_episodes=n_mc_episodes,
+        mount_load_limit_kn=mount_load_limit_kn,
+        max_barrels=max_barrels,
+        max_swarm_size=max_swarm_size,
+        exploration_beta=exploration_beta,
+        w_zero_breach=w_zero_breach,
+        w_kill_rate=w_kill_rate,
+        cost_penalty_weight=cost_penalty_weight,
+        stage1_profile=stage1_profile,
         seed=seed,
     )
 

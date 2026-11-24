@@ -97,6 +97,21 @@ def tab_home() -> None:
                 width="stretch",
                 key="home_card_comp",
             )
+            b5, b6 = st.columns(2)
+            b5.button(
+                "Unified 3D Tactical Raid",
+                on_click=_navigate_to,
+                args=("cuas", None, "raid"),
+                width="stretch",
+                key="home_card_raid",
+            )
+            b6.button(
+                "🤖 Adversarial ML Optimizer",
+                on_click=_navigate_to,
+                args=("cuas", None, "adversarial"),
+                width="stretch",
+                key="home_card_adversarial",
+            )
 
     with row1_c2:
         with st.container(border=True):

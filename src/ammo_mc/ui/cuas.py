@@ -285,6 +285,16 @@ from ammo_mc.briefing_export import (
     generate_executive_briefing_pptx,
 )
 from ammo_mc.scenario_library import ScenarioLibrary
+from ammo_mc.cuas_adversarial import (
+    export_adversarial_dataset_csv,
+    recommend_ml_defense_policy,
+)
+from ammo_mc.vis_cuas_adversarial import (
+    create_coevolution_trajectory_figure,
+    create_ml_feature_importance_figure,
+    create_ml_policy_pareto_figure,
+    create_nash_payoff_heatmap_figure,
+)
 
 
 from ammo_mc.ui.common import (
@@ -297,6 +307,7 @@ from ammo_mc.ui.common import (
     _PHYSICS_LABS,
     _SMALL_ARMS_MODES,
     _WORKBENCH_OPTIONS,
+    _cached_adversarial_coevolution,
     _cached_antidrone_array_mc,
     _cached_antidrone_range_envelope,
     _cached_antidrone_range_speed_heatmap,
@@ -3667,3 +3678,313 @@ def tab_cuas_and_small_arms() -> None:
                         st.success(f"Applied calibrated form factor i={dg_res['calibrated_form_factor']:.4f} for `{dg_preset}`!")
                 except Exception as exc:
                     st.error(f"Exterior drag calibration error: {exc}")
+
+        # --- TAB 18.14: ADVERSARIAL RED-VS-BLUE COMPETING MONTE CARLO & GP ML OPTIMIZER ---
+        elif active_cuas_mod == _CUAS18_MODULES[13]:
+            st.markdown("#### 🤖 Adversarial Red-vs-Blue Competing Monte Carlo & GP ML Protection Optimizer")
+            st.caption(
+                "Co-evolve adversarial drone threats (Red: kinematics, maneuver-g, stealth, tactics) against multi-barrel shotgun platforms "
+                "(Blue: barrel count, choke, layout, ripple timing, pointing mode, ammunition) using Gaussian Process Bayesian surrogate modeling and exact Nash equilibrium game theory."
+            )
+
+            # Top controls row
+            c_gen, c_mc, c_mt, c_bar, c_sw = st.columns(5)
+            with c_gen:
+                n_generations = st.slider("Co-Evolution Generations", min_value=3, max_value=8, value=5, step=1, key="cuas_adv_ngen")
+            with c_mc:
+                n_mc_episodes = st.slider("MC Episodes / Matchup", min_value=10, max_value=30, value=18, step=2, key="cuas_adv_nmc")
+            with c_mt:
+                mount_load_limit_kn = st.slider("Mount Limit (kN)", min_value=1.5, max_value=8.0, value=3.5, step=0.5, key="cuas_adv_mount_lim")
+            with c_bar:
+                max_barrels = st.slider("Max Barrels Allowed", min_value=4, max_value=12, value=10, step=1, key="cuas_adv_max_barrels")
+            with c_sw:
+                max_swarm_size = st.slider("Max Swarm Size (Red)", min_value=2, max_value=10, value=8, step=1, key="cuas_adv_max_swarm")
+
+            seed_s1 = st.checkbox("Seed Initial Generation with Stage 1 Active Profile", value=True, key="cuas_adv_seed_s1")
+
+            # Expert Mode Expander
+            exp_beta = 1.5
+            w_zb = 0.40
+            w_kr = 0.40
+            w_cost = 0.20
+            seed_val = 42
+            if is_expert_mode():
+                with st.expander("🛠️ Advanced Co-Evolution & GP Surrogate Hyperparameters", expanded=False):
+                    xc1, xc2, xc3, xc4, xc5 = st.columns(5)
+                    with xc1:
+                        exp_beta = st.slider("Exploration Bonus (β)", 0.5, 3.0, 1.5, 0.1, key="cuas_adv_beta")
+                    with xc2:
+                        w_zb = st.slider("Zero-Breach Weight", 0.1, 0.8, 0.40, 0.05, key="cuas_adv_w_zb")
+                    with xc3:
+                        w_kr = st.slider("Kill-Rate Weight", 0.1, 0.8, 0.40, 0.05, key="cuas_adv_w_kr")
+                    with xc4:
+                        w_cost = st.slider("Cost/Barrel Penalty Weight", 0.0, 0.5, 0.20, 0.05, key="cuas_adv_w_cost")
+                    with xc5:
+                        seed_val = st.number_input("RNG Seed", 0, 999999, 42, 1, key="cuas_adv_seed")
+
+            prof_json = ""
+            if seed_s1 and st.session_state.get("_active_cuas_profile"):
+                prof_json = json.dumps(st.session_state["_active_cuas_profile"])
+
+            with st.spinner("Executing Adversarial Competing Monte Carlo Co-Evolution & Fitting GP Surrogate..."):
+                try:
+                    adv_res = _cached_adversarial_coevolution(
+                        n_generations=int(n_generations),
+                        n_mc_episodes=int(n_mc_episodes),
+                        mount_load_limit_kn=float(mount_load_limit_kn),
+                        max_barrels=int(max_barrels),
+                        max_swarm_size=int(max_swarm_size),
+                        exploration_beta=float(exp_beta),
+                        w_zero_breach=float(w_zb),
+                        w_kill_rate=float(w_kr),
+                        cost_penalty_weight=float(w_cost),
+                        stage1_profile_json=prof_json,
+                        seed=int(seed_val),
+                    )
+                except Exception as exc:
+                    st.error(f"Adversarial co-evolution simulation error: {exc}")
+                    adv_res = None
+
+            if adv_res is not None:
+                # 4-metric scorecard
+                sm1, sm2, sm3, sm4 = st.columns(4)
+                with sm1:
+                    sm1.metric(
+                        "Nash Defense Floor (V*)",
+                        f"{adv_res['nash_value']:.2f}",
+                        delta="Minimax Guaranteed Score",
+                    )
+                with sm2:
+                    wc_gain = adv_res["worst_case_defense_gain"]
+                    sm2.metric(
+                        "Evolved Worst-Case Defense",
+                        f"{wc_gain['evolved_worst_case']:.1f}%",
+                        delta=f"+{wc_gain['worst_case_gain_pct']:.1f}% vs Gen 0",
+                    )
+                with sm3:
+                    diag = adv_res["gp_surrogate_diagnostics"]
+                    sm3.metric(
+                        "GP Surrogate CV R²",
+                        f"{diag['cv_r2']:.3f}",
+                        delta=f"RMSE={diag['cv_rmse']:.2f} (5-Fold OOF)",
+                    )
+                with sm4:
+                    sm4.metric(
+                        "Evaluated Matchups",
+                        f"{adv_res['matchups_evaluated']}",
+                        delta=f"{adv_res['n_blue_pool']} Blue × {adv_res['n_red_pool']} Red",
+                    )
+
+                # 1-Click Action to apply best Blue to Stage 1
+                best_blue = adv_res["best_blue_config"]
+                act_col1, act_col2 = st.columns([3.2, 1.4])
+                with act_col1:
+                    act_col1.info(
+                        f"🏆 **ML-Evolved Defense Policy**: {best_blue['n_barrels']}× Barrels ({best_blue['layout']}), "
+                        f"Ammo: `{best_blue['ammo']}`, Choke: `{best_blue['choke']}`, "
+                        f"Splay: {best_blue['splay_angle_deg']}° ({best_blue['pointing']}), "
+                        f"Ripple: {best_blue['ripple_delay_ms']} ms ({best_blue['firing_mode']})"
+                    )
+                with act_col2:
+                    if act_col2.button(
+                        "⚡ Apply ML Turret to Stage 1",
+                        type="primary",
+                        key="cuas_adv_apply_to_s1_btn",
+                        help="Copy the evolved robust Blue configuration to Stage 1 active array setup",
+                    ):
+                        st.session_state["cuas_layout"] = str(best_blue["layout"])
+                        st.session_state["cuas_n_barrels"] = int(best_blue["n_barrels"])
+                        st.session_state["cuas_ammo"] = str(best_blue["ammo"])
+                        st.session_state["cuas_choke"] = str(best_blue["choke"])
+                        st.session_state["cuas_pointing"] = str(best_blue["pointing"])
+                        st.session_state["cuas_splay"] = float(best_blue["splay_angle_deg"])
+                        st.session_state["cuas_fire_mode"] = str(best_blue["firing_mode"])
+                        st.session_state["cuas_ripple_dt"] = float(best_blue["ripple_delay_ms"])
+                        st.session_state["_active_cuas_profile"] = {
+                            "label": f"ML-Optimized {best_blue['n_barrels']}B {best_blue['layout'].title()}",
+                            "layout_type": best_blue["layout"],
+                            "n_barrels": int(best_blue["n_barrels"]),
+                            "ammunition_preset": best_blue["ammo"],
+                            "choke": best_blue["choke"],
+                            "pointing_mode": best_blue["pointing"],
+                            "splay_angle_deg": float(best_blue["splay_angle_deg"]),
+                            "firing_mode": best_blue["firing_mode"],
+                            "ripple_delay_ms": float(best_blue["ripple_delay_ms"]),
+                            "burst_count": int(best_blue.get("burst_count", 1)),
+                        }
+                        st.success("Successfully applied ML-optimized turret platform to Stage 1 Array Setup!")
+
+                # 4 Visualizer Sub-Tabs
+                adv_tab1, adv_tab2, adv_tab3, adv_tab4 = st.tabs([
+                    "📈 Arms-Race & GP Convergence",
+                    "🎯 Red-vs-Blue Payoff Matrix (Nash)",
+                    "🔬 ML Feature Importance & Dataset",
+                    "🛡️ Live Threat Defense Recommender",
+                ])
+
+                with adv_tab1:
+                    st.plotly_chart(create_coevolution_trajectory_figure(adv_res), width="stretch")
+                    gh_df = pd.DataFrame(adv_res["generation_history"])
+                    st.markdown("##### Generational Convergence History")
+                    st.dataframe(gh_df, width="stretch")
+                    deadly_red = adv_res["deadliest_red_threat"]
+                    st.warning(
+                        f"🚨 **Deadliest Red Drone Threat Discovered**: {deadly_red['drone_model']} "
+                        f"(Swarm Size: {deadly_red['swarm_size']}, Tactic: `{deadly_red['tactic']}`, "
+                        f"Evasion: `{deadly_red['evasion']}` @ {deadly_red['maneuver_g']}G, "
+                        f"Speed: {deadly_red['speed_mps']} m/s, Altitude: {deadly_red['altitude_m']} m)"
+                    )
+
+                with adv_tab2:
+                    st.plotly_chart(create_nash_payoff_heatmap_figure(adv_res), width="stretch")
+                    np1, np2 = st.columns(2)
+                    with np1:
+                        st.markdown("##### Blue Nash Support Strategies (p > 0)")
+                        blue_nash_rows = []
+                        for i, p in enumerate(adv_res["nash_blue_strategy"]):
+                            if p > 0.005:
+                                b_cfg = adv_res["blue_pool"][i]
+                                blue_nash_rows.append({
+                                    "Strategy ID": f"Blue-{i}",
+                                    "Nash Weight p": round(float(p), 3),
+                                    "Barrels": b_cfg["n_barrels"],
+                                    "Layout": b_cfg["layout"],
+                                    "Ammo": b_cfg["ammo"],
+                                    "Choke": b_cfg["choke"],
+                                    "Pointing": b_cfg["pointing"],
+                                    "Ripple (ms)": b_cfg["ripple_delay_ms"],
+                                })
+                        st.dataframe(pd.DataFrame(blue_nash_rows), width="stretch")
+                    with np2:
+                        st.markdown("##### Red Nash Support Threats (q > 0)")
+                        red_nash_rows = []
+                        for j, q in enumerate(adv_res["nash_red_strategy"]):
+                            if q > 0.005:
+                                r_cfg = adv_res["red_pool"][j]
+                                red_nash_rows.append({
+                                    "Threat ID": f"Red-{j}",
+                                    "Nash Weight q": round(float(q), 3),
+                                    "Drone Model": r_cfg["drone_model"],
+                                    "Swarm Size": r_cfg["swarm_size"],
+                                    "Tactic": r_cfg["tactic"],
+                                    "Evasion": r_cfg["evasion"],
+                                    "Maneuver G": r_cfg["maneuver_g"],
+                                    "Speed (m/s)": r_cfg["speed_mps"],
+                                })
+                        st.dataframe(pd.DataFrame(red_nash_rows), width="stretch")
+
+                with adv_tab3:
+                    st.plotly_chart(create_ml_feature_importance_figure(adv_res), width="stretch")
+                    st.caption(
+                        "Permutation feature importance calculated on the Gaussian Process surrogate: "
+                        "drop in 5-fold cross-validation R² when shuffling each feature across the evaluated design space."
+                    )
+                    exp_c1, exp_c2 = st.columns(2)
+                    with exp_c1:
+                        csv_data = export_adversarial_dataset_csv(adv_res)
+                        st.download_button(
+                            "📥 Download Adversarial Dataset (.csv)",
+                            data=csv_data,
+                            file_name="cuas_adversarial_dataset.csv",
+                            mime="text/csv",
+                            width="stretch",
+                        )
+                    with exp_c2:
+                        st.download_button(
+                            "📥 Download Full Co-Evolution Report (.json)",
+                            data=json.dumps(adv_res, indent=2),
+                            file_name="cuas_adversarial_report.json",
+                            mime="application/json",
+                            width="stretch",
+                        )
+
+                with adv_tab4:
+                    st.markdown("##### 🎯 Targeted Threat Policy Optimization")
+                    st.caption(
+                        "Specify an adversarial drone raid scenario. The Gaussian Process surrogate searches candidate "
+                        "shotgun protection configurations and predicts the optimal Pareto defense policies."
+                    )
+                    tc1, tc2, tc3, tc4 = st.columns(4)
+                    with tc1:
+                        tr_model = st.selectbox("Threat Drone", list(drone_specs_18.keys()), index=1, key="cuas_adv_tr_model")
+                        tr_swarm = st.slider("Target Swarm Size", 1, 12, 5, 1, key="cuas_adv_tr_swarm")
+                    with tc2:
+                        tr_tactic = st.selectbox("Attack Tactic", ["simultaneous_divergent", "convergent_pincer", "staggered_trail", "low_altitude_terrain_mask"], index=0, key="cuas_adv_tr_tactic")
+                        tr_evasion = st.selectbox("Evasive Maneuver", ["weaving_jink", "barrel_roll", "random_walk", "corkscrew", "none"], index=0, key="cuas_adv_tr_evasion")
+                    with tc3:
+                        tr_g = st.slider("Maneuver Load (G)", 0.5, 5.0, 3.0, 0.5, key="cuas_adv_tr_g")
+                        tr_speed = st.slider("Threat Speed (m/s)", 15.0, 75.0, 35.0, 5.0, key="cuas_adv_tr_spd")
+                    with tc4:
+                        tr_range = st.slider("Engagement Range (m)", 15.0, 70.0, 35.0, 5.0, key="cuas_adv_tr_rng")
+                        tr_stealth = st.slider("Fiber-Optic Stealth", 0.0, 1.0, 0.2, 0.1, key="cuas_adv_tr_stealth")
+
+                    target_threat_dict = {
+                        "drone_model": tr_model,
+                        "swarm_size": int(tr_swarm),
+                        "tactic": tr_tactic,
+                        "evasion": tr_evasion,
+                        "maneuver_g": float(tr_g),
+                        "speed_mps": float(tr_speed),
+                        "altitude_m": 25.0,
+                        "range_m": float(tr_range),
+                        "stealth_level": float(tr_stealth),
+                    }
+
+                    rec_out = recommend_ml_defense_policy(
+                        coevolution_result=adv_res,
+                        target_threat=target_threat_dict,
+                        top_k=5,
+                        verify_with_mc=True,
+                    )
+
+                    st.plotly_chart(create_ml_policy_pareto_figure(rec_out), width="stretch")
+
+                    top_policies = rec_out["recommended_policies"]
+                    rec_rows = []
+                    for rank, pol in enumerate(top_policies, start=1):
+                        b_cfg = pol["blue_config"]
+                        mc_v = pol.get("mc_verified", {})
+                        rec_rows.append({
+                            "Rank": f"#{rank}",
+                            "Predicted Defense Score": f"{pol['predicted_defense_score']:.1f}",
+                            "Verified Kill Rate": f"{mc_v.get('kill_rate', 0.0) * 100:.1f}%",
+                            "Verified Zero Breach": f"{mc_v.get('zero_breach_rate', 0.0) * 100:.1f}%",
+                            "Peak Mount Load (kN)": f"{mc_v.get('peak_mount_load_kn', pol['predicted_mount_load_kn']):.2f}",
+                            "Barrels": b_cfg["n_barrels"],
+                            "Layout": b_cfg["layout"],
+                            "Ammunition": b_cfg["ammo"],
+                            "Choke": b_cfg["choke"],
+                            "Pointing": b_cfg["pointing"],
+                            "Splay (°)": b_cfg["splay_angle_deg"],
+                            "Ripple (ms)": b_cfg["ripple_delay_ms"],
+                        })
+                    st.dataframe(pd.DataFrame(rec_rows), width="stretch")
+
+                    if top_policies:
+                        p1 = top_policies[0]["blue_config"]
+                        if st.button(
+                            f"⚡ Apply Policy #1 ({p1['n_barrels']}B {p1['layout'].title()}) to Stage 1 Array",
+                            type="secondary",
+                            key="cuas_adv_apply_p1_btn",
+                        ):
+                            st.session_state["cuas_layout"] = str(p1["layout"])
+                            st.session_state["cuas_n_barrels"] = int(p1["n_barrels"])
+                            st.session_state["cuas_ammo"] = str(p1["ammo"])
+                            st.session_state["cuas_choke"] = str(p1["choke"])
+                            st.session_state["cuas_pointing"] = str(p1["pointing"])
+                            st.session_state["cuas_splay"] = float(p1["splay_angle_deg"])
+                            st.session_state["cuas_fire_mode"] = str(p1["firing_mode"])
+                            st.session_state["cuas_ripple_dt"] = float(p1["ripple_delay_ms"])
+                            st.session_state["_active_cuas_profile"] = {
+                                "label": f"ML Policy #1: {p1['n_barrels']}B {p1['layout'].title()}",
+                                "layout_type": p1["layout"],
+                                "n_barrels": int(p1["n_barrels"]),
+                                "ammunition_preset": p1["ammo"],
+                                "choke": p1["choke"],
+                                "pointing_mode": p1["pointing"],
+                                "splay_angle_deg": float(p1["splay_angle_deg"]),
+                                "firing_mode": p1["firing_mode"],
+                                "ripple_delay_ms": float(p1["ripple_delay_ms"]),
+                                "burst_count": int(p1.get("burst_count", 1)),
+                            }
+                            st.success(f"Applied Policy #1 ({p1['n_barrels']}B {p1['layout']}) to Stage 1 Array Setup!")

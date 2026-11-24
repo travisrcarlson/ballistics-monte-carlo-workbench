@@ -33,6 +33,7 @@ A physics-grounded stochastic Monte Carlo simulation engine and Streamlit workbe
   - **A/B Comparator, Layered Defense & Sensitivity Tornado (`?wb=cuas&mod=comparator`, `sensitivity`)**: Multi-criteria scorecard, paired Outer Soft/Hard-Kill vs Inner Multi-Shotgun waves, and one-at-a-time Tornado sweeps.
   - **Sustained Logistics, Scenario Library & Briefings (`.html`, `.pdf`, `.pptx`)**: Thermal cook-off margins, `$/Kill`, SQLite Scenario Library save/diff, multi-page PDF + 16:9 PowerPoint decks.
   - **Field-Test Calibration & Residual Diagnostics (`?wb=cuas&mod=calibration`)**: Upload range CSVs to fit Rayleigh shotgun pattern spread factors, chronograph MV & FM 6-40 $dMV/dT$, and exterior drag form factors via SciPy nonlinear least squares.
+  - **Adversarial Red-vs-Blue Competing Monte Carlo & GP ML Protection Optimizer (`?wb=cuas&mod=adversarial`)**: Co-evolve adversarial drone threats (Red: kinematics, maneuver-g, stealth, tactics) against multi-barrel shotgun platforms (Blue: barrel count, choke, layout, ripple timing, pointing mode, ammunition). Pure NumPy/SciPy Gaussian Process (Matérn-5/2 kernel) Bayesian surrogate with marginal likelihood hyperparameter tuning, 5-fold cross-validation ($R^2$, RMSE), permutation feature importance ranking, exact two-player zero-sum LP Nash equilibrium solver (`scipy.optimize.linprog`), real-time context-adaptive ML defense policy recommender, and CSV dataset export.
 
 ### 2. Multi-Stage Exterior, Interior & IATG Safety Engine (Dedicated Workbenches)
 - **Stages 0–8 Ballistics Pipeline**: Lumped-parameter STANAG 4367 interior ballistics, L0–L3 exterior trajectories (3-DoF + STANAG 4355 Modified Point Mass with spin/Coriolis drift + terrain), McCoy MCDRAG (Mach 0.5–5.0), fuze reliability & Beta epistemic UXO estimation, Kingery-Bulmash blast, Gurney/Mott fragmentation, Carleton SSPK, and two-loop epistemic/aleatory UQ (LHS, Sobol, MC).
@@ -72,6 +73,7 @@ ammo-mc cuas compare-ab --out-csv exports/scorecard.csv
 ammo-mc cuas layered --outer rf_gnss_jammer --fo-frac 0.30
 ammo-mc cuas unified-raid --terrain rolling_hills_fob --drones 12
 ammo-mc cuas sweep --param speed --start 15 --stop 40 --steps 6
+ammo-mc cuas adversarial --generations 5 --episodes 18 --mount-limit-kn 3.5 --out-csv exports/adversarial_dataset.csv
 ammo-mc literature --workbench cuas
 
 # FastAPI REST server (/literature, /cuas/unified-raid, /cuas/briefing/pdf, /cuas/briefing/pptx, /calibrate/*, etc.)
@@ -113,12 +115,13 @@ GitHub Actions (`.github/workflows/ci.yml`) runs syntax verification and `pytest
 │   ├── cuas_mission.py         # Kill chain, site defense, 3D replay, logistics, JSON & HTML reports
 │   ├── cuas_analytics.py       # A/B comparator, layered defense, GeoJSON/KML & Tornado sensitivity
 │   ├── cuas_raid.py            # Unified Dynamic 3D Cooperative Multi-Turret Raid Simulator
+│   ├── cuas_adversarial.py     # Competing Monte Carlo Co-Evolution & Gaussian Process ML Protection Optimizer
 │   ├── calibration.py          # Field-Test Pattern, Chronograph & Exterior Drag Form-Factor Fitting
 │   ├── scenario_library.py     # SQLite Persistent Scenario Library (Save / Load / Diff / JSON Sync)
 │   ├── briefing_export.py      # Multi-Page Landscape PDF, Stage 1 Spec Sheet PDF & 16:9 PPTX Engine
 │   ├── small_arms_pkg/         # Modular small-arms, custom builders, range/speed envelopes (+ small_arms.py)
 │   ├── vis_3d_pkg/             # Modular 3D/2D WebGL Plotly builders (+ facade vis_3d.py)
-│   ├── vis_cuas*.py            # C-UAS mission, analytics, range/heatmap, raid & calibration visualizations
+│   ├── vis_cuas*.py            # C-UAS mission, analytics, range/heatmap, raid, calibration & adversarial visualizations
 │   ├── streamlit_app.py        # Contextual 6-domain workbench router & URL deep-link entrypoint
 │   ├── ui/                     # Consolidated 6-domain workbench views with Focus Mode & @st.cache_data
 │   └── ...                     # Core Stages 0–8 ballistics, IATG, V&V certificates, API & CLI modules

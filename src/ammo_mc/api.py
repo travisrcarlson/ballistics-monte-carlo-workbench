@@ -22,6 +22,7 @@ from ammo_mc.calibration import (
     calibrate_drag_form_factor_from_csv,
     calibrate_shotgun_pattern_from_csv,
 )
+from ammo_mc.cuas_adversarial import run_adversarial_coevolution_ml
 from ammo_mc.cuas_analytics import (
     analyze_cuas_sensitivity_tornado,
     build_cuas_site_geojson,
@@ -447,6 +448,20 @@ class CuasSensitivityRequest(BaseModel):
     seed: int = 42
 
 
+class CuasAdversarialRequest(BaseModel):
+    n_generations: int = 5
+    n_mc_episodes: int = 18
+    mount_load_limit_kn: float = 3.5
+    max_barrels: int = 10
+    max_swarm_size: int = 8
+    exploration_beta: float = 1.5
+    w_zero_breach: float = 0.40
+    w_kill_rate: float = 0.40
+    cost_penalty_weight: float = 0.20
+    stage1_profile: Optional[dict[str, Any]] = None
+    seed: int = 42
+
+
 class CuasReportRequest(BaseModel):
     scenario_name: str = "Multi-Shotgun C-UAS Turret Engineering Trade Study"
     config: dict[str, Any] = Field(
@@ -583,6 +598,12 @@ def post_cuas_layered(req: CuasLayeredRequest) -> dict[str, Any]:
 def post_cuas_sensitivity(req: CuasSensitivityRequest) -> dict[str, Any]:
     """Run +/-% C-UAS Kill-Chain Tornado sensitivity & bottleneck ranking."""
     return _to_json_safe(analyze_cuas_sensitivity_tornado(**req.model_dump()))
+
+
+@app.post("/cuas/adversarial", tags=["C-UAS"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_adversarial(req: CuasAdversarialRequest) -> dict[str, Any]:
+    """Run Adversarial Red-vs-Blue Competing Monte Carlo co-evolution & GP ML protection optimizer."""
+    return _to_json_safe(run_adversarial_coevolution_ml(**req.model_dump()))
 
 
 class CalibratePatternRequest(BaseModel):

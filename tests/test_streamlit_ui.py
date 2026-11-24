@@ -43,6 +43,7 @@ def test_ui_password_gate_reject_and_unlock(monkeypatch: pytest.MonkeyPatch) -> 
         ("cuas", "sensitivity", "C-UAS & Multi-Barrel", "cuas_stage_tool", "Sensitivity & Bottleneck Tornado"),
         ("cuas", "raid", "C-UAS & Multi-Barrel", "cuas_stage_tool", "Unified 3D Tactical Raid Simulator"),
         ("cuas", "calibration", "C-UAS & Multi-Barrel", "cuas_stage_tool", "Field-Test Calibration & Residuals"),
+        ("cuas", "adversarial", "C-UAS & Multi-Barrel", "cuas_stage_tool", "Adversarial Red-vs-Blue ML Optimizer"),
         ("sim", None, "Ballistics & 3D Sim", "sim_active_subview", "Monte Carlo Pipeline"),
         ("3d", None, "Ballistics & 3D Sim", "sim_active_subview", "3D Trajectory Lab"),
         ("firing", None, "Ballistics & 3D Sim", "sim_active_subview", "Firing Tables & Met"),
@@ -127,3 +128,29 @@ def test_ui_stage1_custom_builders_and_profile_sync() -> None:
     assert at.session_state["cuas_stage_tool"] == "Elevated Fallout & Safety Zone (SDZ)"
     at.button(key="cuas_sync_btn_sdz").click().run()
     assert not at.exception
+
+
+def test_ui_cuas_adversarial_ml_tab_renders_and_syncs() -> None:
+    """Test deep-linking into Adversarial ML Optimizer tab and 1-click sync to Stage 1 array."""
+    at = AppTest.from_file(ROOT_APP, default_timeout=60)
+    at.session_state["authenticated"] = True
+    at.query_params["wb"] = "cuas"
+    at.query_params["mod"] = "adversarial"
+    at.run()
+    assert not at.exception
+    assert at.session_state["active_workbench"] == "C-UAS & Multi-Barrel"
+    assert at.session_state["cuas_stage"] == "4. Compare, Optimize & Calibrate"
+    assert at.session_state["cuas_stage_tool"] == "Adversarial Red-vs-Blue ML Optimizer"
+
+    # Verify key widgets render
+    assert at.slider(key="cuas_adv_ngen").value == 5
+    assert at.slider(key="cuas_adv_mount_lim").value == 3.5
+
+    # Test applying ML evolved turret to Stage 1
+    at.button(key="cuas_adv_apply_to_s1_btn").click().run()
+    assert not at.exception
+    assert "_active_cuas_profile" in at.session_state
+    prof = at.session_state["_active_cuas_profile"]
+    assert "n_barrels" in prof
+    assert "ammunition_preset" in prof
+
