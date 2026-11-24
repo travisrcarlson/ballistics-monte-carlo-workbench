@@ -23,32 +23,42 @@ def test_ui_password_gate_reject_and_unlock(monkeypatch: pytest.MonkeyPatch) -> 
     assert not at.session_state["authenticated"]
     assert len(at.error) >= 1
 
-    # Valid password unlocks into default Monte Carlo Simulator workbench
+    # Valid password unlocks into default Quick-Start Home in Standard mode
     at.text_input(key="auth_pw_field").set_value("ci-ui-pass")
     at.button[0].click().run()
     assert at.session_state["authenticated"] is True
     assert not at.exception
-    assert any("Monte Carlo Simulator" in r.value for r in at.radio)
+    assert at.session_state["active_workbench"] == "Home"
+    assert at.session_state["ui_expert_mode"] is False
 
 
 @pytest.mark.parametrize(
-    ("wb_slug", "mod_slug", "expected_wb"),
+    ("wb_slug", "mod_slug", "expected_wb", "expected_sub_key", "expected_sub_val"),
     [
-        ("cuas", "comparator", "🛸 C-UAS & Small Arms"),
-        ("cuas", "site_defense", "🛸 C-UAS & Small Arms"),
-        ("cuas", "sensitivity", "🛸 C-UAS & Small Arms"),
-        ("cuas", "raid", "🛸 C-UAS & Small Arms"),
-        ("cuas", "calibration", "🛸 C-UAS & Small Arms"),
-        ("mcdrag", None, "🚀 MCDRAG & 3D CAD"),
-        ("iatg", None, "🏛️ UNODA IATG Safety"),
-        ("validation", None, "✅ Validation Suite"),
-        ("literature", None, "📚 Literature & Sources"),
+        ("home", None, "Home", None, None),
+        ("cuas", None, "C-UAS & Multi-Barrel", "cuas_stage_tool", "Anti-Drone Multi-Shotgun Array"),
+        ("cuas", "array", "C-UAS & Multi-Barrel", "cuas_stage_tool", "Anti-Drone Multi-Shotgun Array"),
+        ("cuas", "comparator", "C-UAS & Multi-Barrel", "cuas_stage_tool", "A/B Turret Comparator & Layered Defense"),
+        ("cuas", "site_defense", "C-UAS & Multi-Barrel", "cuas_stage_tool", "Multi-Turret Site Defense & GIS Map"),
+        ("cuas", "sensitivity", "C-UAS & Multi-Barrel", "cuas_stage_tool", "Sensitivity & Bottleneck Tornado"),
+        ("cuas", "raid", "C-UAS & Multi-Barrel", "cuas_stage_tool", "Unified 3D Tactical Raid Simulator"),
+        ("cuas", "calibration", "C-UAS & Multi-Barrel", "cuas_stage_tool", "Field-Test Calibration & Residuals"),
+        ("sim", None, "Ballistics & 3D Sim", "sim_active_subview", "Monte Carlo Pipeline"),
+        ("3d", None, "Ballistics & 3D Sim", "sim_active_subview", "3D Trajectory Lab"),
+        ("firing", None, "Ballistics & 3D Sim", "sim_active_subview", "Firing Tables & Met"),
+        ("physics", None, "Physics & Aero Labs", "physics_active_subview", "Physics & Ballistics Labs"),
+        ("mcdrag", None, "Physics & Aero Labs", "physics_active_subview", "MCDRAG & 3D CAD"),
+        ("iatg", None, "Safety & IATG", None, None),
+        ("validation", None, "Audit & Sources", "audit_active_subview", "V&V Suite & Certificates"),
+        ("literature", None, "Audit & Sources", "audit_active_subview", "Scientific Literature & Sources"),
     ],
 )
 def test_ui_deeplinks_and_contextual_sidebars(
     wb_slug: str,
     mod_slug: str | None,
     expected_wb: str,
+    expected_sub_key: str | None,
+    expected_sub_val: str | None,
 ) -> None:
     at = AppTest.from_file(ROOT_APP, default_timeout=60)
     at.session_state["authenticated"] = True
@@ -59,3 +69,21 @@ def test_ui_deeplinks_and_contextual_sidebars(
 
     assert not at.exception
     assert at.session_state["active_workbench"] == expected_wb
+    if expected_sub_key and expected_sub_val:
+        assert at.session_state[expected_sub_key] == expected_sub_val
+
+
+@pytest.mark.parametrize(("wb_slug", "mod_slug"), [("cuas", "array"), ("sim", None)])
+def test_ui_expert_mode_toggle_renders_cleanly(wb_slug: str, mod_slug: str | None) -> None:
+    at = AppTest.from_file(ROOT_APP, default_timeout=60)
+    at.session_state["authenticated"] = True
+    at.query_params["wb"] = wb_slug
+    if mod_slug:
+        at.query_params["mod"] = mod_slug
+    at.run()
+    assert not at.exception
+    assert at.session_state["ui_expert_mode"] is False
+
+    at.toggle(key="ui_expert_mode").set_value(True).run()
+    assert not at.exception
+    assert at.session_state["ui_expert_mode"] is True

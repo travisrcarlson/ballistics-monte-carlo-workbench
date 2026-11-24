@@ -263,33 +263,53 @@ from ammo_mc.ui.common import (
     _cached_optimize_antidrone_array,
     _cached_site_defense,
     _cached_sustained_logistics,
+    _navigate_to,
     _render_sidebar_header,
     _set_active_workbench,
     _set_cuas_module,
+    is_expert_mode,
 )
 
 
 
 def tab_calculators() -> None:
-    st.header("🔬 Computational Physics, Thermodynamics & Continuum Mechanics Labs")
-    st.markdown(
-        "Interactive laboratory grounding every stage of the simulator in first-principles differential equations, "
-        "thermodynamic equations of state, Rankine-Hugoniot shock jump relations, and continuum solid mechanics."
+    st.header("Physics & Ballistics Engineering Labs")
+    st.caption(
+        "Focused first-principles labs for thermodynamics, exterior ballistics, terminal effects, 6-DoF/guidance, and the Knowledge Base."
     )
     kb = get_kb()
 
+    _phys_groups: dict[str, list[str]] = {
+        "1. Interior, Aero & Trajectory": [_PHYSICS_LABS[0], _PHYSICS_LABS[1], _PHYSICS_LABS[2], _PHYSICS_LABS[13]],
+        "2. Blast, Frag, Armor & Concrete": [_PHYSICS_LABS[3], _PHYSICS_LABS[4], _PHYSICS_LABS[12], _PHYSICS_LABS[14]],
+        "3. Guidance, 6-DoF, Fuze & Fire Control": [
+            _PHYSICS_LABS[6],
+            _PHYSICS_LABS[7],
+            _PHYSICS_LABS[8],
+            _PHYSICS_LABS[9],
+            _PHYSICS_LABS[10],
+            _PHYSICS_LABS[11],
+            _PHYSICS_LABS[15],
+        ],
+        "4. QMC Statistics & Knowledge Base": [_PHYSICS_LABS[5]],
+    }
+    _group_names = list(_phys_groups.keys())
+
     with st.sidebar:
-        _render_sidebar_header("🔬 Physics & Ballistics Labs", "First-principles thermodynamics, exterior & terminal labs")
-        active_lab = st.radio("Select Physics Lab (1–16)", _PHYSICS_LABS, key="physics_active_lab")
+        _render_sidebar_header("Physics & Ballistics Labs", "4 discipline groups • 16 focused labs")
+        if st.session_state.get("physics_lab_group") not in _group_names:
+            st.session_state["physics_lab_group"] = _group_names[0]
+        active_group = st.radio("Discipline Group", _group_names, key="physics_lab_group")
+        group_labs = _phys_groups[active_group]
+        if st.session_state.get("physics_active_lab") not in group_labs:
+            st.session_state["physics_active_lab"] = group_labs[0]
+        active_lab = st.radio("Select Lab", group_labs, key="physics_active_lab")
         st.divider()
-        st.caption(
-            "Only the selected lab runs on each interaction for fast responsiveness. "
-            "Counter-UAS turrets, multi-barrel arrays, and shotgun dispersion live in their dedicated top-level workbench."
-        )
+        st.caption("Only the active lab runs on each interaction for fast responsiveness.")
         st.button(
-            "🛸 Open C-UAS & Small Arms",
-            on_click=_set_active_workbench,
-            args=("🛸 C-UAS & Small Arms",),
+            "Open C-UAS & Multi-Barrel Array",
+            on_click=_navigate_to,
+            args=("cuas", None, "array"),
             width="stretch",
             key="phys_jump_cuas_btn",
         )
@@ -819,12 +839,12 @@ def tab_calculators() -> None:
             st.dataframe(thor_df, width="stretch", height=365)
 
         st.divider()
-        st.subheader("🧱 Concrete Penetration (Forrestal–Frew & Modified NDRC), Tate–Alekseevskii Long-Rod ODE & TNO Blast Probits")
+        st.subheader("🧱 Concrete Penetration (Forrestal–Frew & Modified NDRC), Tate–Alekseevskii Long-Rod ODE & CPR 16E Probits")
         t_conc, t_tate, t_tno = st.tabs(
             [
                 "🧱 Concrete & Slab Limits (S73)",
                 "🎯 Tate–Alekseevskii ODE (S74)",
-                "🫧 TNO Green Book Probits (S78)",
+                "🫧 CPR 16E Blast & Thermal Probits (S78)",
             ]
         )
         with t_conc:
@@ -962,7 +982,7 @@ def tab_calculators() -> None:
             fig_tno.add_trace(go.Scatter(x=ps_grid, y=ear_probs, name="Eardrum Rupture vs Ps (kPa)"))
             fig_tno.add_trace(go.Scatter(x=peff_grid, y=lung_probs, name=f"Lung Lethality vs Peff (I={i_lung_pas:.0f} Pa·s)"))
             fig_tno.update_layout(
-                title="TNO Green Book (CPR 16E) Injury & Lethality Probit Curves",
+                title="CPR 16E Injury & Lethality Probit Curves",
                 xaxis_title="Overpressure (kPa)",
                 yaxis_title="Response Probability (%)",
                 template="plotly_white",

@@ -261,20 +261,21 @@ from ammo_mc.ui.common import (
     _cached_optimize_antidrone_array,
     _cached_site_defense,
     _cached_sustained_logistics,
+    _navigate_to,
     _render_sidebar_header,
     _set_active_workbench,
     _set_cuas_module,
+    is_expert_mode,
 )
 
 
 
 def _jump_to_calibration_lab() -> None:
-    st.session_state["active_workbench"] = _WORKBENCH_OPTIONS[1]
-    st.session_state["cuas_wb_suite"] = _CUAS_SUITES[0]
-    st.session_state["cuas18_active_module"] = _CUAS18_MODULES[12]
+    _navigate_to("cuas", cuas_mod_slug="calibration")
 
 
 def tab_simulator() -> None:
+    expert = is_expert_mode()
     presets = list_presets()
     family_map = {
         "All System Families (26 Presets)": None,
@@ -290,8 +291,8 @@ def tab_simulator() -> None:
     }
 
     with st.sidebar:
-        _render_sidebar_header("🎯 Monte Carlo Simulator", "Stochastic 6-stage exterior, fuze & terminal pipeline")
-        st.header("⚙️ Simulation Configuration")
+        _render_sidebar_header("Ballistics & 3D Sim", "Stochastic 6-stage exterior, fuze & terminal pipeline")
+        st.header("Simulation Setup")
         sel_family = st.selectbox("System Family Filter", list(family_map.keys()), index=0)
         prefixes = family_map[sel_family]
         filtered_presets = (
@@ -307,14 +308,12 @@ def tab_simulator() -> None:
         base_ammo, base_scn = get_preset(sel_preset_id)
         st.caption(f"**Class `{base_ammo.class_id}`** ({base_ammo.launch.mode.upper()}): {base_ammo.description}")
 
-        st.subheader("Model Fidelity & Sampling")
         fidelity = st.selectbox(
             "Fidelity Level",
             ["L0", "L1", "L2", "L3"],
             index=["L0", "L1", "L2", "L3"].index(base_scn.fidelity),
             help="L0: Analytic Error Budget | L1: 3-DoF Point-Mass | L2: STANAG 4355 MPM (Spin/Yaw Drift) | L3: Coupled Salvo",
         )
-        sampler = st.selectbox("Sampling Strategy", ["LHS", "Sobol", "MC"], index=0)
         n_occ = st.number_input(
             "Occasions (Batteries / Trials)",
             min_value=1,
@@ -331,158 +330,107 @@ def tab_simulator() -> None:
         )
         st.caption(f"Total simulated trajectories: **{n_occ * r_per_occ}**")
 
-        seed = st.number_input("Random Seed", min_value=1, max_value=999999, value=int(base_scn.seed or 42))
-
-        with st.expander("⚠️ System Failure Modes (FMEA)", expanded=True):
-            fm_prop_pct = st.slider(
-                "Propulsion / Rocket Motor Anomaly (%)",
-                0.0,
-                15.0,
-                1.0,
-                0.25,
-                help="Incomplete gun propellant ignition or solid rocket motor chuffing/early burnout (EB-13) causing range drop",
-            )
-            fm_fin_pct = st.slider(
-                "Fin / Sabot / Nozzle Tip-Off Anomaly (%)",
-                0.0,
-                15.0,
-                0.8,
-                0.25,
-                help="Asymmetric sabot petal discard, wrap-around rocket fin lock failure, or thrust misalignment tip-off",
-            )
-            fm_sa_pct = st.slider(
-                "Safe & Arm (S&A) Failure (%)",
-                0.0,
-                15.0,
-                0.5,
-                0.25,
-                help="Mechanical/electronic Safe & Arm unit fails to arm in flight, resulting in an unarmed UXO dud",
-            )
-            fm_early_pct = st.slider(
-                "Premature Airburst (%)",
-                0.0,
-                15.0,
-                0.5,
-                0.25,
-                help="Premature rain/canopy impact or electronic time/proximity false trigger along the flight path",
-            )
-            fm_low_pct = st.slider(
-                "Low-Order Partial Detonation (%)",
-                0.0,
-                15.0,
-                1.2,
-                0.25,
-                help="Incomplete booster-to-main-charge shock transition yielding 25% of nominal blast/fragmentation output",
-            )
-
-        with st.expander("🎯 Aiming & Meteorology"):
-            aim_range = st.number_input(
-                "Target Range (m)",
-                min_value=0.0,
-                max_value=80000.0,
-                value=float(base_scn.aim.range_m or 0.0),
-                step=250.0,
-            )
-            high_angle = st.checkbox("High-Angle Lofted Fire", value=bool(base_scn.aim.high_angle))
-            wind_range = st.slider("Range Wind (m/s, tailwind +)", -30.0, 30.0, float(base_scn.met.wind_range_mps), 1.0)
-            wind_cross = st.slider(
-                "Cross Wind (m/s, right +)", -30.0, 30.0, float(base_scn.met.wind_cross_right_mps), 1.0
-            )
-            temp_dev = st.slider("ISA Temp Deviation (K)", -30.0, 30.0, float(base_scn.met.deviations.dT_K), 1.0)
-
-        with st.expander("🔥 Launch, Rocket Motor & Aero Overrides"):
-            mv_mu = st.number_input(
-                "Nominal Launch / Muzzle Velocity (m/s)",
-                min_value=0.0,
-                max_value=2500.0,
-                value=float(base_ammo.launch.mv.mu),
-                step=5.0,
-            )
-            mv_s_rr = st.slider(
-                "Round-to-Round MV Sigma (m/s)", 0.0, 15.0, float(base_ammo.launch.mv.sigma_rr), 0.2
-            )
-            mv_s_lot = st.slider(
-                "Occasion/Lot MV Sigma (m/s)", 0.0, 15.0, float(base_ammo.launch.mv.sigma_lot), 0.2
-            )
-            ff_mu = st.slider("Ballistic Form Factor (i)", 0.60, 1.50, float(base_ammo.aero.form_factor.mu), 0.02)
-            prop_temp = st.slider("Propellant Temp (°C)", -30.0, 55.0, float(base_scn.aim.propellant_temp_C), 1.0)
-            has_cal = any(
-                k in st.session_state
-                for k in ("_calibrated_mv_mps", "_calibrated_mv_sd_mps", "_calibrated_form_factor")
-            )
-            use_cal_overrides = False
-            if has_cal:
-                cal_parts = []
-                if "_calibrated_mv_mps" in st.session_state:
-                    cal_parts.append(f"MV={st.session_state['_calibrated_mv_mps']:.1f}m/s")
-                if "_calibrated_mv_sd_mps" in st.session_state:
-                    cal_parts.append(f"SD={st.session_state['_calibrated_mv_sd_mps']:.2f}")
-                if "_calibrated_form_factor" in st.session_state:
-                    cal_parts.append(f"i={st.session_state['_calibrated_form_factor']:.3f}")
-                use_cal_overrides = st.checkbox(
-                    f"Apply Field-Calibrated Values ({', '.join(cal_parts)})",
-                    value=True,
-                    key="sim_use_cal_overrides",
+        def _render_sampling_and_fmea_controls() -> tuple[str, int, float, float, float, float, float]:
+            s_strategy = st.selectbox("Sampling Strategy", ["LHS", "Sobol", "MC"], index=0)
+            s_seed = int(st.number_input("Random Seed", min_value=1, max_value=999999, value=int(base_scn.seed or 42)))
+            with st.expander("⚠️ System Failure Modes (FMEA)", expanded=False):
+                f_prop = st.slider(
+                    "Propulsion / Rocket Motor Anomaly (%)",
+                    0.0, 15.0, 1.0, 0.25,
+                    help="Incomplete gun propellant ignition or solid rocket motor chuffing/early burnout (EB-13)",
                 )
-            st.button(
-                "🧪 Open Field Calibration Lab",
-                on_click=_jump_to_calibration_lab,
-                width="stretch",
-                key="sim_jump_cal_btn",
-            )
-            st.markdown("**🚀 Rocket Motor Boost (`EB-13`)**")
-            rk_burn_s = st.slider(
-                "Rocket Motor Burn Time t_burn (s)",
-                0.0,
-                12.0,
-                float(base_ammo.launch.rocket_burn_s),
-                0.1,
-                help="Solid rocket motor boost duration (0 s for pure gun-launched unassisted projectiles)",
-            )
-            rk_mdot = st.slider(
-                "Rocket Propellant Mass Flow m_dot (kg/s)",
-                0.0,
-                40.0,
-                float(base_ammo.launch.rocket_mdot_kg_s),
-                0.2,
-            )
-            rk_ve = st.slider(
-                "Rocket Effective Exhaust Velocity V_e (m/s)",
-                0.0,
-                3000.0,
-                float(base_ammo.launch.rocket_ve_mps),
-                50.0,
+                f_fin = st.slider(
+                    "Fin / Sabot / Nozzle Tip-Off Anomaly (%)",
+                    0.0, 15.0, 0.8, 0.25,
+                    help="Asymmetric sabot petal discard, wrap-around rocket fin lock failure, or thrust misalignment",
+                )
+                f_sa = st.slider(
+                    "Safe & Arm (S&A) Failure (%)",
+                    0.0, 15.0, 0.5, 0.25,
+                    help="Mechanical/electronic Safe & Arm unit fails to arm in flight, resulting in an unarmed UXO dud",
+                )
+                f_early = st.slider(
+                    "Premature Airburst (%)",
+                    0.0, 15.0, 0.5, 0.25,
+                    help="Premature canopy impact or electronic false trigger along the flight path",
+                )
+                f_low = st.slider(
+                    "Low-Order Partial Detonation (%)",
+                    0.0, 15.0, 1.2, 0.25,
+                    help="Incomplete booster-to-main-charge shock transition yielding 25% nominal output",
+                )
+            return s_strategy, s_seed, f_prop, f_fin, f_sa, f_early, f_low
+
+        def _render_met_and_overrides() -> tuple[Any, ...]:
+            with st.expander("🎯 Aiming & Meteorology", expanded=False):
+                a_range = st.number_input("Target Range (m)", min_value=0.0, max_value=80000.0, value=float(base_scn.aim.range_m or 0.0), step=250.0)
+                h_angle = st.checkbox("High-Angle Lofted Fire", value=bool(base_scn.aim.high_angle))
+                w_range = st.slider("Range Wind (m/s, tailwind +)", -30.0, 30.0, float(base_scn.met.wind_range_mps), 1.0)
+                w_cross = st.slider("Cross Wind (m/s, right +)", -30.0, 30.0, float(base_scn.met.wind_cross_right_mps), 1.0)
+                t_dev = st.slider("ISA Temp Deviation (K)", -30.0, 30.0, float(base_scn.met.deviations.dT_K), 1.0)
+
+            with st.expander("🔥 Launch, Rocket Motor & Aero Overrides", expanded=False):
+                m_mu = st.number_input("Nominal Launch / Muzzle Velocity (m/s)", min_value=0.0, max_value=2500.0, value=float(base_ammo.launch.mv.mu), step=5.0)
+                m_rr = st.slider("Round-to-Round MV Sigma (m/s)", 0.0, 15.0, float(base_ammo.launch.mv.sigma_rr), 0.2)
+                m_lot = st.slider("Occasion/Lot MV Sigma (m/s)", 0.0, 15.0, float(base_ammo.launch.mv.sigma_lot), 0.2)
+                f_mu = st.slider("Ballistic Form Factor (i)", 0.60, 1.50, float(base_ammo.aero.form_factor.mu), 0.02)
+                p_temp = st.slider("Propellant Temp (°C)", -30.0, 55.0, float(base_scn.aim.propellant_temp_C), 1.0)
+                has_cal = any(k in st.session_state for k in ("_calibrated_mv_mps", "_calibrated_mv_sd_mps", "_calibrated_form_factor"))
+                u_cal = False
+                if has_cal:
+                    cal_parts = []
+                    if "_calibrated_mv_mps" in st.session_state:
+                        cal_parts.append(f"MV={st.session_state['_calibrated_mv_mps']:.1f}m/s")
+                    if "_calibrated_mv_sd_mps" in st.session_state:
+                        cal_parts.append(f"SD={st.session_state['_calibrated_mv_sd_mps']:.2f}")
+                    if "_calibrated_form_factor" in st.session_state:
+                        cal_parts.append(f"i={st.session_state['_calibrated_form_factor']:.3f}")
+                    u_cal = st.checkbox(f"Apply Field-Calibrated Values ({', '.join(cal_parts)})", value=True, key="sim_use_cal_overrides")
+                st.button("Open Field Calibration Lab", on_click=_jump_to_calibration_lab, width="stretch", key="sim_jump_cal_btn")
+                st.markdown("**Rocket Motor Boost (`EB-13`)**")
+                r_burn = st.slider("Rocket Motor Burn Time t_burn (s)", 0.0, 12.0, float(base_ammo.launch.rocket_burn_s), 0.1)
+                r_mdot = st.slider("Rocket Propellant Mass Flow m_dot (kg/s)", 0.0, 40.0, float(base_ammo.launch.rocket_mdot_kg_s), 0.2)
+                r_ve = st.slider("Rocket Effective Exhaust Velocity V_e (m/s)", 0.0, 3000.0, float(base_ammo.launch.rocket_ve_mps), 50.0)
+
+            with st.expander("📐 Error Budget & Uncertainties", expanded=False):
+                t_sig = st.slider("Target Location Error TLE Sigma (m)", 0.0, 100.0, float(base_scn.errors.bias.tle_range_sigma_m), 1.0)
+                q_bias = st.slider("QE Aiming Bias Sigma (mils)", 0.0, 5.0, float(base_scn.errors.bias.aim_qe_bias_sigma_mils), 0.1)
+                q_rand = st.slider("QE Round-to-Round Sigma (mils)", 0.0, 5.0, float(base_scn.errors.random.aim_qe_rand_sigma_mils), 0.1)
+                w_bsig = st.slider("Met Wind Bias Sigma (m/s)", 0.0, 10.0, float(base_scn.errors.bias.wind_range_bias_sigma_mps), 0.5)
+
+            with st.expander("🧪 Physics & Epistemic Toggles", expanded=False):
+                t_loop = st.checkbox("Two-Loop Nested Epistemic MC", value=bool(base_scn.two_loop_epistemic))
+                n_ep = st.slider("Outer Epistemic Realizations", 4, 25, 8, 1) if t_loop else 8
+                u_cor = st.checkbox("Include Earth Coriolis & Eötvös", value=bool(base_scn.include_coriolis))
+                u_vac = st.checkbox("Vacuum Trajectory (No Drag)", value=bool(base_scn.vacuum))
+                t_mode = st.selectbox("Terrain Profile", ["Flat Ground", "Linear Hill Profile"], index=0)
+                h_slp = st.slider("Hill Grade (%)", -10.0, 15.0, 3.0, 0.5) if t_mode == "Linear Hill Profile" else 0.0
+            return (
+                a_range, h_angle, w_range, w_cross, t_dev,
+                m_mu, m_rr, m_lot, f_mu, p_temp, u_cal, r_burn, r_mdot, r_ve,
+                t_sig, q_bias, q_rand, w_bsig,
+                t_loop, n_ep, u_cor, u_vac, t_mode, h_slp,
             )
 
-        with st.expander("📐 Error Budget & Uncertainties"):
-            tle_sig = st.slider(
-                "Target Location Error TLE Sigma (m)", 0.0, 100.0, float(base_scn.errors.bias.tle_range_sigma_m), 1.0
-            )
-            aim_qe_bias = st.slider(
-                "QE Aiming Bias Sigma (mils)", 0.0, 5.0, float(base_scn.errors.bias.aim_qe_bias_sigma_mils), 0.1
-            )
-            aim_qe_rand = st.slider(
-                "QE Round-to-Round Sigma (mils)", 0.0, 5.0, float(base_scn.errors.random.aim_qe_rand_sigma_mils), 0.1
-            )
-            wind_bias_sig = st.slider(
-                "Met Wind Bias Sigma (m/s)", 0.0, 10.0, float(base_scn.errors.bias.wind_range_bias_sigma_mps), 0.5
-            )
+        if expert:
+            sampler, seed, fm_prop_pct, fm_fin_pct, fm_sa_pct, fm_early_pct, fm_low_pct = _render_sampling_and_fmea_controls()
+            (
+                aim_range, high_angle, wind_range, wind_cross, temp_dev,
+                mv_mu, mv_s_rr, mv_s_lot, ff_mu, prop_temp, use_cal_overrides, rk_burn_s, rk_mdot, rk_ve,
+                tle_sig, aim_qe_bias, aim_qe_rand, wind_bias_sig,
+                two_loop, n_epistemic, use_coriolis, use_vacuum, terrain_mode, hill_slope,
+            ) = _render_met_and_overrides()
+        else:
+            with st.expander("Advanced Sampling, FMEA, Met & Aero Overrides", expanded=False):
+                sampler, seed, fm_prop_pct, fm_fin_pct, fm_sa_pct, fm_early_pct, fm_low_pct = _render_sampling_and_fmea_controls()
+                (
+                    aim_range, high_angle, wind_range, wind_cross, temp_dev,
+                    mv_mu, mv_s_rr, mv_s_lot, ff_mu, prop_temp, use_cal_overrides, rk_burn_s, rk_mdot, rk_ve,
+                    tle_sig, aim_qe_bias, aim_qe_rand, wind_bias_sig,
+                    two_loop, n_epistemic, use_coriolis, use_vacuum, terrain_mode, hill_slope,
+                ) = _render_met_and_overrides()
 
-        with st.expander("🧪 Physics & Epistemic Toggles"):
-            two_loop = st.checkbox(
-                "Two-Loop Nested Epistemic MC",
-                value=bool(base_scn.two_loop_epistemic),
-                help="Separates outer epistemic model parameter uncertainty from inner aleatory dispersion",
-            )
-            n_epistemic = st.slider("Outer Epistemic Realizations", 4, 25, 8, 1) if two_loop else 8
-            use_coriolis = st.checkbox("Include Earth Coriolis & Eötvös", value=bool(base_scn.include_coriolis))
-            use_vacuum = st.checkbox("Vacuum Trajectory (No Drag)", value=bool(base_scn.vacuum))
-            terrain_mode = st.selectbox("Terrain Profile", ["Flat Ground", "Linear Hill Profile"], index=0)
-            hill_slope = 0.0
-            if terrain_mode == "Linear Hill Profile":
-                hill_slope = st.slider("Hill Grade (%)", -10.0, 15.0, 3.0, 0.5)
-
-        run_btn = st.button("🚀 Run Monte Carlo Simulation", type="primary", width="stretch")
+        run_btn = st.button("Run Monte Carlo Simulation", type="primary", width="stretch")
 
     # Prepare ammo and scenario
     ammo = base_ammo.model_copy(deep=True)
@@ -577,794 +525,807 @@ def tab_simulator() -> None:
         )
 
     # Row 1: Primary Dispersion & Effectiveness KPIs
-    c1, c2, c3 = st.columns(3)
     cep50 = float(res.dispersion.get("cep_m", 0.0))
     cep95 = float(res.dispersion.get("cep95_m", cep50 * 2.08))
-    with c1:
-        st.metric(
+    trials_df = pd.DataFrame(res.trials)
+    mean_v_imp = float(trials_df["v_impact_mps"].mean()) if "v_impact_mps" in trials_df else 0.0
+    mean_aof = float(trials_df["angle_of_fall_deg"].mean()) if "angle_of_fall_deg" in trials_df else 0.0
+    mean_tof = float(trials_df["tof_s"].mean()) if "tof_s" in trials_df else 0.0
+
+    if not expert:
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric(
             "Mean Range (MPI)",
             f"{res.dispersion.get('mean_range_m', 0.0):.1f} m",
             delta=f"±{res.dispersion.get('range_ci95_half_width_m', 0.0):.1f} m (95% CI)",
         )
-    with c2:
-        st.metric(
-            "Mean Deflection",
-            f"{res.dispersion.get('mean_deflection_m', 0.0):.1f} m",
-            delta=f"±{res.dispersion.get('deflection_ci95_half_width_m', 0.0):.1f} m",
-        )
-    with c3:
-        st.metric("CEP 50%", f"{cep50:.1f} m", delta=f"CEP95: {cep95:.1f} m", delta_color="off")
-    c4, c5, c6 = st.columns(3)
-    with c4:
-        st.metric("Single-Shot Pk", f"{res.effectiveness.get('sspk', 0.0):.3f}", help="Mean single-round effect probability")
-    with c5:
-        st.metric(
+        k2.metric("CEP 50%", f"{cep50:.1f} m", delta=f"CEP95: {cep95:.1f} m", delta_color="off")
+        k3.metric("Single-Shot Pk", f"{res.effectiveness.get('sspk', 0.0):.3f}")
+        k4.metric(
             "Salvo Pk (Correlated)",
             f"{res.effectiveness.get('salvo_pk_mean', 0.0):.3f}",
             delta=f"Indep: {res.effectiveness.get('salvo_pk_independent', 0.0):.3f}",
             delta_color="off",
         )
-    with c6:
-        st.metric(
-            "Fuze Reliability",
-            f"{res.uxo.get('reliability_single', 1.0) * 100:.1f} %",
-            delta=f"Non-func: {res.uxo.get('dud_rate_mean', 0.0) * 100:.1f}%",
-            delta_color="off",
-        )
-
-    # Row 2: Secondary Engineering & Ballistic KPIs
-    b1, b2, b3 = st.columns(3)
-    trials_df = pd.DataFrame(res.trials)
-    mean_v_imp = float(trials_df["v_impact_mps"].mean()) if "v_impact_mps" in trials_df else 0.0
-    mean_aof = float(trials_df["angle_of_fall_deg"].mean()) if "angle_of_fall_deg" in trials_df else 0.0
-    mean_tof = float(trials_df["tof_s"].mean()) if "tof_s" in trials_df else 0.0
-    with b1:
-        st.metric(
-            "Probable Errors (REP / DEP)",
-            f"{res.dispersion.get('rep_m', 0.0):.1f} / {res.dispersion.get('dep_m', 0.0):.1f} m",
-            help="50% Range Error Probable (REP) and Deflection Error Probable (DEP)",
-        )
-    with b2:
-        qe_deg = math.degrees(res.solved_qe_rad)
-        st.metric("Solved Launch QE", f"{res.solved_qe_mils:.1f} mils", delta=f"{qe_deg:.2f}°", delta_color="off")
-    with b3:
-        st.metric("Impact Speed / Angle", f"{mean_v_imp:.0f} m/s", delta=f"AoF: {mean_aof:.1f}°", delta_color="off")
-    b4, b5, b6 = st.columns(3)
-    with b4:
-        st.metric("Mean Time of Flight", f"{mean_tof:.2f} s", delta=f"N={res.n_total_rounds} rounds", delta_color="off")
-    with b5:
-        st.metric(
-            "Effective Area A_L",
-            f"{res.effectiveness.get('lethal_area_m2', 0.0):.0f} m²",
-            delta=f"Carleton SSPK: {res.effectiveness.get('sspk_carleton_ref', 0.0):.3f}",
-            delta_color="off",
-        )
-    with b6:
-        tb15_dict = res.blast_and_safety.get("iatg_tb15_distances_m", {})
-        ibd_m = float(tb15_dict.get("inhabited_building_distance_m", 0.0))
-        st.metric("IATG Safety IBD (TB-15)", f"{ibd_m:.1f} m", help="Inhabited Building Distance (22.2 * W^(1/3))")
-
-    # Epistemic Summary Banner if Two-Loop Epistemic was enabled
-    if res.epistemic_summary is not None:
-        ep = res.epistemic_summary
-        st.markdown(
-            f"""
-            <div class="epistemic-banner">
-            🔬 <b>TWO-LOOP EPISTEMIC UNCERTAINTY QUANTIFICATION ({ep.get('n_outer_epistemic', 0)} Outer Realizations):</b>
-            CEP50 Median: <b>{ep.get('cep_median_m', 0.0):.1f} m</b> [90% Credible Interval: {ep.get('cep_p05_m', 0.0):.1f} m – {ep.get('cep_p95_m', 0.0):.1f} m] &nbsp;|&nbsp;
-            SSPK Median: <b>{ep.get('sspk_median', 0.0):.3f}</b> [90% CI: {ep.get('sspk_p05', 0.0):.3f} – {ep.get('sspk_p95', 0.0):.3f}] &nbsp;|&nbsp;
-            Salvo Pk Median: <b>{ep.get('salvo_pk_median', 0.0):.3f}</b> [90% CI: {ep.get('salvo_pk_p05', 0.0):.3f} – {ep.get('salvo_pk_p95', 0.0):.3f}]
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    st.markdown("---")
-
-    # Interactive Plots Row 1: POI Scatter + Trajectory Profile
-    col_plot1, col_plot2 = st.columns(2)
-
-    with col_plot1:
-        hdr_c1, hdr_c2 = st.columns([2, 1])
-        with hdr_c1:
-            st.subheader("🎯 Impact Dispersion (POI, CEP50 & CEP95)")
-        with hdr_c2:
-            poi_color_mode = st.selectbox(
-                "Color Impacts By",
-                ["Failure Mode (FMEA)", "Fuze Status", "Trial Pk", "Impact Speed (m/s)"],
-                index=0,
-                label_visibility="collapsed",
+    else:
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric(
+                "Mean Range (MPI)",
+                f"{res.dispersion.get('mean_range_m', 0.0):.1f} m",
+                delta=f"±{res.dispersion.get('range_ci95_half_width_m', 0.0):.1f} m (95% CI)",
+            )
+        with c2:
+            st.metric(
+                "Mean Deflection",
+                f"{res.dispersion.get('mean_deflection_m', 0.0):.1f} m",
+                delta=f"±{res.dispersion.get('deflection_ci95_half_width_m', 0.0):.1f} m",
+            )
+        with c3:
+            st.metric("CEP 50%", f"{cep50:.1f} m", delta=f"CEP95: {cep95:.1f} m", delta_color="off")
+        c4, c5, c6 = st.columns(3)
+        with c4:
+            st.metric("Single-Shot Pk", f"{res.effectiveness.get('sspk', 0.0):.3f}", help="Mean single-round effect probability")
+        with c5:
+            st.metric(
+                "Salvo Pk (Correlated)",
+                f"{res.effectiveness.get('salvo_pk_mean', 0.0):.3f}",
+                delta=f"Indep: {res.effectiveness.get('salvo_pk_independent', 0.0):.3f}",
+                delta_color="off",
+            )
+        with c6:
+            st.metric(
+                "Fuze Reliability",
+                f"{res.uxo.get('reliability_single', 1.0) * 100:.1f} %",
+                delta=f"Non-func: {res.uxo.get('dud_rate_mean', 0.0) * 100:.1f}%",
+                delta_color="off",
             )
 
-        if not trials_df.empty:
-            mean_r = float(res.dispersion.get("mean_range_m", 0.0))
-            mean_d = float(res.dispersion.get("mean_deflection_m", 0.0))
+        b1, b2, b3 = st.columns(3)
+        with b1:
+            st.metric(
+                "Probable Errors (REP / DEP)",
+                f"{res.dispersion.get('rep_m', 0.0):.1f} / {res.dispersion.get('dep_m', 0.0):.1f} m",
+                help="50% Range Error Probable (REP) and Deflection Error Probable (DEP)",
+            )
+        with b2:
+            qe_deg = math.degrees(res.solved_qe_rad)
+            st.metric("Solved Launch QE", f"{res.solved_qe_mils:.1f} mils", delta=f"{qe_deg:.2f}°", delta_color="off")
+        with b3:
+            st.metric("Impact Speed / Angle", f"{mean_v_imp:.0f} m/s", delta=f"AoF: {mean_aof:.1f}°", delta_color="off")
+        b4, b5, b6 = st.columns(3)
+        with b4:
+            st.metric("Mean Time of Flight", f"{mean_tof:.2f} s", delta=f"N={res.n_total_rounds} rounds", delta_color="off")
+        with b5:
+            st.metric(
+                "Effective Area A_L",
+                f"{res.effectiveness.get('lethal_area_m2', 0.0):.0f} m²",
+                delta=f"Carleton SSPK: {res.effectiveness.get('sspk_carleton_ref', 0.0):.3f}",
+                delta_color="off",
+            )
+        with b6:
+            tb15_dict = res.blast_and_safety.get("iatg_tb15_distances_m", {})
+            ibd_m = float(tb15_dict.get("inhabited_building_distance_m", 0.0))
+            st.metric("IATG Safety IBD (TB-15)", f"{ibd_m:.1f} m", help="Inhabited Building Distance (22.2 * W^(1/3))")
 
-            fmea_color_map = {
-                "Nominal Function": "#2563EB",
-                "Fuze Initiation Dud (FZ-03)": "#DC2626",
-                "Impact Graze / Ricochet Fail (FZ-06)": "#EA580C",
-                "Safe & Arm (S&A) Fail": "#991B1B",
-                "Premature Airburst": "#7C3AED",
-                "Low-Order Partial Detonation": "#F59E0B",
-                "Propulsion / Ignition Anomaly": "#0D9488",
-                "Rocket Motor Thrust / Burnout Anomaly (EB-13)": "#059669",
-                "Fin / Sabot Tip-Off Anomaly": "#DB2777",
-                "Wrap-Around Fin / Nozzle Tip-Off Anomaly": "#EC4899",
-                "Ballistic Instability (Sg < 1)": "#4B5563",
-            }
+        if res.epistemic_summary is not None:
+            ep = res.epistemic_summary
+            st.markdown(
+                f"""
+                <div class="epistemic-banner">
+                🔬 <b>TWO-LOOP EPISTEMIC UNCERTAINTY QUANTIFICATION ({ep.get('n_outer_epistemic', 0)} Outer Realizations):</b>
+                CEP50 Median: <b>{ep.get('cep_median_m', 0.0):.1f} m</b> [90% Credible Interval: {ep.get('cep_p05_m', 0.0):.1f} m – {ep.get('cep_p95_m', 0.0):.1f} m] &nbsp;|&nbsp;
+                SSPK Median: <b>{ep.get('sspk_median', 0.0):.3f}</b> [90% CI: {ep.get('sspk_p05', 0.0):.3f} – {ep.get('sspk_p95', 0.0):.3f}] &nbsp;|&nbsp;
+                Salvo Pk Median: <b>{ep.get('salvo_pk_median', 0.0):.3f}</b> [90% CI: {ep.get('salvo_pk_p05', 0.0):.3f} – {ep.get('salvo_pk_p95', 0.0):.3f}]
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
-            if poi_color_mode == "Failure Mode (FMEA)" and "failure_mode" in trials_df:
-                fig_poi = px.scatter(
-                    trials_df,
-                    x="deflection_m",
-                    y="range_m",
-                    color="failure_mode",
-                    color_discrete_map=fmea_color_map,
-                    labels={"deflection_m": "Deflection (m, Right +)", "range_m": "Range (m)", "failure_mode": "Failure Mode"},
-                    title=f"Impact Footprint by Failure Mode (N={len(trials_df)}) — CEP50={cep50:.1f}m",
-                    opacity=0.80,
-                )
-            elif poi_color_mode == "Fuze Status":
-                fig_poi = px.scatter(
-                    trials_df,
-                    x="deflection_m",
-                    y="range_m",
-                    color="is_dud",
-                    color_discrete_map={False: "#2563EB", True: "#DC2626"},
-                    labels={"deflection_m": "Deflection (m, Right +)", "range_m": "Range (m)", "is_dud": "Non-Func"},
-                    title=f"Impact Footprint (N={len(trials_df)}) — CEP50={cep50:.1f}m | CEP95={cep95:.1f}m",
-                    opacity=0.7,
-                )
-            elif poi_color_mode == "Trial Pk" and ("p_kill" in trials_df or "p_kill_round" in trials_df):
-                pk_col = "p_kill" if "p_kill" in trials_df else "p_kill_round"
-                fig_poi = px.scatter(
-                    trials_df,
-                    x="deflection_m",
-                    y="range_m",
-                    color=pk_col,
-                    color_continuous_scale="YlOrRd",
-                    labels={"deflection_m": "Deflection (m, Right +)", "range_m": "Range (m)", pk_col: "Round Pk"},
-                    title=f"Impact Footprint Colored by Single-Round Pk — CEP50={cep50:.1f}m",
-                    opacity=0.75,
-                )
-            else:
-                fig_poi = px.scatter(
-                    trials_df,
-                    x="deflection_m",
-                    y="range_m",
-                    color="v_impact_mps" if "v_impact_mps" in trials_df else "is_dud",
-                    color_continuous_scale="Viridis",
-                    labels={
-                        "deflection_m": "Deflection (m, Right +)",
-                        "range_m": "Range (m)",
-                        "v_impact_mps": "V_imp (m/s)",
-                    },
-                    title=f"Impact Footprint Colored by Terminal Speed — CEP50={cep50:.1f}m",
-                    opacity=0.75,
+    sim_tab_res, sim_tab_flt, sim_tab_sens = st.tabs(
+        [
+            "Key Results",
+            "Flight & Diagnostics",
+            "Sensitivity, FMEA & Exports",
+        ]
+    )
+
+    with sim_tab_res:
+        col_plot1, col_hz1 = st.columns(2)
+        with col_plot1:
+            hdr_c1, hdr_c2 = st.columns([2, 1])
+            with hdr_c1:
+                st.subheader("🎯 Impact Dispersion (POI, CEP50 & CEP95)")
+            with hdr_c2:
+                poi_color_mode = st.selectbox(
+                    "Color Impacts By",
+                    ["Failure Mode (FMEA)", "Fuze Status", "Trial Pk", "Impact Speed (m/s)"],
+                    index=0,
+                    label_visibility="collapsed",
                 )
 
-            target_r = cur_scn.aim.range_m or mean_r
-            hx = float(cur_scn.target.geometry.get("half_width_x_m", 25.0))
-            hy = float(cur_scn.target.geometry.get("half_width_y_m", 25.0))
-            fig_poi.add_shape(
-                type="rect",
-                x0=-hy,
-                x1=hy,
-                y0=target_r - hx,
-                y1=target_r + hx,
-                line=dict(color="#10B981", width=2, dash="dash"),
-                fillcolor="rgba(16, 185, 129, 0.12)",
-            )
-            theta = np.linspace(0, 2 * np.pi, 100)
-            fig_poi.add_trace(
-                go.Scatter(
-                    x=mean_d + cep50 * np.sin(theta),
-                    y=mean_r + cep50 * np.cos(theta),
-                    mode="lines",
-                    name=f"CEP 50% ({cep50:.1f}m)",
-                    line=dict(color="#F59E0B", width=2.5),
-                )
-            )
-            fig_poi.add_trace(
-                go.Scatter(
-                    x=mean_d + cep95 * np.sin(theta),
-                    y=mean_r + cep95 * np.cos(theta),
-                    mode="lines",
-                    name=f"CEP 95% ({cep95:.1f}m)",
-                    line=dict(color="#EF4444", width=2, dash="dash"),
-                )
-            )
-            fig_poi.add_trace(
-                go.Scatter(
-                    x=[mean_d],
-                    y=[mean_r],
-                    mode="markers",
-                    name="MPI",
-                    marker=dict(color="#1E3A8A", size=10, symbol="cross"),
-                )
-            )
-            fig_poi.update_layout(height=430, margin=dict(l=20, r=20, t=40, b=20))
-            st.plotly_chart(fig_poi, width="stretch")
+            if not trials_df.empty:
+                mean_r = float(res.dispersion.get("mean_range_m", 0.0))
+                mean_d = float(res.dispersion.get("mean_deflection_m", 0.0))
 
-    with col_plot2:
-        st.subheader("📈 Flight Trajectory Bundle & Velocity Profile")
-        if res.sample_trajectory is not None:
-            fig_traj = make_subplots(specs=[[{"secondary_y": True}]])
-            sample_list = (res.sample_trajectories or [res.sample_trajectory])[:8]
-            for idx_t, tr_item in enumerate(sample_list):
-                fig_traj.add_trace(
+                fmea_color_map = {
+                    "Nominal Function": "#2563EB",
+                    "Fuze Initiation Dud (FZ-03)": "#DC2626",
+                    "Impact Graze / Ricochet Fail (FZ-06)": "#EA580C",
+                    "Safe & Arm (S&A) Fail": "#991B1B",
+                    "Premature Airburst": "#7C3AED",
+                    "Low-Order Partial Detonation": "#F59E0B",
+                    "Propulsion / Ignition Anomaly": "#0D9488",
+                    "Rocket Motor Thrust / Burnout Anomaly (EB-13)": "#059669",
+                    "Fin / Sabot Tip-Off Anomaly": "#DB2777",
+                    "Wrap-Around Fin / Nozzle Tip-Off Anomaly": "#EC4899",
+                    "Ballistic Instability (Sg < 1)": "#4B5563",
+                }
+
+                if poi_color_mode == "Failure Mode (FMEA)" and "failure_mode" in trials_df:
+                    fig_poi = px.scatter(
+                        trials_df,
+                        x="deflection_m",
+                        y="range_m",
+                        color="failure_mode",
+                        color_discrete_map=fmea_color_map,
+                        labels={"deflection_m": "Deflection (m, Right +)", "range_m": "Range (m)", "failure_mode": "Failure Mode"},
+                        title=f"Impact Footprint by Failure Mode (N={len(trials_df)}) — CEP50={cep50:.1f}m",
+                        opacity=0.80,
+                    )
+                elif poi_color_mode == "Fuze Status":
+                    fig_poi = px.scatter(
+                        trials_df,
+                        x="deflection_m",
+                        y="range_m",
+                        color="is_dud",
+                        color_discrete_map={False: "#2563EB", True: "#DC2626"},
+                        labels={"deflection_m": "Deflection (m, Right +)", "range_m": "Range (m)", "is_dud": "Non-Func"},
+                        title=f"Impact Footprint (N={len(trials_df)}) — CEP50={cep50:.1f}m | CEP95={cep95:.1f}m",
+                        opacity=0.7,
+                    )
+                elif poi_color_mode == "Trial Pk" and ("p_kill" in trials_df or "p_kill_round" in trials_df):
+                    pk_col = "p_kill" if "p_kill" in trials_df else "p_kill_round"
+                    fig_poi = px.scatter(
+                        trials_df,
+                        x="deflection_m",
+                        y="range_m",
+                        color=pk_col,
+                        color_continuous_scale="YlOrRd",
+                        labels={"deflection_m": "Deflection (m, Right +)", "range_m": "Range (m)", pk_col: "Round Pk"},
+                        title=f"Impact Footprint Colored by Single-Round Pk — CEP50={cep50:.1f}m",
+                        opacity=0.75,
+                    )
+                else:
+                    fig_poi = px.scatter(
+                        trials_df,
+                        x="deflection_m",
+                        y="range_m",
+                        color="v_impact_mps" if "v_impact_mps" in trials_df else "is_dud",
+                        color_continuous_scale="Viridis",
+                        labels={
+                            "deflection_m": "Deflection (m, Right +)",
+                            "range_m": "Range (m)",
+                            "v_impact_mps": "V_imp (m/s)",
+                        },
+                        title=f"Impact Footprint Colored by Terminal Speed — CEP50={cep50:.1f}m",
+                        opacity=0.75,
+                    )
+
+                target_r = cur_scn.aim.range_m or mean_r
+                hx = float(cur_scn.target.geometry.get("half_width_x_m", 25.0))
+                hy = float(cur_scn.target.geometry.get("half_width_y_m", 25.0))
+                fig_poi.add_shape(
+                    type="rect",
+                    x0=-hy,
+                    x1=hy,
+                    y0=target_r - hx,
+                    y1=target_r + hx,
+                    line=dict(color="#10B981", width=2, dash="dash"),
+                    fillcolor="rgba(16, 185, 129, 0.12)",
+                )
+                theta = np.linspace(0, 2 * np.pi, 100)
+                fig_poi.add_trace(
                     go.Scatter(
-                        x=tr_item.get("range_m", []),
-                        y=tr_item.get("alt_m", []),
+                        x=mean_d + cep50 * np.sin(theta),
+                        y=mean_r + cep50 * np.cos(theta),
                         mode="lines",
-                        name="Nominal Altitude" if idx_t == 0 else f"Sample #{idx_t + 1}",
-                        line=dict(
-                            color="#1E3A8A" if idx_t == 0 else "rgba(37, 99, 235, 0.30)",
-                            width=3 if idx_t == 0 else 1.5,
-                        ),
-                        showlegend=(idx_t < 2),
-                    ),
-                    secondary_y=False,
-                )
-
-            traj_data = res.sample_trajectory
-            if "speed_mps" in traj_data:
-                fig_traj.add_trace(
-                    go.Scatter(
-                        x=traj_data.get("range_m", []),
-                        y=traj_data.get("speed_mps", []),
-                        mode="lines",
-                        name="Flight Speed (m/s)",
-                        line=dict(color="#DC2626", width=2, dash="dot"),
-                    ),
-                    secondary_y=True,
-                )
-
-            r_max = max(traj_data.get("range_m", [1000.0]))
-            t_x = np.linspace(0, r_max, 50)
-            t_y = np.zeros_like(t_x)
-            if cur_scn.terrain.mode == "profile" and cur_scn.terrain.profile:
-                p0, p1 = cur_scn.terrain.profile[0], cur_scn.terrain.profile[-1]
-                t_y = np.interp(t_x, [p0.range_m, p1.range_m], [p0.elevation_m, p1.elevation_m])
-
-            fig_traj.add_trace(
-                go.Scatter(
-                    x=t_x,
-                    y=t_y,
-                    mode="lines",
-                    fill="tozeroy",
-                    name="Ground Elevation",
-                    line=dict(color="#6B7280", width=1.5),
-                    fillcolor="rgba(107, 114, 128, 0.2)",
-                ),
-                secondary_y=False,
-            )
-            fig_traj.update_xaxes(title_text="Downrange X (m)")
-            fig_traj.update_yaxes(title_text="Altitude Z (m)", secondary_y=False)
-            fig_traj.update_yaxes(title_text="Speed (m/s)", secondary_y=True)
-            fig_traj.update_layout(
-                title=f"Trajectory Plume & Speed Profile (Solved QE: {res.solved_qe_mils:.1f} mils)",
-                height=430,
-                margin=dict(l=20, r=20, t=40, b=20),
-            )
-            st.plotly_chart(fig_traj, width="stretch")
-        else:
-            st.info("Sample trajectory available for L1/L2/L3 physics simulations.")
-
-    # Row 2: Hazard Contours & Sensitivity
-    col_hz1, col_hz2 = st.columns(2)
-
-    with col_hz1:
-        st.subheader("💥 2D Spatial Effect Field vs IATG Safety Distance")
-        if res.hazard_grid is not None:
-            hg = res.hazard_grid
-            gx, gy = np.array(hg["x_m"]), np.array(hg["y_m"])
-            pk_grid = np.array(hg["pk_grid"])
-            fig_hz = go.Figure(
-                data=go.Contour(
-                    x=gy,
-                    y=gx,
-                    z=pk_grid,
-                    colorscale="Reds",
-                    contours=dict(start=0.1, end=0.9, size=0.2, showlabels=True),
-                    colorbar=dict(title="Pk"),
-                )
-            )
-            tb15_r = float(
-                res.blast_and_safety.get("iatg_tb15_distances_m", {}).get(
-                    "inhabited_building_distance_m", 0.0
-                )
-            )
-            if tb15_r > 0:
-                th_c = np.linspace(0, 2 * np.pi, 80)
-                fig_hz.add_trace(
-                    go.Scatter(
-                        x=tb15_r * np.cos(th_c),
-                        y=tb15_r * np.sin(th_c),
-                        mode="lines",
-                        name=f"IATG IBD ({tb15_r:.0f} m)",
-                        line=dict(color="#DC2626", width=2, dash="dash"),
+                        name=f"CEP 50% ({cep50:.1f}m)",
+                        line=dict(color="#F59E0B", width=2.5),
                     )
                 )
-            fig_hz.update_layout(
-                xaxis_title="Deflection from Burst (m)",
-                yaxis_title="Range from Burst (m)",
-                title=f"Terminal Effect Contour (Effective Area: {res.effectiveness.get('lethal_area_m2', 0.0):.0f} m²)",
-                height=400,
-                margin=dict(l=20, r=20, t=40, b=20),
-            )
-            st.plotly_chart(fig_hz, width="stretch")
-        elif res.penetration is not None:
-            pen = res.penetration
-            st.markdown("#### 🛡️ Armor Penetration & Perforation Mechanics (`PEN-01..PEN-05`)")
-            p_df = pd.DataFrame(
-                [
-                    {"Metric": "Penetrator Mechanism", "Value": str(pen.get("type", "kinetic"))},
-                    {"Metric": "Mean Penetration Depth", "Value": f"{pen.get('mean_penetration_m', 0.0)*1000:.1f} mm"},
-                    {"Metric": "Median (P50) Depth", "Value": f"{pen.get('p50_penetration_m', 0.0)*1000:.1f} mm"},
-                    {
-                        "Metric": "P10 – P90 Depth Interval",
-                        "Value": f"{pen.get('p10_penetration_m', 0.0)*1000:.1f} – {pen.get('p90_penetration_m', 0.0)*1000:.1f} mm",
-                    },
-                    {"Metric": "Target Equivalent RHA", "Value": f"{pen.get('target_los_rha_m', 0.0)*1000:.1f} mm"},
-                    {"Metric": "Perforation Probability", "Value": f"{pen.get('perforation_prob', 0.0)*100:.1f} %"},
-                ]
-            )
-            st.table(p_df)
-        else:
-            st.info("Spatial contour field generated when warhead fill mass > 0.")
-
-    with col_hz2:
-        st.subheader("📊 Error Budget Sensitivity & Bottleneck Ranking")
-        sens_view_mode = st.radio(
-            "Sensitivity View Mode",
-            ["📈 Spearman / Sobol Ranking (MC-10)", "📊 ±% Parameter Tornado Bottleneck"],
-            horizontal=True,
-            label_visibility="collapsed",
-            key="sim_sens_view_mode",
-        )
-        if sens_view_mode == "📈 Spearman / Sobol Ranking (MC-10)":
-            if res.sensitivity:
-                sens_df = pd.DataFrame(res.sensitivity)
-                score_col = (
-                    "importance_score"
-                    if "importance_score" in sens_df.columns
-                    else ("abs_rho" if "abs_rho" in sens_df.columns else sens_df.columns[1])
-                )
-                sens_df = sens_df.sort_values(score_col, ascending=True)
-                fig_sens = px.bar(
-                    sens_df,
-                    x=score_col,
-                    y="parameter",
-                    orientation="h",
-                    color=score_col,
-                    color_continuous_scale="Blues",
-                    labels={score_col: "Importance Score (|ρ_s| / Sobol S1)", "parameter": "Stochastic Input"},
-                    title="Variance / Rank-Correlation Contribution to Range Dispersion",
-                )
-                fig_sens.update_layout(height=400, margin=dict(l=20, r=20, t=40, b=20), coloraxis_showscale=False)
-                st.plotly_chart(fig_sens, width="stretch")
-            else:
-                st.info("Sensitivity analysis requires variation across stochastic parameters.")
-        else:
-            tor_pct = st.slider("Parameter Perturbation Sweep (±%)", 5.0, 40.0, 20.0, 5.0, key="sim_tornado_pct")
-            with st.spinner("Running ±% CEP50 Bottleneck Tornado Sweep..."):
-                tor_res = _cached_artillery_tornado(
-                    cur_ammo.model_dump_json(),
-                    cur_scn.model_dump_json(),
-                    perturbation_pct=float(tor_pct),
-                    solved_qe_rad=float(res.solved_qe_rad) if res.solved_qe_rad > 0 else None,
-                    seed=int(cur_scn.seed or 42),
-                )
-            tsm = tor_res["summary"]
-            st.session_state["sim_tornado_last"] = tor_res
-            st.info(
-                f"**#1 CEP50 Bottleneck:** `{tsm['top_driver']}` (swing **{tsm['top_swing']:.2f} m**) — "
-                f"{tor_res['top_bottlenecks'][0]['recommendation']}"
-            )
-            fig_tor = create_sensitivity_tornado_figure(tor_res, metric_label="CEP 50% (m)", higher_is_better=False)
-            fig_tor.update_layout(height=390, margin=dict(l=180, r=20, t=48, b=35))
-            st.plotly_chart(fig_tor, width="stretch")
-            with st.expander("📋 Artillery Tornado Sensitivity Table & CSV", expanded=False):
-                tor_df = pd.DataFrame(tor_res["rows"])
-                st.dataframe(tor_df, width="stretch")
-                st.download_button(
-                    "📥 Download Artillery Tornado Sensitivity (.csv)",
-                    tor_df.to_csv(index=False).encode("utf-8"),
-                    f"{cur_ammo.id}_cep_tornado.csv",
-                    "text/csv",
-                    key="sim_dl_tornado_csv",
-                )
-
-    # Row 2.5: Multi-Stage System Failure Modes, Reliability & FMEA Breakdown
-    with st.expander("🛠️ System Failure Modes, Reliability & FMEA Breakdown (Propulsion → Ballistics → Fuze → Warhead)", expanded=True):
-        fms = res.failure_mode_summary or {}
-        fm_counts = fms.get("counts", {})
-        fm_c1, fm_c2, fm_c3, fm_c4 = st.columns(4)
-        fm_c1.metric(
-            "Overall System Reliability",
-            f"{float(fms.get('overall_system_reliability', 1.0)) * 100:.2f} %",
-            delta=f"{int(fms.get('nominal_function_count', res.n_total_rounds))} / {res.n_total_rounds} Nominal",
-            delta_color="off",
-        )
-        fm_c2.metric(
-            "Total Anomaly / Failure Rate",
-            f"{float(fms.get('any_anomaly_or_failure_rate', 0.0)) * 100:.2f} %",
-            delta=f"{res.n_total_rounds - int(fms.get('nominal_function_count', res.n_total_rounds))} Affected Rounds",
-            delta_color="inverse",
-        )
-        fm_c3.metric(
-            "Total Fuze Dud Rate",
-            f"{float(fms.get('dud_rate', 0.0)) * 100:.2f} %",
-            delta=f"Persistent UXO: {float(fms.get('uxo_rate', 0.0)) * 100:.2f}%",
-            delta_color="off",
-        )
-        fm_c4.metric(
-            "Self-Destruct Neutralized (FZ-07)",
-            f"{int(fms.get('self_destruct_neutralized_count', 0))} rounds",
-            delta=f"Expected UXO/Salvo: {float(res.uxo.get('expected_uxo_per_salvo', 0.0)):.2f}",
-            delta_color="off",
-        )
-
-        fmea_col1, fmea_col2 = st.columns([1.15, 1.35])
-        if not trials_df.empty and "failure_mode" in trials_df:
-            fmea_Consequences = {
-                "Nominal Function": "Full design propulsion, stable flight, and high-order warhead initiation",
-                "Fuze Initiation Dud (FZ-03)": "Primary fuze initiation failure; zero explosive yield, potential UXO hazard",
-                "Impact Graze / Ricochet Fail (FZ-06)": "Shallow angle-of-fall graze or low-velocity ricochet below arming/function threshold",
-                "Safe & Arm (S&A) Fail": "Mechanical/electronic S&A fails to arm in flight; unarmed impact dud / UXO",
-                "Premature Airburst": "Early trajectory function (rain/canopy/time); ~42% range loss and zero target effect",
-                "Low-Order Partial Detonation": "Incomplete shock-to-detonation transition; 25% of nominal blast/fragmentation output",
-                "Propulsion / Ignition Anomaly": "Incomplete propellant burn or gas-seal blow-by; 15% muzzle velocity drop (short round)",
-                "Rocket Motor Thrust / Burnout Anomaly (EB-13)": "Solid rocket motor grain cracking, nozzle erosion, or early burnout; ~22% boost range deficit",
-                "Fin / Sabot Tip-Off Anomaly": "Asymmetric sabot discard or fin deployment anomaly; 4.5 mil angular dispersion & +18% drag",
-                "Wrap-Around Fin / Nozzle Tip-Off Anomaly": "Launch-tube exit tip-off or wrap-around fin deployment asymmetry; high cross-range dispersion",
-                "Ballistic Instability (Sg < 1)": "Gyroscopic stability factor Sg < 1.0; severe yaw divergence and range degradation",
-            }
-            grp_rows = []
-            for mode_name, grp in trials_df.groupby("failure_mode"):
-                cnt = len(grp)
-                grp_rows.append(
-                    {
-                        "Failure Mode (FMEA)": str(mode_name),
-                        "Count": int(cnt),
-                        "Share (%)": round(100.0 * cnt / len(trials_df), 2),
-                        "Mean Range (m)": round(float(grp["range_m"].mean()), 1),
-                        "Mean V_imp (m/s)": round(float(grp["v_impact_mps"].mean()), 1),
-                        "Mean Pk": round(float(grp["p_kill"].mean()), 3) if "p_kill" in grp else 0.0,
-                        "UXO Fraction (%)": round(100.0 * float(grp["is_uxo"].mean()), 1) if "is_uxo" in grp else 0.0,
-                        "Physical Mechanism & Consequence": fmea_Consequences.get(str(mode_name), "Subsystem anomaly"),
-                    }
-                )
-            fmea_df = pd.DataFrame(grp_rows).sort_values("Count", ascending=False)
-
-            with fmea_col1:
-                non_nom_df = fmea_df[fmea_df["Failure Mode (FMEA)"] != "Nominal Function"]
-                plot_fmea_df = non_nom_df if not non_nom_df.empty else fmea_df
-                fig_fmea = px.bar(
-                    plot_fmea_df.sort_values("Share (%)", ascending=True),
-                    x="Share (%)",
-                    y="Failure Mode (FMEA)",
-                    orientation="h",
-                    color="Failure Mode (FMEA)",
-                    text="Count",
-                    title="Pareto Breakdown of Non-Nominal Failure Modes (%)" if not non_nom_df.empty else "Failure Mode Distribution (%)",
-                )
-                fig_fmea.update_layout(height=320, margin=dict(l=15, r=15, t=40, b=15), showlegend=False)
-                st.plotly_chart(fig_fmea, width="stretch")
-
-            with fmea_col2:
-                st.dataframe(fmea_df, width="stretch", height=320)
-
-    # Row 3: Monte Carlo Convergence & Provenance Audit
-    conv_col1, conv_col2 = st.columns(2)
-    with conv_col1:
-        st.subheader("📉 Monte Carlo Running Convergence Diagnostics")
-        if res.convergence and len(res.convergence.get("n_rounds", [])) > 1:
-            conv_df = pd.DataFrame(res.convergence)
-            fig_conv = make_subplots(specs=[[{"secondary_y": True}]])
-            y_r_col = "mean_range_m" if "mean_range_m" in conv_df.columns else conv_df.columns[1]
-            y_p_col = "sspk" if "sspk" in conv_df.columns else conv_df.columns[-1]
-            fig_conv.add_trace(
-                go.Scatter(
-                    x=conv_df["n_rounds"],
-                    y=conv_df[y_r_col],
-                    mode="lines+markers",
-                    name="Running Mean Range (m)",
-                    line=dict(color="#2563EB", width=2.5),
-                ),
-                secondary_y=False,
-            )
-            fig_conv.add_trace(
-                go.Scatter(
-                    x=conv_df["n_rounds"],
-                    y=conv_df[y_p_col],
-                    mode="lines+markers",
-                    name="Running SSPK (-)",
-                    line=dict(color="#10B981", width=2.5, dash="dash"),
-                ),
-                secondary_y=True,
-            )
-            fig_conv.update_xaxes(title_text="Cumulative Simulated Rounds (N)")
-            fig_conv.update_yaxes(title_text="Running Mean Range (m)", secondary_y=False)
-            fig_conv.update_yaxes(title_text="Running SSPK", secondary_y=True)
-            fig_conv.update_layout(
-                title="Estimator Stability vs Sample Size N",
-                height=340,
-                margin=dict(l=20, r=20, t=40, b=20),
-            )
-            st.plotly_chart(fig_conv, width="stretch")
-
-    with conv_col2:
-        st.subheader("🧾 Provenance & Active Formula Audit Trail")
-        forms_used = res.provenance.get("formulas_used", [])
-        if forms_used:
-            f_df = pd.DataFrame(forms_used)
-            st.dataframe(
-                f_df[["formula_id", "module", "name", "verification_status", "source_id"]],
-                width="stretch",
-                height=300,
-            )
-
-    # Row 4: Deep Scientific Physics Diagnostics (Energy Conservation, Re/Mach/Sg, Bivariate Covariance)
-    with st.expander(
-        "🔬 Flight Energy Conservation, Dimensionless Aerodynamics (Re, Mach, S_g) & Bivariate Eigen-Analysis",
-        expanded=True,
-    ):
-        sci_c1, sci_c2, sci_c3 = st.columns([1.2, 1.2, 1.0])
-        if res.sample_trajectory is not None:
-            tr_nom = res.sample_trajectory
-            rx_a = np.array(tr_nom.get("range_m", []), dtype=np.float64)
-            rz_a = np.array(tr_nom.get("alt_m", []), dtype=np.float64)
-            v_a = np.array(tr_nom.get("speed_mps", []), dtype=np.float64)
-            m_proj = float(cur_ammo.mass_kg)
-            d_proj = float(cur_ammo.calibre_m)
-
-            # Mechanical energy conservation (MJ)
-            ek_mj = 0.5 * m_proj * (v_a**2) * 1e-6
-            ep_mj = m_proj * 9.80665 * rz_a * 1e-6
-            etot_mj = ek_mj + ep_mj
-            w_drag_mj = np.maximum(etot_mj[0] - etot_mj, 0.0) if len(etot_mj) > 0 else np.zeros_like(etot_mj)
-
-            with sci_c1:
-                fig_en = go.Figure()
-                fig_en.add_trace(
-                    go.Scatter(x=rx_a, y=ek_mj, name="Kinetic E_k (MJ)", line=dict(color="#2563EB", width=2.5))
-                )
-                fig_en.add_trace(
-                    go.Scatter(x=rx_a, y=ep_mj, name="Potential E_p (MJ)", line=dict(color="#10B981", width=2.5))
-                )
-                fig_en.add_trace(
+                fig_poi.add_trace(
                     go.Scatter(
-                        x=rx_a,
-                        y=etot_mj,
-                        name="Total Mech E_tot (MJ)",
-                        line=dict(color="#1E3A8A", width=2, dash="dash"),
+                        x=mean_d + cep95 * np.sin(theta),
+                        y=mean_r + cep95 * np.cos(theta),
+                        mode="lines",
+                        name=f"CEP 95% ({cep95:.1f}m)",
+                        line=dict(color="#EF4444", width=2, dash="dash"),
                     )
                 )
-                fig_en.add_trace(
+                fig_poi.add_trace(
                     go.Scatter(
-                        x=rx_a,
-                        y=w_drag_mj,
-                        name="Drag Work Dissipated W_d (MJ)",
-                        line=dict(color="#DC2626", width=2, dash="dot"),
+                        x=[mean_d],
+                        y=[mean_r],
+                        mode="markers",
+                        name="MPI",
+                        marker=dict(color="#1E3A8A", size=10, symbol="cross"),
                     )
                 )
-                fig_en.update_layout(
-                    title="First-Law Mechanical Energy Budget (ΔE = -∫ F_drag·dr)",
-                    xaxis_title="Downrange X (m)",
-                    yaxis_title="Energy (MJ)",
-                    height=330,
-                    margin=dict(l=15, r=15, t=40, b=15),
-                )
-                st.plotly_chart(fig_en, width="stretch")
+                fig_poi.update_layout(height=430, margin=dict(l=20, r=20, t=40, b=20))
+                st.plotly_chart(fig_poi, width="stretch")
 
-            with sci_c2:
-                atm_tr = eb_04_isa_atmosphere(rz_a, dT_K=float(cur_scn.met.deviations.dT_K))
-                rho_tr = np.asarray(atm_tr["rho_kg_m3"], dtype=np.float64)
-                t_tr = np.asarray(atm_tr["T_K"], dtype=np.float64)
-                re_tr = np.asarray(aerodynamic_reynolds_number(rho_tr, v_a, d_proj, t_tr), dtype=np.float64) * 1e-6
-                q_tr_kpa = 0.5 * rho_tr * (v_a**2) * 1e-3
-
-                fig_re = make_subplots(specs=[[{"secondary_y": True}]])
-                fig_re.add_trace(
-                    go.Scatter(
-                        x=rx_a,
-                        y=re_tr,
-                        name="Reynolds Number Re_d (10^6)",
-                        line=dict(color="#7C3AED", width=2.5),
-                    ),
-                    secondary_y=False,
+        with col_hz1:
+            st.subheader("💥 2D Spatial Effect Field vs IATG Safety Distance")
+            if res.hazard_grid is not None:
+                hg = res.hazard_grid
+                gx, gy = np.array(hg["x_m"]), np.array(hg["y_m"])
+                pk_grid = np.array(hg["pk_grid"])
+                fig_hz = go.Figure(
+                    data=go.Contour(
+                        x=gy,
+                        y=gx,
+                        z=pk_grid,
+                        colorscale="Reds",
+                        contours=dict(start=0.1, end=0.9, size=0.2, showlabels=True),
+                        colorbar=dict(title="Pk"),
+                    )
                 )
-                fig_re.add_trace(
-                    go.Scatter(
-                        x=rx_a,
-                        y=q_tr_kpa,
-                        name="Dynamic Pressure q (kPa)",
-                        line=dict(color="#EA580C", width=2.5, dash="dash"),
-                    ),
-                    secondary_y=True,
+                tb15_r = float(
+                    res.blast_and_safety.get("iatg_tb15_distances_m", {}).get(
+                        "inhabited_building_distance_m", 0.0
+                    )
                 )
-                fig_re.update_xaxes(title_text="Downrange X (m)")
-                fig_re.update_yaxes(title_text="Re_d (× 10^6)", secondary_y=False)
-                fig_re.update_yaxes(title_text="Dynamic Pressure q (kPa)", secondary_y=True)
-                fig_re.update_layout(
-                    title="Dimensionless Aerodynamics (Sutherland Re_d & Dynamic Pressure q)",
-                    height=330,
-                    margin=dict(l=15, r=15, t=40, b=15),
+                if tb15_r > 0:
+                    th_c = np.linspace(0, 2 * np.pi, 80)
+                    fig_hz.add_trace(
+                        go.Scatter(
+                            x=tb15_r * np.cos(th_c),
+                            y=tb15_r * np.sin(th_c),
+                            mode="lines",
+                            name=f"IATG IBD ({tb15_r:.0f} m)",
+                            line=dict(color="#DC2626", width=2, dash="dash"),
+                        )
+                    )
+                fig_hz.update_layout(
+                    xaxis_title="Deflection from Burst (m)",
+                    yaxis_title="Range from Burst (m)",
+                    title=f"Terminal Effect Contour (Effective Area: {res.effectiveness.get('lethal_area_m2', 0.0):.0f} m²)",
+                    height=430,
+                    margin=dict(l=20, r=20, t=40, b=20),
                 )
-                st.plotly_chart(fig_re, width="stretch")
-
-        with sci_c3:
-            st.markdown("##### 📐 Bivariate Covariance & Eigen-Structure")
-            if not trials_df.empty and len(trials_df) >= 4:
-                xr = trials_df["range_m"].to_numpy(dtype=np.float64)
-                yd = trials_df["deflection_m"].to_numpy(dtype=np.float64)
-                cov_mat = np.cov(xr, yd)
-                eigvals, eigvecs = np.linalg.eigh(cov_mat)
-                idx_sort = np.argsort(eigvals)[::-1]
-                eigvals = np.maximum(eigvals[idx_sort], 0.0)
-                eigvecs = eigvecs[:, idx_sort]
-                major_1sig = float(np.sqrt(eigvals[0]))
-                minor_1sig = float(np.sqrt(eigvals[1]))
-                angle_deg = float( np.degrees(np.arctan2(eigvecs[1, 0], eigvecs[0, 0])) )
-                r_corr = float(np.corrcoef(xr, yd)[0, 1]) if np.std(xr) > 0 and np.std(yd) > 0 else 0.0
-                _, ks_p_r = sp_stats.kstest(
-                    (xr - np.mean(xr)) / max(float(np.std(xr)), 1e-9), "norm"
-                )
-                _, ks_p_d = sp_stats.kstest(
-                    (yd - np.mean(yd)) / max(float(np.std(yd)), 1e-9), "norm"
-                )
-                eig_df = pd.DataFrame(
+                st.plotly_chart(fig_hz, width="stretch")
+            elif res.penetration is not None:
+                pen = res.penetration
+                st.markdown("#### 🛡️ Armor Penetration & Perforation Mechanics (`PEN-01..PEN-05`)")
+                p_df = pd.DataFrame(
                     [
-                        {"Diagnostic": "Principal Major Semi-Axis √λ₁", "Value": f"{major_1sig:.2f} m"},
-                        {"Diagnostic": "Principal Minor Semi-Axis √λ₂", "Value": f"{minor_1sig:.2f} m"},
-                        {"Diagnostic": "Ellipse Aspect Ratio √(λ₁/λ₂)", "Value": f"{major_1sig / max(minor_1sig, 1e-6):.2f}"},
-                        {"Diagnostic": "Principal Axis Azimuth θ_eig", "Value": f"{angle_deg:+.1f}°"},
-                        {"Diagnostic": "Range-Deflection Corr r_xy", "Value": f"{r_corr:+.3f}"},
-                        {"Diagnostic": "KS Gaussianity p-val (Range / Defl)", "Value": f"{ks_p_r:.2f} / {ks_p_d:.2f}"},
+                        {"Metric": "Penetrator Mechanism", "Value": str(pen.get("type", "kinetic"))},
+                        {"Metric": "Mean Penetration Depth", "Value": f"{pen.get('mean_penetration_m', 0.0)*1000:.1f} mm"},
+                        {"Metric": "Median (P50) Depth", "Value": f"{pen.get('p50_penetration_m', 0.0)*1000:.1f} mm"},
+                        {
+                            "Metric": "P10 – P90 Depth Interval",
+                            "Value": f"{pen.get('p10_penetration_m', 0.0)*1000:.1f} – {pen.get('p90_penetration_m', 0.0)*1000:.1f} mm",
+                        },
+                        {"Metric": "Target Equivalent RHA", "Value": f"{pen.get('target_los_rha_m', 0.0)*1000:.1f} mm"},
+                        {"Metric": "Perforation Probability", "Value": f"{pen.get('perforation_prob', 0.0)*100:.1f} %"},
                     ]
                 )
-                st.table(eig_df)
+                st.table(p_df)
+            else:
+                st.info("Spatial contour field generated when warhead fill mass > 0.")
 
-    # Artifact Export Section
-    st.subheader("📥 Export Simulation Artifacts")
-    exp_c1, exp_c2, exp_c3, exp_c4, exp_c5 = st.columns(5)
-    with exp_c1:
-        csv_bytes = trials_to_csv_bytes(res)
-        st.download_button(
-            "📄 Download CSV Trials",
-            csv_bytes,
-            f"{cur_ammo.id}_trials.csv",
-            "text/csv",
-            width="stretch",
-        )
-    with exp_c2:
-        json_str = summary_to_json_str(res)
-        st.download_button(
-            "📦 Download JSON Summary",
-            json_str.encode("utf-8"),
-            f"{cur_ammo.id}_summary.json",
-            "application/json",
-            width="stretch",
-        )
-    with exp_c3:
-        geojson_str = geojson_to_str(res, scenario=cur_scn)
-        st.download_button(
-            "🗺️ Download GeoJSON",
-            geojson_str.encode("utf-8"),
-            f"{cur_ammo.id}_contours.geojson",
-            "application/geo+json",
-            width="stretch",
-        )
-    with exp_c4:
-        png_bytes = render_report_figure_bytes(res, scenario=cur_scn, fmt="png")
-        st.download_button(
-            "🖼️ Download PNG Report",
-            png_bytes,
-            f"{cur_ammo.id}_report.png",
-            "image/png",
-            width="stretch",
-        )
-    with exp_c5:
-        pdf_bytes = render_report_figure_bytes(res, scenario=cur_scn, fmt="pdf")
-        st.download_button(
-            "📑 Download PDF Report",
-            pdf_bytes,
-            f"{cur_ammo.id}_report.pdf",
-            "application/pdf",
-            width="stretch",
-        )
+    with sim_tab_flt:
+        flt_col1, flt_col2 = st.columns(2)
+        with flt_col1:
+            st.subheader("📈 Flight Trajectory Bundle & Velocity Profile")
+            if res.sample_trajectory is not None:
+                fig_traj = make_subplots(specs=[[{"secondary_y": True}]])
+                sample_list = (res.sample_trajectories or [res.sample_trajectory])[:8]
+                for idx_t, tr_item in enumerate(sample_list):
+                    fig_traj.add_trace(
+                        go.Scatter(
+                            x=tr_item.get("range_m", []),
+                            y=tr_item.get("alt_m", []),
+                            mode="lines",
+                            name="Nominal Altitude" if idx_t == 0 else f"Sample #{idx_t + 1}",
+                            line=dict(
+                                color="#1E3A8A" if idx_t == 0 else "rgba(37, 99, 235, 0.30)",
+                                width=3 if idx_t == 0 else 1.5,
+                            ),
+                            showlegend=(idx_t < 2),
+                        ),
+                        secondary_y=False,
+                    )
 
-    sim_summary_payload = {"dispersion": res.dispersion, "effectiveness": res.effectiveness}
-    src_ids_used = [s["source_id"] for s in res.provenance.get("sources", []) if "source_id" in s]
-    with st.expander("💾 Scenario Library & Executive Briefing Deck (.pdf / .pptx)", expanded=False):
-        eb1, eb2 = st.columns(2)
-        with eb1:
+                traj_data = res.sample_trajectory
+                if "speed_mps" in traj_data:
+                    fig_traj.add_trace(
+                        go.Scatter(
+                            x=traj_data.get("range_m", []),
+                            y=traj_data.get("speed_mps", []),
+                            mode="lines",
+                            name="Flight Speed (m/s)",
+                            line=dict(color="#DC2626", width=2, dash="dot"),
+                        ),
+                        secondary_y=True,
+                    )
+
+                r_max = max(traj_data.get("range_m", [1000.0]))
+                t_x = np.linspace(0, r_max, 50)
+                t_y = np.zeros_like(t_x)
+                if cur_scn.terrain.mode == "profile" and cur_scn.terrain.profile:
+                    p0, p1 = cur_scn.terrain.profile[0], cur_scn.terrain.profile[-1]
+                    t_y = np.interp(t_x, [p0.range_m, p1.range_m], [p0.elevation_m, p1.elevation_m])
+
+                fig_traj.add_trace(
+                    go.Scatter(
+                        x=t_x,
+                        y=t_y,
+                        mode="lines",
+                        fill="tozeroy",
+                        name="Ground Elevation",
+                        line=dict(color="#6B7280", width=1.5),
+                        fillcolor="rgba(107, 114, 128, 0.2)",
+                    ),
+                    secondary_y=False,
+                )
+                fig_traj.update_xaxes(title_text="Downrange X (m)")
+                fig_traj.update_yaxes(title_text="Altitude Z (m)", secondary_y=False)
+                fig_traj.update_yaxes(title_text="Speed (m/s)", secondary_y=True)
+                fig_traj.update_layout(
+                    title=f"Trajectory Plume & Speed Profile (Solved QE: {res.solved_qe_mils:.1f} mils)",
+                    height=400,
+                    margin=dict(l=20, r=20, t=40, b=20),
+                )
+                st.plotly_chart(fig_traj, width="stretch")
+            else:
+                st.info("Sample trajectory available for L1/L2/L3 physics simulations.")
+
+        with flt_col2:
+            st.subheader("📉 Monte Carlo Running Convergence Diagnostics")
+            if res.convergence and len(res.convergence.get("n_rounds", [])) > 1:
+                conv_df = pd.DataFrame(res.convergence)
+                fig_conv = make_subplots(specs=[[{"secondary_y": True}]])
+                y_r_col = "mean_range_m" if "mean_range_m" in conv_df.columns else conv_df.columns[1]
+                y_p_col = "sspk" if "sspk" in conv_df.columns else conv_df.columns[-1]
+                fig_conv.add_trace(
+                    go.Scatter(
+                        x=conv_df["n_rounds"],
+                        y=conv_df[y_r_col],
+                        mode="lines+markers",
+                        name="Running Mean Range (m)",
+                        line=dict(color="#2563EB", width=2.5),
+                    ),
+                    secondary_y=False,
+                )
+                fig_conv.add_trace(
+                    go.Scatter(
+                        x=conv_df["n_rounds"],
+                        y=conv_df[y_p_col],
+                        mode="lines+markers",
+                        name="Running SSPK (-)",
+                        line=dict(color="#10B981", width=2.5, dash="dash"),
+                    ),
+                    secondary_y=True,
+                )
+                fig_conv.update_xaxes(title_text="Cumulative Simulated Rounds (N)")
+                fig_conv.update_yaxes(title_text="Running Mean Range (m)", secondary_y=False)
+                fig_conv.update_yaxes(title_text="Running SSPK", secondary_y=True)
+                fig_conv.update_layout(
+                    title="Estimator Stability vs Sample Size N",
+                    height=400,
+                    margin=dict(l=20, r=20, t=40, b=20),
+                )
+                st.plotly_chart(fig_conv, width="stretch")
+
+        with st.expander(
+            "🔬 Flight Energy Conservation, Dimensionless Aerodynamics (Re, Mach, S_g) & Bivariate Eigen-Analysis",
+            expanded=expert,
+        ):
+            sci_c1, sci_c2, sci_c3 = st.columns([1.2, 1.2, 1.0])
+            if res.sample_trajectory is not None:
+                tr_nom = res.sample_trajectory
+                rx_a = np.array(tr_nom.get("range_m", []), dtype=np.float64)
+                rz_a = np.array(tr_nom.get("alt_m", []), dtype=np.float64)
+                v_a = np.array(tr_nom.get("speed_mps", []), dtype=np.float64)
+                m_proj = float(cur_ammo.mass_kg)
+                d_proj = float(cur_ammo.calibre_m)
+
+                ek_mj = 0.5 * m_proj * (v_a**2) * 1e-6
+                ep_mj = m_proj * 9.80665 * rz_a * 1e-6
+                etot_mj = ek_mj + ep_mj
+                w_drag_mj = np.maximum(etot_mj[0] - etot_mj, 0.0) if len(etot_mj) > 0 else np.zeros_like(etot_mj)
+
+                with sci_c1:
+                    fig_en = go.Figure()
+                    fig_en.add_trace(
+                        go.Scatter(x=rx_a, y=ek_mj, name="Kinetic E_k (MJ)", line=dict(color="#2563EB", width=2.5))
+                    )
+                    fig_en.add_trace(
+                        go.Scatter(x=rx_a, y=ep_mj, name="Potential E_p (MJ)", line=dict(color="#10B981", width=2.5))
+                    )
+                    fig_en.add_trace(
+                        go.Scatter(
+                            x=rx_a,
+                            y=etot_mj,
+                            name="Total Mech E_tot (MJ)",
+                            line=dict(color="#1E3A8A", width=2, dash="dash"),
+                        )
+                    )
+                    fig_en.add_trace(
+                        go.Scatter(
+                            x=rx_a,
+                            y=w_drag_mj,
+                            name="Drag Work Dissipated W_d (MJ)",
+                            line=dict(color="#DC2626", width=2, dash="dot"),
+                        )
+                    )
+                    fig_en.update_layout(
+                        title="First-Law Mechanical Energy Budget (ΔE = -∫ F_drag·dr)",
+                        xaxis_title="Downrange X (m)",
+                        yaxis_title="Energy (MJ)",
+                        height=330,
+                        margin=dict(l=15, r=15, t=40, b=15),
+                    )
+                    st.plotly_chart(fig_en, width="stretch")
+
+                with sci_c2:
+                    atm_tr = eb_04_isa_atmosphere(rz_a, dT_K=float(cur_scn.met.deviations.dT_K))
+                    rho_tr = np.asarray(atm_tr["rho_kg_m3"], dtype=np.float64)
+                    t_tr = np.asarray(atm_tr["T_K"], dtype=np.float64)
+                    re_tr = np.asarray(aerodynamic_reynolds_number(rho_tr, v_a, d_proj, t_tr), dtype=np.float64) * 1e-6
+                    q_tr_kpa = 0.5 * rho_tr * (v_a**2) * 1e-3
+
+                    fig_re = make_subplots(specs=[[{"secondary_y": True}]])
+                    fig_re.add_trace(
+                        go.Scatter(
+                            x=rx_a,
+                            y=re_tr,
+                            name="Reynolds Number Re_d (10^6)",
+                            line=dict(color="#7C3AED", width=2.5),
+                        ),
+                        secondary_y=False,
+                    )
+                    fig_re.add_trace(
+                        go.Scatter(
+                            x=rx_a,
+                            y=q_tr_kpa,
+                            name="Dynamic Pressure q (kPa)",
+                            line=dict(color="#EA580C", width=2.5, dash="dash"),
+                        ),
+                        secondary_y=True,
+                    )
+                    fig_re.update_xaxes(title_text="Downrange X (m)")
+                    fig_re.update_yaxes(title_text="Re_d (× 10^6)", secondary_y=False)
+                    fig_re.update_yaxes(title_text="Dynamic Pressure q (kPa)", secondary_y=True)
+                    fig_re.update_layout(
+                        title="Dimensionless Aerodynamics (Sutherland Re_d & Dynamic Pressure q)",
+                        height=330,
+                        margin=dict(l=15, r=15, t=40, b=15),
+                    )
+                    st.plotly_chart(fig_re, width="stretch")
+
+            with sci_c3:
+                st.markdown("##### 📐 Bivariate Covariance & Eigen-Structure")
+                if not trials_df.empty and len(trials_df) >= 4:
+                    xr = trials_df["range_m"].to_numpy(dtype=np.float64)
+                    yd = trials_df["deflection_m"].to_numpy(dtype=np.float64)
+                    cov_mat = np.cov(xr, yd)
+                    eigvals, eigvecs = np.linalg.eigh(cov_mat)
+                    idx_sort = np.argsort(eigvals)[::-1]
+                    eigvals = np.maximum(eigvals[idx_sort], 0.0)
+                    eigvecs = eigvecs[:, idx_sort]
+                    major_1sig = float(np.sqrt(eigvals[0]))
+                    minor_1sig = float(np.sqrt(eigvals[1]))
+                    angle_deg = float(np.degrees(np.arctan2(eigvecs[1, 0], eigvecs[0, 0])))
+                    r_corr = float(np.corrcoef(xr, yd)[0, 1]) if np.std(xr) > 0 and np.std(yd) > 0 else 0.0
+                    _, ks_p_r = sp_stats.kstest((xr - np.mean(xr)) / max(float(np.std(xr)), 1e-9), "norm")
+                    _, ks_p_d = sp_stats.kstest((yd - np.mean(yd)) / max(float(np.std(yd)), 1e-9), "norm")
+                    eig_df = pd.DataFrame(
+                        [
+                            {"Diagnostic": "Principal Major Semi-Axis √λ₁", "Value": f"{major_1sig:.2f} m"},
+                            {"Diagnostic": "Principal Minor Semi-Axis √λ₂", "Value": f"{minor_1sig:.2f} m"},
+                            {"Diagnostic": "Ellipse Aspect Ratio √(λ₁/λ₂)", "Value": f"{major_1sig / max(minor_1sig, 1e-6):.2f}"},
+                            {"Diagnostic": "Principal Axis Azimuth θ_eig", "Value": f"{angle_deg:+.1f}°"},
+                            {"Diagnostic": "Range-Deflection Corr r_xy", "Value": f"{r_corr:+.3f}"},
+                            {"Diagnostic": "KS Gaussianity p-val (Range / Defl)", "Value": f"{ks_p_r:.2f} / {ks_p_d:.2f}"},
+                        ]
+                    )
+                    st.table(eig_df)
+
+    with sim_tab_sens:
+        sens_col, prov_col = st.columns(2)
+        with sens_col:
+            st.subheader("📊 Error Budget Sensitivity & Bottleneck Ranking")
+            sens_view_mode = st.radio(
+                "Sensitivity View Mode",
+                ["📈 Spearman / Sobol Ranking (MC-10)", "📊 ±% Parameter Tornado Bottleneck"],
+                horizontal=True,
+                label_visibility="collapsed",
+                key="sim_sens_view_mode",
+            )
+            if sens_view_mode == "📈 Spearman / Sobol Ranking (MC-10)":
+                if res.sensitivity:
+                    sens_df = pd.DataFrame(res.sensitivity)
+                    score_col = (
+                        "importance_score"
+                        if "importance_score" in sens_df.columns
+                        else ("abs_rho" if "abs_rho" in sens_df.columns else sens_df.columns[1])
+                    )
+                    sens_df = sens_df.sort_values(score_col, ascending=True)
+                    fig_sens = px.bar(
+                        sens_df,
+                        x=score_col,
+                        y="parameter",
+                        orientation="h",
+                        color=score_col,
+                        color_continuous_scale="Blues",
+                        labels={score_col: "Importance Score (|ρ_s| / Sobol S1)", "parameter": "Stochastic Input"},
+                        title="Variance / Rank-Correlation Contribution to Range Dispersion",
+                    )
+                    fig_sens.update_layout(height=360, margin=dict(l=20, r=20, t=40, b=20), coloraxis_showscale=False)
+                    st.plotly_chart(fig_sens, width="stretch")
+                else:
+                    st.info("Sensitivity analysis requires variation across stochastic parameters.")
+            else:
+                tor_pct = st.slider("Parameter Perturbation Sweep (±%)", 5.0, 40.0, 20.0, 5.0, key="sim_tornado_pct")
+                with st.spinner("Running ±% CEP50 Bottleneck Tornado Sweep..."):
+                    tor_res = _cached_artillery_tornado(
+                        cur_ammo.model_dump_json(),
+                        cur_scn.model_dump_json(),
+                        perturbation_pct=float(tor_pct),
+                        solved_qe_rad=float(res.solved_qe_rad) if res.solved_qe_rad > 0 else None,
+                        seed=int(cur_scn.seed or 42),
+                    )
+                tsm = tor_res["summary"]
+                st.session_state["sim_tornado_last"] = tor_res
+                st.info(
+                    f"**#1 CEP50 Bottleneck:** `{tsm['top_driver']}` (swing **{tsm['top_swing']:.2f} m**) — "
+                    f"{tor_res['top_bottlenecks'][0]['recommendation']}"
+                )
+                fig_tor = create_sensitivity_tornado_figure(tor_res, metric_label="CEP 50% (m)", higher_is_better=False)
+                fig_tor.update_layout(height=360, margin=dict(l=180, r=20, t=48, b=35))
+                st.plotly_chart(fig_tor, width="stretch")
+                with st.expander("📋 Artillery Tornado Sensitivity Table & CSV", expanded=False):
+                    tor_df = pd.DataFrame(tor_res["rows"])
+                    st.dataframe(tor_df, width="stretch")
+                    st.download_button(
+                        "📥 Download Artillery Tornado Sensitivity (.csv)",
+                        tor_df.to_csv(index=False).encode("utf-8"),
+                        f"{cur_ammo.id}_cep_tornado.csv",
+                        "text/csv",
+                        key="sim_dl_tornado_csv",
+                    )
+
+        with prov_col:
+            st.subheader("🧾 Provenance & Active Formula Audit Trail")
+            forms_used = res.provenance.get("formulas_used", [])
+            if forms_used:
+                f_df = pd.DataFrame(forms_used)
+                st.dataframe(
+                    f_df[["formula_id", "module", "name", "verification_status", "source_id"]],
+                    width="stretch",
+                    height=360,
+                )
+
+        with st.expander(
+            "🛠️ System Failure Modes, Reliability & FMEA Breakdown (Propulsion → Ballistics → Fuze → Warhead)",
+            expanded=expert,
+        ):
+            fms = res.failure_mode_summary or {}
+            fm_c1, fm_c2, fm_c3, fm_c4 = st.columns(4)
+            fm_c1.metric(
+                "Overall System Reliability",
+                f"{float(fms.get('overall_system_reliability', 1.0)) * 100:.2f} %",
+                delta=f"{int(fms.get('nominal_function_count', res.n_total_rounds))} / {res.n_total_rounds} Nominal",
+                delta_color="off",
+            )
+            fm_c2.metric(
+                "Total Anomaly / Failure Rate",
+                f"{float(fms.get('any_anomaly_or_failure_rate', 0.0)) * 100:.2f} %",
+                delta=f"{res.n_total_rounds - int(fms.get('nominal_function_count', res.n_total_rounds))} Affected Rounds",
+                delta_color="inverse",
+            )
+            fm_c3.metric(
+                "Total Fuze Dud Rate",
+                f"{float(fms.get('dud_rate', 0.0)) * 100:.2f} %",
+                delta=f"Persistent UXO: {float(fms.get('uxo_rate', 0.0)) * 100:.2f}%",
+                delta_color="off",
+            )
+            fm_c4.metric(
+                "Self-Destruct Neutralized (FZ-07)",
+                f"{int(fms.get('self_destruct_neutralized_count', 0))} rounds",
+                delta=f"Expected UXO/Salvo: {float(res.uxo.get('expected_uxo_per_salvo', 0.0)):.2f}",
+                delta_color="off",
+            )
+
+            fmea_col1, fmea_col2 = st.columns([1.15, 1.35])
+            if not trials_df.empty and "failure_mode" in trials_df:
+                fmea_Consequences = {
+                    "Nominal Function": "Full design propulsion, stable flight, and high-order warhead initiation",
+                    "Fuze Initiation Dud (FZ-03)": "Primary fuze initiation failure; zero explosive yield, potential UXO hazard",
+                    "Impact Graze / Ricochet Fail (FZ-06)": "Shallow angle-of-fall graze or low-velocity ricochet below arming/function threshold",
+                    "Safe & Arm (S&A) Fail": "Mechanical/electronic S&A fails to arm in flight; unarmed impact dud / UXO",
+                    "Premature Airburst": "Early trajectory function (rain/canopy/time); ~42% range loss and zero target effect",
+                    "Low-Order Partial Detonation": "Incomplete shock-to-detonation transition; 25% of nominal blast/fragmentation output",
+                    "Propulsion / Ignition Anomaly": "Incomplete propellant burn or gas-seal blow-by; 15% muzzle velocity drop (short round)",
+                    "Rocket Motor Thrust / Burnout Anomaly (EB-13)": "Solid rocket motor grain cracking, nozzle erosion, or early burnout; ~22% boost range deficit",
+                    "Fin / Sabot Tip-Off Anomaly": "Asymmetric sabot discard or fin deployment anomaly; 4.5 mil angular dispersion & +18% drag",
+                    "Wrap-Around Fin / Nozzle Tip-Off Anomaly": "Launch-tube exit tip-off or wrap-around fin deployment asymmetry; high cross-range dispersion",
+                    "Ballistic Instability (Sg < 1)": "Gyroscopic stability factor Sg < 1.0; severe yaw divergence and range degradation",
+                }
+                grp_rows = []
+                for mode_name, grp in trials_df.groupby("failure_mode"):
+                    cnt = len(grp)
+                    grp_rows.append(
+                        {
+                            "Failure Mode (FMEA)": str(mode_name),
+                            "Count": int(cnt),
+                            "Share (%)": round(100.0 * cnt / len(trials_df), 2),
+                            "Mean Range (m)": round(float(grp["range_m"].mean()), 1),
+                            "Mean V_imp (m/s)": round(float(grp["v_impact_mps"].mean()), 1),
+                            "Mean Pk": round(float(grp["p_kill"].mean()), 3) if "p_kill" in grp else 0.0,
+                            "UXO Fraction (%)": round(100.0 * float(grp["is_uxo"].mean()), 1) if "is_uxo" in grp else 0.0,
+                            "Physical Mechanism & Consequence": fmea_Consequences.get(str(mode_name), "Subsystem anomaly"),
+                        }
+                    )
+                fmea_df = pd.DataFrame(grp_rows).sort_values("Count", ascending=False)
+
+                with fmea_col1:
+                    non_nom_df = fmea_df[fmea_df["Failure Mode (FMEA)"] != "Nominal Function"]
+                    plot_fmea_df = non_nom_df if not non_nom_df.empty else fmea_df
+                    fig_fmea = px.bar(
+                        plot_fmea_df.sort_values("Share (%)", ascending=True),
+                        x="Share (%)",
+                        y="Failure Mode (FMEA)",
+                        orientation="h",
+                        color="Failure Mode (FMEA)",
+                        text="Count",
+                        title="Pareto Breakdown of Non-Nominal Failure Modes (%)" if not non_nom_df.empty else "Failure Mode Distribution (%)",
+                    )
+                    fig_fmea.update_layout(height=320, margin=dict(l=15, r=15, t=40, b=15), showlegend=False)
+                    st.plotly_chart(fig_fmea, width="stretch")
+
+                with fmea_col2:
+                    st.dataframe(fmea_df, width="stretch", height=320)
+
+        st.subheader("📥 Export Simulation Artifacts")
+        exp_c1, exp_c2, exp_c3, exp_c4, exp_c5 = st.columns(5)
+        with exp_c1:
+            csv_bytes = trials_to_csv_bytes(res)
             st.download_button(
-                "📑 Executive Multi-Page Briefing (.pdf)",
-                generate_executive_briefing_pdf(
-                    title=f"{cur_ammo.name} — Monte Carlo Engineering Briefing",
-                    subtitle=f"{cur_scn.name} [{cur_scn.fidelity}, {cur_scn.sampler}]",
-                    simulator_summary=sim_summary_payload,
-                    tornado_result=st.session_state.get("sim_tornado_last"),
-                    source_ids=src_ids_used or None,
-                ),
-                f"{cur_ammo.id}_executive_briefing.pdf",
+                "📄 Download CSV Trials",
+                csv_bytes,
+                f"{cur_ammo.id}_trials.csv",
+                "text/csv",
+                width="stretch",
+            )
+        with exp_c2:
+            json_str = summary_to_json_str(res)
+            st.download_button(
+                "📦 Download JSON Summary",
+                json_str.encode("utf-8"),
+                f"{cur_ammo.id}_summary.json",
+                "application/json",
+                width="stretch",
+            )
+        with exp_c3:
+            geojson_str = geojson_to_str(res, scenario=cur_scn)
+            st.download_button(
+                "🗺️ Download GeoJSON",
+                geojson_str.encode("utf-8"),
+                f"{cur_ammo.id}_contours.geojson",
+                "application/geo+json",
+                width="stretch",
+            )
+        with exp_c4:
+            png_bytes = render_report_figure_bytes(res, scenario=cur_scn, fmt="png")
+            st.download_button(
+                "🖼️ Download PNG Report",
+                png_bytes,
+                f"{cur_ammo.id}_report.png",
+                "image/png",
+                width="stretch",
+            )
+        with exp_c5:
+            pdf_bytes = render_report_figure_bytes(res, scenario=cur_scn, fmt="pdf")
+            st.download_button(
+                "📑 Download PDF Report",
+                pdf_bytes,
+                f"{cur_ammo.id}_report.pdf",
                 "application/pdf",
                 width="stretch",
-                key="sim_dl_exec_pdf",
-            )
-        with eb2:
-            st.download_button(
-                "📊 Executive 16:9 Slide Deck (.pptx)",
-                generate_executive_briefing_pptx(
-                    title=f"{cur_ammo.name} — Monte Carlo Engineering Briefing",
-                    subtitle=f"{cur_scn.name} [{cur_scn.fidelity}, {cur_scn.sampler}]",
-                    simulator_summary=sim_summary_payload,
-                    tornado_result=st.session_state.get("sim_tornado_last"),
-                    source_ids=src_ids_used or None,
-                ),
-                f"{cur_ammo.id}_executive_briefing.pptx",
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                width="stretch",
-                key="sim_dl_exec_pptx",
             )
 
-        sim_lib = ScenarioLibrary()
-        sl1, sl2, sl3 = st.columns([1.4, 1.0, 0.8])
-        with sl1:
-            sim_sv_name = st.text_input("Snapshot Name", value=f"{cur_ammo.id} @ {cur_scn.aim.range_m:.0f}m", key="sim_lib_name")
-        with sl2:
-            sim_sv_tags = st.text_input("Tags", value=f"{cur_ammo.class_id},{cur_scn.fidelity}", key="sim_lib_tags")
-        with sl3:
-            st.write("")
-            if st.button("💾 Save Run", type="primary", width="stretch", key="sim_lib_save"):
-                rec = sim_lib.save_scenario(
-                    name=sim_sv_name,
-                    domain="ballistics",
-                    config={
-                        "preset_id": cur_ammo.id,
-                        "fidelity": cur_scn.fidelity,
-                        "range_m": cur_scn.aim.range_m,
-                        "mv_mu": cur_ammo.launch.mv.mu,
-                        "form_factor": cur_ammo.aero.form_factor.mu,
-                    },
-                    metrics={
-                        "mean_range_m": round(float(res.dispersion.get("mean_range_m", 0.0)), 2),
-                        "cep_m": round(float(res.dispersion.get("cep_m", 0.0)), 2),
-                        "salvo_pk_mean": round(float(res.effectiveness.get("salvo_pk_mean", 0.0)), 4),
-                    },
-                    tags=[t.strip() for t in sim_sv_tags.split(",") if t.strip()],
+        sim_summary_payload = {"dispersion": res.dispersion, "effectiveness": res.effectiveness}
+        src_ids_used = [s["source_id"] for s in res.provenance.get("sources", []) if "source_id" in s]
+        with st.expander("💾 Scenario Library & Executive Briefing Deck (.pdf / .pptx)", expanded=False):
+            eb1, eb2 = st.columns(2)
+            with eb1:
+                st.download_button(
+                    "📑 Executive Multi-Page Briefing (.pdf)",
+                    generate_executive_briefing_pdf(
+                        title=f"{cur_ammo.name} — Monte Carlo Engineering Briefing",
+                        subtitle=f"{cur_scn.name} [{cur_scn.fidelity}, {cur_scn.sampler}]",
+                        simulator_summary=sim_summary_payload,
+                        tornado_result=st.session_state.get("sim_tornado_last"),
+                        source_ids=src_ids_used or None,
+                    ),
+                    f"{cur_ammo.id}_executive_briefing.pdf",
+                    "application/pdf",
+                    width="stretch",
+                    key="sim_dl_exec_pdf",
                 )
-                st.success(f"Saved `{rec['name']}` ({rec['id']}).")
+            with eb2:
+                st.download_button(
+                    "📊 Executive 16:9 Slide Deck (.pptx)",
+                    generate_executive_briefing_pptx(
+                        title=f"{cur_ammo.name} — Monte Carlo Engineering Briefing",
+                        subtitle=f"{cur_scn.name} [{cur_scn.fidelity}, {cur_scn.sampler}]",
+                        simulator_summary=sim_summary_payload,
+                        tornado_result=st.session_state.get("sim_tornado_last"),
+                        source_ids=src_ids_used or None,
+                    ),
+                    f"{cur_ammo.id}_executive_briefing.pptx",
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    width="stretch",
+                    key="sim_dl_exec_pptx",
+                )
 
-        sim_saved = sim_lib.list_scenarios(domain="ballistics")
-        if sim_saved:
-            st.dataframe(
-                pd.DataFrame(
-                    [
-                        {
-                            "ID": r["id"],
-                            "Name": r["name"],
-                            "Updated": r["updated_at"],
-                            "CEP50 (m)": r["metrics"].get("cep_m", "—"),
-                            "Salvo Pk": r["metrics"].get("salvo_pk_mean", "—"),
-                        }
-                        for r in sim_saved
-                    ]
-                ),
-                width="stretch",
-            )
-            if len(sim_saved) >= 2:
-                id_map_s = {f"{r['name']} ({r['id']})": r["id"] for r in sim_saved}
-                sd1, sd2 = st.columns(2)
-                with sd1:
-                    sa_pick = st.selectbox("Compare Baseline A", list(id_map_s.keys()), index=1, key="sim_lib_da")
-                with sd2:
-                    sb_pick = st.selectbox("Compare Candidate B", list(id_map_s.keys()), index=0, key="sim_lib_db")
-                if id_map_s[sa_pick] != id_map_s[sb_pick]:
-                    d_sim = sim_lib.diff_scenarios(id_map_s[sa_pick], id_map_s[sb_pick])
-                    if d_sim["metric_diffs"]:
-                        st.dataframe(pd.DataFrame(d_sim["metric_diffs"]), width="stretch")
+            sim_lib = ScenarioLibrary()
+            sl1, sl2, sl3 = st.columns([1.4, 1.0, 0.8])
+            with sl1:
+                sim_sv_name = st.text_input("Snapshot Name", value=f"{cur_ammo.id} @ {cur_scn.aim.range_m:.0f}m", key="sim_lib_name")
+            with sl2:
+                sim_sv_tags = st.text_input("Tags", value=f"{cur_ammo.class_id},{cur_scn.fidelity}", key="sim_lib_tags")
+            with sl3:
+                st.write("")
+                if st.button("💾 Save Run", type="primary", width="stretch", key="sim_lib_save"):
+                    rec = sim_lib.save_scenario(
+                        name=sim_sv_name,
+                        domain="ballistics",
+                        config={
+                            "preset_id": cur_ammo.id,
+                            "fidelity": cur_scn.fidelity,
+                            "range_m": cur_scn.aim.range_m,
+                            "mv_mu": cur_ammo.launch.mv.mu,
+                            "form_factor": cur_ammo.aero.form_factor.mu,
+                        },
+                        metrics={
+                            "mean_range_m": round(float(res.dispersion.get("mean_range_m", 0.0)), 2),
+                            "cep_m": round(float(res.dispersion.get("cep_m", 0.0)), 2),
+                            "salvo_pk_mean": round(float(res.effectiveness.get("salvo_pk_mean", 0.0)), 4),
+                        },
+                        tags=[t.strip() for t in sim_sv_tags.split(",") if t.strip()],
+                    )
+                    st.success(f"Saved `{rec['name']}` ({rec['id']}).")
+
+            sim_saved = sim_lib.list_scenarios(domain="ballistics")
+            if sim_saved:
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            {
+                                "ID": r["id"],
+                                "Name": r["name"],
+                                "Updated": r["updated_at"],
+                                "CEP50 (m)": r["metrics"].get("cep_m", "—"),
+                                "Salvo Pk": r["metrics"].get("salvo_pk_mean", "—"),
+                            }
+                            for r in sim_saved
+                        ]
+                    ),
+                    width="stretch",
+                )
+                if len(sim_saved) >= 2:
+                    id_map_s = {f"{r['name']} ({r['id']})": r["id"] for r in sim_saved}
+                    sd1, sd2 = st.columns(2)
+                    with sd1:
+                        sa_pick = st.selectbox("Compare Baseline A", list(id_map_s.keys()), index=1, key="sim_lib_da")
+                    with sd2:
+                        sb_pick = st.selectbox("Compare Candidate B", list(id_map_s.keys()), index=0, key="sim_lib_db")
+                    if id_map_s[sa_pick] != id_map_s[sb_pick]:
+                        d_sim = sim_lib.diff_scenarios(id_map_s[sa_pick], id_map_s[sb_pick])
+                        if d_sim["metric_diffs"]:
+                            st.dataframe(pd.DataFrame(d_sim["metric_diffs"]), width="stretch")

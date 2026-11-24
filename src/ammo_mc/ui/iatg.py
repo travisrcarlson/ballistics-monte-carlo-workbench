@@ -258,6 +258,7 @@ from ammo_mc.ui.common import (
     _render_sidebar_header,
     _set_active_workbench,
     _set_cuas_module,
+    is_expert_mode,
 )
 
 
@@ -306,13 +307,14 @@ def tab_iatg() -> None:
     # --- IATG SUB-TAB 1: QUANTITY-DISTANCE (QD), TB-15 & 3D PES SITE MAP ---
     if active_iatg_tool == _IATG_TOOLS[0]:
         st.subheader("🏗️ IATG 01.80 / 02.20 Quantity-Distance (QD) & Open-Detonation Safety Envelopes (`TB-02`, `TB-15`)")
-        st.latex(
-            r"""
-            D_{\text{QD}} = Z_{\text{QD}}\, Q_{\text{TNT}}^{1/3}, \quad
-            Z_{\text{PBD}} = 8.0, \quad Z_{\text{PTRD}} = 14.8, \quad Z_{\text{IBD}} = 22.2, \quad Z_{\text{VBD}} = 44.4\;\text{m/kg}^{1/3}, \quad
-            D_{\text{frag,pub}} = 634\,M_{\text{AUW}}^{1/6}, \quad D_{\text{vert,1}} = 314\,M_{\text{AUW}}^{1/3}, \quad D_{140\text{dB}} = 215\,Q_{\text{TNT}}^{1/3}
-            """
-        )
+        with st.expander("Governing Equations (IATG 01.80 / 02.20)", expanded=is_expert_mode()):
+            st.latex(
+                r"""
+                D_{\text{QD}} = Z_{\text{QD}}\, Q_{\text{TNT}}^{1/3}, \quad
+                Z_{\text{PBD}} = 8.0, \quad Z_{\text{PTRD}} = 14.8, \quad Z_{\text{IBD}} = 22.2, \quad Z_{\text{VBD}} = 44.4\;\text{m/kg}^{1/3}, \quad
+                D_{\text{frag,pub}} = 634\,M_{\text{AUW}}^{1/6}, \quad D_{\text{vert,1}} = 314\,M_{\text{AUW}}^{1/3}, \quad D_{140\text{dB}} = 215\,Q_{\text{TNT}}^{1/3}
+                """
+            )
 
         m1, m2, m3 = st.columns(3)
         m1.metric("TNT Equiv Q_TNT (TB-02)", f"{q_tnt:.1f} kg", delta=f"Impulse eq: {float(wi_eq):.1f} kg", delta_color="off")
@@ -656,7 +658,7 @@ def tab_iatg() -> None:
             ak1, ak2, ak3 = st.columns(3)
             ak1.metric("Peak Chest-Wall V_max", f"{ax_out['v_chest_max_mps']:.2f} m/s")
             ak2.metric("Axelsson ASII Index", f"{ax_out['ASII']:.2f}", delta=str(ax_out["injury_level"]), delta_color="off")
-            ak3.metric("TNO Lung Probit (TB-12)", f"{float(lung_out['probability'])*100:.1f} %", delta=f"Pr: {float(lung_out['probit']):.2f}", delta_color="off")
+            ak3.metric("Lung Lethality Probit (CPR 16E / TB-12)", f"{float(lung_out['probability'])*100:.1f} %", delta=f"Pr: {float(lung_out['probit']):.2f}", delta_color="off")
 
             if ax_hist:
                 fig_ax = make_subplots(specs=[[{"secondary_y": True}]])

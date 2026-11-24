@@ -39,33 +39,42 @@ from ammo_mc.small_arms import (
 # -------------------------------------------------------------------------
 
 _WORKBENCH_OPTIONS = [
-    "🎯 Monte Carlo Simulator",
-    "🛸 C-UAS & Small Arms",
-    "🌐 3D Simulations",
-    "🚀 MCDRAG & 3D CAD",
-    "🔬 Physics & Ballistics Labs",
-    "🏛️ UNODA IATG Safety",
-    "📋 Firing Tables & Met",
-    "✅ Validation Suite",
-    "📚 Literature & Sources",
+    "Home",
+    "C-UAS & Multi-Barrel",
+    "Ballistics & 3D Sim",
+    "Physics & Aero Labs",
+    "Safety & IATG",
+    "Audit & Sources",
+]
+
+_SIM_SUBVIEWS = [
+    "Monte Carlo Pipeline",
+    "3D Trajectory Lab",
+    "Firing Tables & Met",
+]
+
+_PHYSICS_SUBVIEWS = [
+    "Physics & Ballistics Labs",
+    "MCDRAG & 3D CAD",
+]
+
+_AUDIT_SUBVIEWS = [
+    "V&V Suite & Certificates",
+    "Scientific Literature & Sources",
 ]
 
 _WORKBENCH_SLUGS: dict[str, str] = {
-    "🎯 Monte Carlo Simulator": "sim",
-    "🛸 C-UAS & Small Arms": "cuas",
-    "🌐 3D Simulations": "3d",
-    "🚀 MCDRAG & 3D CAD": "mcdrag",
-    "🔬 Physics & Ballistics Labs": "physics",
-    "🏛️ UNODA IATG Safety": "iatg",
-    "📋 Firing Tables & Met": "firing",
-    "✅ Validation Suite": "validation",
-    "📚 Literature & Sources": "literature",
+    "Home": "home",
+    "C-UAS & Multi-Barrel": "cuas",
+    "Ballistics & 3D Sim": "sim",
+    "Physics & Aero Labs": "physics",
+    "Safety & IATG": "iatg",
+    "Audit & Sources": "validation",
 }
-_SLUG_TO_WORKBENCH: dict[str, str] = {v: k for k, v in _WORKBENCH_SLUGS.items()}
 
 _CUAS_SUITES = [
-    "🛸 C-UAS Turret Suite (13 Modules)",
-    "🔫 Small Arms & Multi-Barrel Array (5 Modes)",
+    "C-UAS Turret Suite (13 Modules)",
+    "Small Arms & Multi-Barrel Array (5 Modes)",
 ]
 
 _CUAS18_MODULES = [
@@ -108,6 +117,116 @@ _SMALL_ARMS_MODES = [
     "🔄 Multi-Barrel Systems, Rotary Minigun & Volley Dispersion",
     "🛸 Anti-Drone Multi-Shotgun Defense Array (C-UAS)",
 ]
+
+_CUAS_STAGES = [
+    "1. Array & Weapon Setup",
+    "2. Engagement & Lethality",
+    "3. Safety, Site & Mission",
+    "4. Compare, Optimize & Calibrate",
+]
+
+_CUAS_STAGE_TOOLS: dict[str, list[str]] = {
+    _CUAS_STAGES[0]: [
+        "Anti-Drone Multi-Shotgun Array",
+        "Single-Shotgun Pattern & Shot Stringing",
+        "Range Sweep & 3D Plume Slices",
+        "Barrel Length Comparison",
+        "Multi-Barrel Rotary & Volley Systems",
+    ],
+    _CUAS_STAGES[1]: [
+        "Closed-Loop FCS & Evasive Drones",
+        "Advanced Payloads & Airburst",
+        "Multi-Drone Swarm Saturation",
+        "3D Animated Intercept Replay",
+    ],
+    _CUAS_STAGES[2]: [
+        "Elevated Fallout & Safety Zone (SDZ)",
+        "Multi-Sensor Kill Chain & Timeline",
+        "Multi-Turret Site Defense & GIS Map",
+        "Unified 3D Tactical Raid Simulator",
+    ],
+    _CUAS_STAGES[3]: [
+        "A/B Turret Comparator & Layered Defense",
+        "Recoil, Gimbal & Pareto Optimizer",
+        "Sensitivity & Bottleneck Tornado",
+        "Logistics, Heat, $/Kill & Report",
+        "Field-Test Calibration & Residuals",
+    ],
+}
+
+# Maps friendly UI tool label -> (suite_name, internal_mode_or_module, url_mod_slug)
+_CUAS_TOOL_TO_INTERNAL: dict[str, tuple[str, str, str]] = {
+    "Anti-Drone Multi-Shotgun Array": (_CUAS_SUITES[1], _SMALL_ARMS_MODES[4], "array"),
+    "Single-Shotgun Pattern & Shot Stringing": (_CUAS_SUITES[1], _SMALL_ARMS_MODES[0], "small_arms"),
+    "Range Sweep & 3D Plume Slices": (_CUAS_SUITES[1], _SMALL_ARMS_MODES[1], "range_sweep"),
+    "Barrel Length Comparison": (_CUAS_SUITES[1], _SMALL_ARMS_MODES[2], "barrel_lengths"),
+    "Multi-Barrel Rotary & Volley Systems": (_CUAS_SUITES[1], _SMALL_ARMS_MODES[3], "multibarrel"),
+    "Closed-Loop FCS & Evasive Drones": (_CUAS_SUITES[0], _CUAS18_MODULES[0], "fcs"),
+    "Multi-Drone Swarm Saturation": (_CUAS_SUITES[0], _CUAS18_MODULES[1], "swarm"),
+    "Advanced Payloads & Airburst": (_CUAS_SUITES[0], _CUAS18_MODULES[2], "payloads"),
+    "Recoil, Gimbal & Pareto Optimizer": (_CUAS_SUITES[0], _CUAS18_MODULES[3], "recoil"),
+    "Elevated Fallout & Safety Zone (SDZ)": (_CUAS_SUITES[0], _CUAS18_MODULES[4], "sdz"),
+    "Multi-Sensor Kill Chain & Timeline": (_CUAS_SUITES[0], _CUAS18_MODULES[5], "kill_chain"),
+    "Multi-Turret Site Defense & GIS Map": (_CUAS_SUITES[0], _CUAS18_MODULES[6], "site_defense"),
+    "3D Animated Intercept Replay": (_CUAS_SUITES[0], _CUAS18_MODULES[7], "replay"),
+    "Logistics, Heat, $/Kill & Report": (_CUAS_SUITES[0], _CUAS18_MODULES[8], "logistics"),
+    "A/B Turret Comparator & Layered Defense": (_CUAS_SUITES[0], _CUAS18_MODULES[9], "comparator"),
+    "Sensitivity & Bottleneck Tornado": (_CUAS_SUITES[0], _CUAS18_MODULES[10], "sensitivity"),
+    "Unified 3D Tactical Raid Simulator": (_CUAS_SUITES[0], _CUAS18_MODULES[11], "raid"),
+    "Field-Test Calibration & Residuals": (_CUAS_SUITES[0], _CUAS18_MODULES[12], "calibration"),
+}
+
+_CUAS_SLUG_TO_STAGE_TOOL: dict[str, tuple[str, str]] = {}
+for _st_name, _tlist in _CUAS_STAGE_TOOLS.items():
+    for _tname in _tlist:
+        _slug_val = _CUAS_TOOL_TO_INTERNAL[_tname][2]
+        _CUAS_SLUG_TO_STAGE_TOOL[_slug_val] = (_st_name, _tname)
+
+_CUAS_INTERNAL_TO_STAGE_TOOL: dict[str, tuple[str, str]] = {
+    _info[1]: (_st_name, _tname)
+    for _st_name, _tlist in _CUAS_STAGE_TOOLS.items()
+    for _tname in _tlist
+    for _info in (_CUAS_TOOL_TO_INTERNAL[_tname],)
+}
+
+_SLUG_TO_ROUTE: dict[str, tuple[str, str | None]] = {
+    "home": ("Home", None),
+    "cuas": ("C-UAS & Multi-Barrel", None),
+    "sim": ("Ballistics & 3D Sim", _SIM_SUBVIEWS[0]),
+    "3d": ("Ballistics & 3D Sim", _SIM_SUBVIEWS[1]),
+    "firing": ("Ballistics & 3D Sim", _SIM_SUBVIEWS[2]),
+    "physics": ("Physics & Aero Labs", _PHYSICS_SUBVIEWS[0]),
+    "mcdrag": ("Physics & Aero Labs", _PHYSICS_SUBVIEWS[1]),
+    "iatg": ("Safety & IATG", None),
+    "validation": ("Audit & Sources", _AUDIT_SUBVIEWS[0]),
+    "literature": ("Audit & Sources", _AUDIT_SUBVIEWS[1]),
+}
+
+_SIM_SUBVIEW_SLUGS = {
+    _SIM_SUBVIEWS[0]: "sim",
+    _SIM_SUBVIEWS[1]: "3d",
+    _SIM_SUBVIEWS[2]: "firing",
+}
+_PHYSICS_SUBVIEW_SLUGS = {
+    _PHYSICS_SUBVIEWS[0]: "physics",
+    _PHYSICS_SUBVIEWS[1]: "mcdrag",
+}
+_AUDIT_SUBVIEW_SLUGS = {
+    _AUDIT_SUBVIEWS[0]: "validation",
+    _AUDIT_SUBVIEWS[1]: "literature",
+}
+
+_LEGACY_WORKBENCH_ALIASES: dict[str, tuple[str, str | None]] = {
+    "🎯 Monte Carlo Simulator": ("sim", None),
+    "🛸 C-UAS & Small Arms": ("cuas", "array"),
+    "🌐 3D Simulations": ("3d", None),
+    "🚀 MCDRAG & 3D CAD": ("mcdrag", None),
+    "🔬 Physics & Ballistics Labs": ("physics", None),
+    "🏛️ UNODA IATG Safety": ("iatg", None),
+    "📋 Firing Tables & Met": ("firing", None),
+    "✅ Validation Suite": ("validation", None),
+    "📚 Literature & Sources": ("literature", None),
+}
 
 _PHYSICS_LABS = [
     "🔥 1. Interior Ballistics & P-V Diagram",
@@ -641,16 +760,100 @@ def _cached_unified_raid(
 
 
 # -------------------------------------------------------------------------
-# NAVIGATION CALLBACKS & URL DEEP-LINKING
+# FOCUS MODE & NAVIGATION CALLBACKS + URL DEEP-LINKING
 # -------------------------------------------------------------------------
 
-def _set_active_workbench(wb_name: str) -> None:
+def is_expert_mode() -> bool:
+    """Return True when the user has unlocked Expert Mode in the sidebar."""
+    return bool(st.session_state.get("ui_expert_mode", False))
+
+
+def render_focus_mode_toggle() -> bool:
+    """Render the global Standard / Expert Mode switch in the sidebar."""
+    return bool(
+        st.toggle(
+            "Expert Mode",
+            value=bool(st.session_state.get("ui_expert_mode", False)),
+            key="ui_expert_mode",
+            help=(
+                "Standard mode surfaces the primary inputs and results. "
+                "Enable Expert Mode for FMEA, aero overrides, full telemetry, and advanced labs."
+            ),
+        )
+    )
+
+
+def _apply_cuas_slug(mod_slug: str) -> None:
+    """Synchronize C-UAS stage, tool label, suite, and internal mode from a URL/tool slug."""
+    m_low = str(mod_slug).strip().lower()
+    stage, tool = _CUAS_SLUG_TO_STAGE_TOOL.get(m_low, _CUAS_SLUG_TO_STAGE_TOOL["array"])
+    st.session_state["cuas_stage"] = stage
+    st.session_state["cuas_stage_tool"] = tool
+    suite_name, target_mode, _ = _CUAS_TOOL_TO_INTERNAL[tool]
+    st.session_state["cuas_wb_suite"] = suite_name
+    if suite_name == _CUAS_SUITES[0]:
+        st.session_state["cuas18_active_module"] = target_mode
+    else:
+        st.session_state["small_arms_mode"] = target_mode
+
+
+def _navigate_to(
+    wb_slug: str,
+    sub: str | None = None,
+    cuas_mod_slug: str | None = None,
+) -> None:
+    """Navigate cleanly across consolidated workbenches, sub-views, and C-UAS tools."""
+    slug = str(wb_slug).strip().lower()
+    if slug not in _SLUG_TO_ROUTE:
+        slug = "home"
+    wb_name, default_sub = _SLUG_TO_ROUTE[slug]
     st.session_state["active_workbench"] = wb_name
+    sub_val = sub or default_sub
+    if wb_name == "Ballistics & 3D Sim" and sub_val in _SIM_SUBVIEWS:
+        st.session_state["sim_active_subview"] = sub_val
+    elif wb_name == "Physics & Aero Labs" and sub_val in _PHYSICS_SUBVIEWS:
+        st.session_state["physics_active_subview"] = sub_val
+    elif wb_name == "Audit & Sources" and sub_val in _AUDIT_SUBVIEWS:
+        st.session_state["audit_active_subview"] = sub_val
+    elif wb_name == "C-UAS & Multi-Barrel":
+        _apply_cuas_slug(cuas_mod_slug or "array")
+
+
+def _set_active_workbench(wb_name: str) -> None:
+    """Switch active workbench cleanly, accepting both consolidated and legacy names."""
+    if wb_name in _LEGACY_WORKBENCH_ALIASES:
+        target_slug, mod_slug = _LEGACY_WORKBENCH_ALIASES[wb_name]
+        _navigate_to(target_slug, cuas_mod_slug=mod_slug)
+        return
+    if wb_name in _WORKBENCH_OPTIONS:
+        st.session_state["active_workbench"] = wb_name
+        if wb_name == "C-UAS & Multi-Barrel" and "cuas_stage_tool" not in st.session_state:
+            _apply_cuas_slug("array")
 
 
 def _set_cuas_module(mod_name: str) -> None:
+    """Switch C-UAS module by internal name and synchronize stage/tool selectors."""
     st.session_state["cuas_wb_suite"] = _CUAS_SUITES[0]
     st.session_state["cuas18_active_module"] = mod_name
+    if mod_name in _CUAS_INTERNAL_TO_STAGE_TOOL:
+        st_name, tool_name = _CUAS_INTERNAL_TO_STAGE_TOOL[mod_name]
+        st.session_state["cuas_stage"] = st_name
+        st.session_state["cuas_stage_tool"] = tool_name
+
+
+def _active_route_slug() -> str:
+    """Return the canonical URL `wb` slug corresponding to the current view state."""
+    active_wb = st.session_state.get("active_workbench", _WORKBENCH_OPTIONS[0])
+    if active_wb == "Ballistics & 3D Sim":
+        sub = st.session_state.get("sim_active_subview", _SIM_SUBVIEWS[0])
+        return _SIM_SUBVIEW_SLUGS.get(sub, "sim")
+    if active_wb == "Physics & Aero Labs":
+        sub = st.session_state.get("physics_active_subview", _PHYSICS_SUBVIEWS[0])
+        return _PHYSICS_SUBVIEW_SLUGS.get(sub, "physics")
+    if active_wb == "Audit & Sources":
+        sub = st.session_state.get("audit_active_subview", _AUDIT_SUBVIEWS[0])
+        return _AUDIT_SUBVIEW_SLUGS.get(sub, "validation")
+    return _WORKBENCH_SLUGS.get(active_wb, "home")
 
 
 def init_from_query_params() -> None:
@@ -662,19 +865,14 @@ def init_from_query_params() -> None:
         wb_slug = qp.get("wb")
         if isinstance(wb_slug, list):
             wb_slug = wb_slug[0] if wb_slug else None
-        if wb_slug and str(wb_slug).lower() in _SLUG_TO_WORKBENCH:
-            st.session_state["active_workbench"] = _SLUG_TO_WORKBENCH[str(wb_slug).lower()]
-
         mod_slug = qp.get("mod")
         if isinstance(mod_slug, list):
             mod_slug = mod_slug[0] if mod_slug else None
-        if mod_slug:
-            m_low = str(mod_slug).lower()
-            if m_low in _SLUG_TO_CUAS_MOD:
-                st.session_state["cuas_wb_suite"] = _CUAS_SUITES[0]
-                st.session_state["cuas18_active_module"] = _SLUG_TO_CUAS_MOD[m_low]
-            elif m_low == "small_arms":
-                st.session_state["cuas_wb_suite"] = _CUAS_SUITES[1]
+
+        if wb_slug and str(wb_slug).lower() in _SLUG_TO_ROUTE:
+            _navigate_to(str(wb_slug).lower(), cuas_mod_slug=str(mod_slug).lower() if mod_slug else None)
+        else:
+            st.session_state.setdefault("active_workbench", _WORKBENCH_OPTIONS[0])
     except Exception:
         pass
     st.session_state["_qp_initialized"] = True
@@ -683,16 +881,14 @@ def init_from_query_params() -> None:
 def sync_query_params() -> None:
     """Persist active workbench and C-UAS sub-module to URL query params safely."""
     try:
-        active_wb = st.session_state.get("active_workbench", _WORKBENCH_OPTIONS[0])
-        wb_slug = _WORKBENCH_SLUGS.get(active_wb, "sim")
+        wb_slug = _active_route_slug()
         st.query_params["wb"] = wb_slug
         if wb_slug == "cuas":
-            suite = st.session_state.get("cuas_wb_suite", _CUAS_SUITES[0])
-            if suite == _CUAS_SUITES[0]:
-                mod = st.session_state.get("cuas18_active_module", _CUAS18_MODULES[0])
-                st.query_params["mod"] = _CUAS_MOD_SLUGS.get(mod, "fcs")
+            tool = st.session_state.get("cuas_stage_tool", "Anti-Drone Multi-Shotgun Array")
+            if tool in _CUAS_TOOL_TO_INTERNAL:
+                st.query_params["mod"] = _CUAS_TOOL_TO_INTERNAL[tool][2]
             else:
-                st.query_params["mod"] = "small_arms"
+                st.query_params["mod"] = "array"
         elif "mod" in st.query_params:
             del st.query_params["mod"]
     except Exception:
@@ -701,14 +897,11 @@ def sync_query_params() -> None:
 
 def build_deeplink_query() -> str:
     """Return relative shareable query string for current workbench/module."""
-    active_wb = st.session_state.get("active_workbench", _WORKBENCH_OPTIONS[0])
-    wb_slug = _WORKBENCH_SLUGS.get(active_wb, "sim")
+    wb_slug = _active_route_slug()
     if wb_slug == "cuas":
-        suite = st.session_state.get("cuas_wb_suite", _CUAS_SUITES[0])
-        if suite == _CUAS_SUITES[0]:
-            mod = st.session_state.get("cuas18_active_module", _CUAS18_MODULES[0])
-            return f"?wb=cuas&mod={_CUAS_MOD_SLUGS.get(mod, 'fcs')}"
-        return "?wb=cuas&mod=small_arms"
+        tool = st.session_state.get("cuas_stage_tool", "Anti-Drone Multi-Shotgun Array")
+        mod_slug = _CUAS_TOOL_TO_INTERNAL.get(tool, ("", "", "array"))[2]
+        return f"?wb=cuas&mod={mod_slug}"
     return f"?wb={wb_slug}"
 
 
@@ -820,18 +1013,13 @@ def require_password() -> bool:
 
 def render_header() -> None:
     st.markdown(
-        '<div class="main-title">🎯 Ballistics, Dispersion & Terminal Physics Monte Carlo Workbench</div>',
+        '<div class="main-title" style="font-size:1.75rem;">Ballistics &amp; Counter-UAS Monte Carlo Workbench</div>',
         unsafe_allow_html=True,
     )
     st.markdown(
-        '<div class="sub-title">End-to-end stochastic engineering simulation: Interior Thermodynamics (STANAG 4367) → Exterior 3-DoF / Modified Point Mass (STANAG 4355) → Fuze Reliability → Pressure/Fragmentation Kinematics → Dispersion & Vulnerability.</div>',
+        '<div class="sub-title" style="font-size:0.92rem; margin-bottom:0.55rem;">'
+        'Stochastic flight dispersion, Counter-UAS multi-barrel engagements, terminal physics, and verified safety envelopes.'
+        '</div>',
         unsafe_allow_html=True,
     )
-    st.markdown(
-        f"""
-        <div class="gov-banner">
-        <b>GOVERNANCE & USE LIMITATION NOTICE:</b> {USE_LIMITATION_NOTICE}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.caption(f"⚖️ **Use Limitation:** {USE_LIMITATION_NOTICE}")
