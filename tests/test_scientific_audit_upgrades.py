@@ -201,11 +201,11 @@ def test_extended_vv_benchmarks_certificates_api_and_cli(tmp_path: Path) -> None
 
     kb = get_kb()
     assert len(kb.formulas_by_id) == 96
-    assert len(kb.sources) == 80
+    assert len(kb.sources) == 81
     assert {f["formula_id"] for f in kb.formulas if f.get("is_flagged")} == {"TB-12", "TF-12", "TP-01"}
 
     lit = build_literature_audit_summary()
-    assert lit["total_sources"] == 80
+    assert lit["total_sources"] == 81
     assert lit["linked_source_coverage_pct"] == 100.0
     assert sorted(lit["flagged_formula_ids"]) == ["TB-12", "TF-12", "TP-01"]
 

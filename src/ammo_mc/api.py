@@ -318,16 +318,26 @@ class CuasArrayRequest(BaseModel):
     layout_type: str = "circular"
     n_barrels: int = 6
     mount_radius_m: float = 0.20
+    spacing_y_m: float = 0.30
+    spacing_z_m: float = 0.30
     pointing_mode: str = "convergent"
     splay_angle_mrad: float = 0.0
     firing_mode: str = "balanced_pair_ripple"
     ripple_delay_ms: float = 10.0
     ammunition_preset: str = "12G_NO4_BUCK_C_UAS"
+    inner_ammunition_preset: Optional[str] = None
+    pellets_per_shot: Optional[int] = None
     default_choke: str = "Modified"
+    default_barrel_length_in: float = 26.0
     target_distance_m: float = 35.0
     drone_model: str = "commercial_quad_medium"
     aspect_mode: str = "head_on_frontal"
     drone_velocity_mps: float = 15.0
+    crosswind_mps: float = 0.0
+    headwind_mps: float = 0.0
+    ambient_temp_c: float = 15.0
+    propellant_type: str = "double_base"
+    drag_model: str = "compressible_re_m"
     n_volleys: int = 20
     seed: int = 42
 
@@ -512,6 +522,24 @@ def post_cuas_array(req: CuasArrayRequest) -> dict[str, Any]:
             "component_kills": res.get("component_kills", {}),
         }
     )
+
+
+class AnnexCPkRequest(BaseModel):
+    distance_m: float = 50.0
+    n_pellets: int = 170
+    vulnerable_area_m2: float = 0.025
+    theta_p_rad: float = 0.0067
+    theta_aim_rad: float = 0.015
+    pk_given_hit: float = 0.62
+    n_shots: int = 3
+
+
+@app.post("/cuas/annex-c-pk", tags=["C-UAS"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_annex_c_pk(req: AnnexCPkRequest) -> dict[str, Any]:
+    """Compute Poisson-Gaussian analytical single-shot Pk,1 and multi-shot Pk,n."""
+    from ammo_mc.small_arms import compute_annex_c_analytical_pk
+
+    return _to_json_safe(compute_annex_c_analytical_pk(**req.model_dump()))
 
 
 @app.post("/cuas/kill-chain", tags=["C-UAS"], dependencies=[Depends(_verify_api_auth)])

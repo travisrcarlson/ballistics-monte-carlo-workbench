@@ -40,6 +40,8 @@ from .ballistics import (
 )
 from .arrays import (
     generate_multishotgun_array_layout,
+    compute_shotgun_temperature_effects,
+    compute_annex_c_analytical_pk,
     compute_balanced_pair_fire_times,
     configure_array_pointing_vectors,
     simulate_anti_drone_multishotgun_mc,
@@ -81,6 +83,8 @@ __all__ = [
     "benchmark_multibarrel_aspect_angles_mc",
     "compare_barrel_lengths_dispersion",
     "generate_multishotgun_array_layout",
+    "compute_shotgun_temperature_effects",
+    "compute_annex_c_analytical_pk",
     "compute_balanced_pair_fire_times",
     "configure_array_pointing_vectors",
     "simulate_anti_drone_multishotgun_mc",

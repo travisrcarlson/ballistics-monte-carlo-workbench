@@ -45,6 +45,7 @@ from .antidrone import (
     create_2d_antidrone_intercept_figure,
     create_antidrone_layout_comparison_figure,
     create_drone_aspect_radar_figure,
+    create_3d_pattern_vs_distance_figure,
 )
 
 __all__ = [
@@ -84,4 +85,5 @@ __all__ = [
     "create_2d_antidrone_intercept_figure",
     "create_antidrone_layout_comparison_figure",
     "create_drone_aspect_radar_figure",
+    "create_3d_pattern_vs_distance_figure",
 ]

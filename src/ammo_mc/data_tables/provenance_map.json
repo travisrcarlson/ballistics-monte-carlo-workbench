@@ -67,7 +67,7 @@
       "module_name": "Module 3: Advanced Payloads (TSS #2, Duplex, Flechette & Airburst)",
       "code_files": ["src/ammo_mc/cuas_defense.py", "src/ammo_mc/vis_cuas.py"],
       "description": "Compares high-density tungsten super-shot (18.2 g/cm3), duplex buck+bird loads, low-drag finned flechettes, and programmable airburst canister sub-fragment sprays against armored/light UAS components.",
-      "source_ids": ["S01", "S05", "S08", "S23", "S41", "S43"],
+      "source_ids": ["S01", "S05", "S08", "S23", "S41", "S43", "S81"],
       "formula_ids": ["TF-01", "TF-04", "TF-12"],
       "data_tables": ["thor_coefficients.json", "explosives.json"],
       "assumptions_and_limits": "Assumes idealized velocity retention per sphere/flechette class without sabot-petal collision post-muzzle."
@@ -91,7 +91,7 @@
       "module_name": "Module 5: Elevated Pellet Fallout Ballistics & Friendly SDZ",
       "code_files": ["src/ammo_mc/cuas_defense.py", "src/ammo_mc/vis_cuas.py", "src/ammo_mc/aero_sphere.py"],
       "description": "Integrates upward-fired shotshell pellets through climb, apex, and gravity descent under Bailey-Hiatt sphere drag and wind drift to determine maximum fallout range, terminal KE (2 J / 15 J thresholds), and Surface Danger Zones.",
-      "source_ids": ["S01", "S41", "S42", "S43", "S53", "S69", "S70", "S71", "S72"],
+      "source_ids": ["S01", "S41", "S42", "S43", "S53", "S69", "S70", "S71", "S72", "S81"],
       "formula_ids": ["EB-16", "EB-17", "TF-09", "TF-14"],
       "data_tables": ["atmosphere.json", "drag_tables.json"],
       "assumptions_and_limits": "Advisory engineering model; operational firing safety templates must follow competent national authority (DA PAM 385-63 / UNODA)."

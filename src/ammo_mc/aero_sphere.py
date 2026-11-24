@@ -93,16 +93,65 @@ def sphere_drag_compressible(re: float, mach: float) -> float:
     return float(max(0.05, cd_comp))
 
 
+def sphere_drag_incompressible_morrison_array(re: Iterable[float]) -> np.ndarray:
+    """Vectorized NumPy evaluation of Morrison (2013) incompressible sphere Cd(Re)."""
+    r = np.clip(np.asarray(re, dtype=np.float64), 1e-3, 2.0e6)
+    t1 = 24.0 / r
+    x5 = r / 5.0
+    t2 = (2.6 * x5) / (1.0 + np.power(x5, 1.52))
+    x263 = r / 263000.0
+    x263_safe = np.where(x263 < 0.05, 1.0, x263)
+    t3 = np.where(
+        x263 < 0.05,
+        0.0,
+        (0.411 * np.power(x263_safe, -7.94)) / (1.0 + np.power(x263_safe, -8.00)),
+    )
+    x1e6 = r / 1.0e6
+    t4 = (0.25 * x1e6) / (1.0 + x1e6)
+    return t1 + t2 + t3 + t4
+
+
+def sphere_drag_mach_only(mach: float, cd_subsonic: float = 0.47) -> float:
+    """Smooth single-sphere drag Cd(M) dependent purely on Mach number (Compton 1996 / Bailey-Hiatt)."""
+    m = max(0.0, float(mach))
+    if m <= 0.35:
+        return float(cd_subsonic)
+    m_clamped = min(m, float(_MACH_GRID[-1]))
+    comp_factor = float(_COMP_PCHIP(m_clamped))
+    return float(max(0.05, float(cd_subsonic) * comp_factor))
+
+
+def sphere_drag_mach_only_array(mach: Iterable[float], cd_subsonic: float = 0.47) -> np.ndarray:
+    """Vectorized NumPy evaluation of sphere_drag_mach_only."""
+    m = np.maximum(0.0, np.asarray(mach, dtype=np.float64))
+    cd0 = float(cd_subsonic)
+    out = np.full_like(m, cd0, dtype=np.float64)
+    mask = m > 0.35
+    if np.any(mask):
+        m_clamped = np.minimum(m[mask], float(_MACH_GRID[-1]))
+        comp_factor = np.asarray(_COMP_PCHIP(m_clamped), dtype=np.float64)
+        out[mask] = np.maximum(0.05, cd0 * comp_factor)
+    return out
+
+
 def sphere_drag_compressible_array(re: Iterable[float], mach: Iterable[float]) -> np.ndarray:
     """Vectorized evaluation wrapper for sphere_drag_compressible."""
-    r_arr = np.asarray(re, dtype=np.float64)
-    m_arr = np.asarray(mach, dtype=np.float64)
-    r_b, m_b = np.broadcast_arrays(r_arr, m_arr)
-    out = np.empty_like(r_b, dtype=np.float64)
-    it = np.nditer([r_b, m_b, out], flags=["multi_index"], op_flags=[["readonly"], ["readonly"], ["writeonly"]])
-    for rv, mv, ov in it:
-        ov[...] = sphere_drag_compressible(float(rv), float(mv))
-    return out
+    r_b, m_b = np.broadcast_arrays(np.asarray(re, dtype=np.float64), np.asarray(mach, dtype=np.float64))
+    r = np.maximum(r_b, 1e-3)
+    m = np.maximum(0.0, m_b)
+    cd_inc = sphere_drag_incompressible_morrison_array(r)
+    if not np.any(m > 0.35):
+        return cd_inc
+    m_clamped = np.minimum(m, float(_MACH_GRID[-1]))
+    comp_factor = np.asarray(_COMP_PCHIP(m_clamped), dtype=np.float64)
+    w_inertia = 1.0 / (1.0 + np.exp(-(np.log10(r) - 1.65) * 3.5))
+    sub_crit = (r >= 500.0) & (r <= 1.8e5)
+    cd_comp = np.where(
+        sub_crit,
+        cd_inc * (1.0 + w_inertia * (comp_factor - 1.0)),
+        cd_inc + w_inertia * 0.47 * (comp_factor - 1.0),
+    )
+    return np.where(m <= 0.35, cd_inc, np.maximum(0.05, cd_comp))
 
 
 def exact_quadratic_drag_tof_and_velocity(

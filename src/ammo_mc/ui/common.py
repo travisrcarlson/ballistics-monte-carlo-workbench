@@ -344,6 +344,11 @@ def _cached_antidrone_array_mc(
     custom_drone_spec_json: str = "",
     custom_shell_spec_json: str = "",
     calibration_profile_json: str = "",
+    headwind_mps: float = 0.0,
+    ambient_temp_c: float = 15.0,
+    propellant_type: str = "double_base",
+    drag_model: str = "compressible_re_m",
+    pellets_per_shot: int | None = None,
 ) -> dict[str, Any]:
     custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
     custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
@@ -363,6 +368,7 @@ def _cached_antidrone_array_mc(
         ripple_delay_ms=ripple_delay_ms,
         custom_barrel_specs=custom_specs,
         ammunition_preset=ammunition_preset,
+        pellets_per_shot=pellets_per_shot,
         default_choke=default_choke,
         default_barrel_length_in=default_barrel_length_in,
         target_distance_m=target_distance_m,
@@ -383,6 +389,10 @@ def _cached_antidrone_array_mc(
         custom_drone_spec=custom_drone,
         custom_shell_spec=custom_shell,
         calibration_profile=cal_prof,
+        headwind_mps=headwind_mps,
+        ambient_temp_c=ambient_temp_c,
+        propellant_type=propellant_type,
+        drag_model=drag_model,
     )
 
 
@@ -422,6 +432,11 @@ def _cached_antidrone_range_envelope(
     custom_shell_spec_json: str = "",
     compare_ammo_presets: tuple[str, ...] = (),
     calibration_profile_json: str = "",
+    headwind_mps: float = 0.0,
+    ambient_temp_c: float = 15.0,
+    propellant_type: str = "double_base",
+    drag_model: str = "compressible_re_m",
+    pellets_per_shot: int | None = None,
 ) -> dict[str, Any]:
     custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
     custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
@@ -462,6 +477,11 @@ def _cached_antidrone_range_envelope(
         custom_shell_spec=custom_shell,
         compare_ammo_presets=list(compare_ammo_presets) if compare_ammo_presets else None,
         calibration_profile=cal_prof,
+        headwind_mps=headwind_mps,
+        ambient_temp_c=ambient_temp_c,
+        propellant_type=propellant_type,
+        drag_model=drag_model,
+        pellets_per_shot=pellets_per_shot,
     )
 
 
@@ -500,6 +520,11 @@ def _cached_antidrone_range_speed_heatmap(
     custom_drone_spec_json: str = "",
     custom_shell_spec_json: str = "",
     calibration_profile_json: str = "",
+    headwind_mps: float = 0.0,
+    ambient_temp_c: float = 15.0,
+    propellant_type: str = "double_base",
+    drag_model: str = "compressible_re_m",
+    pellets_per_shot: int | None = None,
 ) -> dict[str, Any]:
     custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
     custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
@@ -539,6 +564,11 @@ def _cached_antidrone_range_speed_heatmap(
         custom_drone_spec=custom_drone,
         custom_shell_spec=custom_shell,
         calibration_profile=cal_prof,
+        headwind_mps=headwind_mps,
+        ambient_temp_c=ambient_temp_c,
+        propellant_type=propellant_type,
+        drag_model=drag_model,
+        pellets_per_shot=pellets_per_shot,
     )
 
 

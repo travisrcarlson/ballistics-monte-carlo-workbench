@@ -255,3 +255,29 @@ def test_ui_digital_twin_sidebar_fea_sdz_and_calibration_v16(tmp_path: Path, mon
     assert at_adv.selectbox(key="cuas_hil_scn").value == "evasive_fpv_dive"
 
 
+def test_ui_fpv_quincunx_alda_spartan_pg7m_controls() -> None:
+    """Verify Quincunx mixed ALDA/SPARTAN load, stationary PG-7M FPV, temperature/headwind, and 3D overlay."""
+    at = AppTest.from_file(ROOT_APP, default_timeout=60)
+    at.session_state["authenticated"] = True
+    at.query_params["wb"] = "cuas"
+    at.query_params["mod"] = "array"
+    at.run()
+    assert not at.exception
+
+    at.button(key="cuas_load_quincunx_btn").click().run()
+    assert not at.exception
+    assert at.selectbox(key="cuas_layout").value == "quincunx"
+    assert at.selectbox(key="cuas_ammo").value == "ALDA_BUCKSHOT_12_76_COPPER_32G"
+    assert at.selectbox(key="cuas_drone_model").value == "fpv_14in_36cm_pg7m"
+    assert at.slider(key="cuas_dist").value == 50.0
+    assert at.slider(key="cuas_speed").value == 0.0
+
+    at.slider(key="cuas_temp_c").set_value(-5.0)
+    at.slider(key="cuas_headwind").set_value(8.0)
+    at.checkbox(key="cuas_show_3d_multidist_std").set_value(True)
+    at.run()
+    assert not at.exception
+    assert at.session_state["_report_array_summary"]["ambient_temp_c"] == -5.0
+    assert at.session_state["_report_array_summary"]["headwind_mps"] == 8.0
+
+

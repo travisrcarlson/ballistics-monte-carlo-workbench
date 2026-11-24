@@ -389,7 +389,7 @@ def _compute_plate_geometry(barrels: list[dict[str, Any]], layout_type: str) -> 
     xs = [c["x_mm"] for c in centers_mm]
     ys = [c["y_mm"] for c in centers_mm]
     r_max_mm = max(math.hypot(c["x_mm"], c["y_mm"]) for c in centers_mm)
-    is_circular_flange = str(layout_type) in ("circular", "concentric", "honeycomb")
+    is_circular_flange = str(layout_type) in ("circular", "concentric", "honeycomb", "single", "quincunx")
     flange_r_mm = max(55.0, r_max_mm + 34.0)
     rect_half_w_mm = max(55.0, max(abs(x) for x in xs) + 34.0)
     rect_half_h_mm = max(55.0, max(abs(y) for y in ys) + 34.0)

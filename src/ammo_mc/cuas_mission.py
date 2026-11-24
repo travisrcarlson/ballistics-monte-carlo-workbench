@@ -1160,6 +1160,7 @@ CUAS_AMMO_ECONOMICS_CATALOG: dict[str, dict[str, Any]] = {
     "12G_FLECHETTE_SABOT_C_UAS": {
         "name": "12G Saboted Steel Flechette Pack",
         "unit_cost_usd": 8.50,
+        "unit_price_eur": 7.85,
         "cartridge_mass_g": 45.0,
         "heat_per_shot_kj": 1.95,
         "p_jam_per_shot": 0.0035,
@@ -1168,6 +1169,76 @@ CUAS_AMMO_ECONOMICS_CATALOG: dict[str, dict[str, Any]] = {
         "pellet_mass_g": 0.75,
         "v0_mps": 445.0,
         "base_cd": 0.18,
+        "shots_per_trigger": 1,
+    },
+    "ALDA_BUCKSHOT_12_76_COPPER_32G": {
+        "name": "ALDA Buckshot 12/76 Copper 32G",
+        "unit_cost_usd": 2.13,
+        "unit_price_eur": 1.97,
+        "cartridge_mass_g": 48.0,
+        "heat_per_shot_kj": 1.95,
+        "p_jam_per_shot": 0.0022,
+        "pellets_per_shot": 32,
+        "pellet_diameter_mm": 6.20,
+        "pellet_mass_g": 1.123,
+        "v0_mps": 405.0,
+        "base_cd": 0.47,
+        "shots_per_trigger": 1,
+    },
+    "ALDA_DOUBLE_00_HP_N2_0": {
+        "name": "ALDA Double 00 HP N°2/0",
+        "unit_cost_usd": 1.70,
+        "unit_price_eur": 1.57,
+        "cartridge_mass_g": 48.0,
+        "heat_per_shot_kj": 1.90,
+        "p_jam_per_shot": 0.0022,
+        "pellets_per_shot": 67,
+        "pellet_diameter_mm": 4.50,
+        "pellet_mass_g": 0.539,
+        "v0_mps": 405.0,
+        "base_cd": 0.47,
+        "shots_per_trigger": 1,
+    },
+    "ALDA_0_80_HP_N2": {
+        "name": "ALDA 0-80 HP N°2",
+        "unit_cost_usd": 1.91,
+        "unit_price_eur": 1.77,
+        "cartridge_mass_g": 48.0,
+        "heat_per_shot_kj": 1.90,
+        "p_jam_per_shot": 0.0022,
+        "pellets_per_shot": 115,
+        "pellet_diameter_mm": 3.75,
+        "pellet_mass_g": 0.312,
+        "v0_mps": 405.0,
+        "base_cd": 0.47,
+        "shots_per_trigger": 1,
+    },
+    "SPARTAN_43_HP_1276_SPHERO_3T": {
+        "name": "SPARTAN 43 HP 12/76 Sphero 3T",
+        "unit_cost_usd": 11.35,
+        "unit_price_eur": 10.50,
+        "cartridge_mass_g": 56.0,
+        "heat_per_shot_kj": 2.15,
+        "p_jam_per_shot": 0.0022,
+        "pellets_per_shot": 101,
+        "pellet_diameter_mm": 3.55,
+        "pellet_mass_g": 0.426,
+        "v0_mps": 400.0,
+        "base_cd": 0.47,
+        "shots_per_trigger": 1,
+    },
+    "SPARTAN_33_HP_SPHERO_4T": {
+        "name": "SPARTAN 33 HP Sphero 4T",
+        "unit_cost_usd": 8.10,
+        "unit_price_eur": 7.50,
+        "cartridge_mass_g": 54.0,
+        "heat_per_shot_kj": 2.00,
+        "p_jam_per_shot": 0.0022,
+        "pellets_per_shot": 210,
+        "pellet_diameter_mm": 3.25,
+        "pellet_mass_g": 0.327,
+        "v0_mps": 395.0,
+        "base_cd": 0.47,
         "shots_per_trigger": 1,
     },
     "CUAS_AIRBURST_CANISTER": {
@@ -1405,8 +1476,17 @@ def simulate_cuas_sustained_logistics_mc(
     ]
 
     # Cross-Payload 7-Family Economics Table at target_range_m
+    _spec_variant_keys = {
+        "ALDA_BUCKSHOT_12_76_COPPER_32G",
+        "ALDA_DOUBLE_00_HP_N2_0",
+        "ALDA_0_80_HP_N2",
+        "SPARTAN_43_HP_1276_SPHERO_3T",
+        "SPARTAN_33_HP_SPHERO_4T",
+    }
     economics_comparison: list[dict[str, Any]] = []
     for k_am, sp_am in CUAS_AMMO_ECONOMICS_CATALOG.items():
+        if k_am in _spec_variant_keys:
+            continue
         pk_est = _estimate_burst_pk_analytics(
             slant_range_m=target_range_m,
             barrels_fired=barrels_per_burst,

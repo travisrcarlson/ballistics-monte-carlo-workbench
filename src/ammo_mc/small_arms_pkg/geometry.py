@@ -165,6 +165,33 @@ def compute_drone_projected_geometry(
     batt_hull = _convex_hull_2d(batt_proj)
     area_batt = polygon_area(batt_hull)
 
+    # Underslung Warhead Payload 3D Axisymmetric Hull (e.g. PG-7M)
+    warhead_hull = np.empty((0, 2), dtype=float)
+    area_warhead = 0.0
+    if drone_spec.get("has_warhead"):
+        l_wh = float(drone_spec.get("warhead_length_m", 0.290))
+        d_wh = float(drone_spec.get("warhead_diam_m", 0.070))
+        r_wh = 0.5 * d_wh
+        z_wh_off = float(drone_spec.get("warhead_offset_z_m", -h_f / 2.0 - r_wh - 0.006))
+        # Axisymmetric PG-7M warhead profile along body +X: tip, ogive/70mm cone-cylinder bulge, aft taper
+        stations = [
+            (+0.50 * l_wh, 0.28 * r_wh),
+            (+0.22 * l_wh, 0.72 * r_wh),
+            (+0.05 * l_wh, 1.00 * r_wh),
+            (-0.14 * l_wh, 1.00 * r_wh),
+            (-0.34 * l_wh, 0.58 * r_wh),
+            (-0.50 * l_wh, 0.42 * r_wh),
+        ]
+        wh_pts_b = []
+        for x_st, r_st in stations:
+            for ang_idx in range(8):
+                ang = ang_idx * (2.0 * math.pi / 8.0)
+                wh_pts_b.append([x_st, r_st * math.cos(ang), z_wh_off + r_st * math.sin(ang)])
+        wh_verts_los = np.array(wh_pts_b, dtype=float) @ M.T
+        wh_proj = wh_verts_los[:, [1, 2]]
+        warhead_hull = _convex_hull_2d(wh_proj)
+        area_warhead = polygon_area(warhead_hull)
+
     # Rotors & Motor Pods
     rotors_spec = drone_spec.get("rotors", [])
     h_blade = float(drone_spec.get("rotor_thickness_m", 0.022))
@@ -287,9 +314,11 @@ def compute_drone_projected_geometry(
 
     batt_vis_frac = 1.0 - 0.65 * abs(nx)
     mot_vis_frac = max(0.15, 1.0 - 0.70 * abs(nx))
+    wh_vis_frac = 1.0 - 0.55 * abs(nx)
     tot_presented_area = (
         area_fuse
         + area_batt * batt_vis_frac
+        + area_warhead * wh_vis_frac
         + area_wings
         + area_rotors_tot * 0.75
         + area_motors_tot * mot_vis_frac
@@ -306,10 +335,15 @@ def compute_drone_projected_geometry(
         "rotation_matrix": M.tolist(),
         "fuselage_polygon": fuse_hull.tolist(),
         "battery_polygon": batt_hull.tolist(),
+        "warhead_polygon": warhead_hull.tolist() if len(warhead_hull) >= 3 else [],
         "rotors": rotors_out,
         "motors": motors_out,
         "arms": arms_out,
         "wings": wings_out,
+        "fuselage_area_cm2": round(area_fuse * 10000.0, 1),
+        "battery_area_cm2": round(area_batt * 10000.0, 1),
+        "warhead_area_cm2": round(area_warhead * 10000.0, 1),
+        "rotors_area_cm2": round(area_rotors_tot * 10000.0, 1),
         "presented_area_m2": round(tot_presented_area, 6),
         "presented_area_cm2": round(tot_presented_area * 10000.0, 1),
         "planform_area_m2": round(planform_area, 6),
@@ -376,6 +410,7 @@ def evaluate_drone_impact(
     e_rotor_lethal = float(drone_spec.get("lethal_energy_rotor_j", 8.0))
     e_core_lethal = float(drone_spec.get("lethal_energy_core_j", 20.0))
     e_arm_lethal = float(drone_spec.get("lethal_energy_arm_j", 30.0))
+    e_warhead_lethal = float(drone_spec.get("lethal_energy_warhead_j", e_core_lethal * 0.85))
 
     if aspect_geometry is not None:
         # 1. Fuselage 3D Box Projected Polygon (Flight Controller, Avionics, IMU)
@@ -389,13 +424,24 @@ def evaluate_drone_impact(
                 "striking_energy_j": striking_energy_j,
             }
 
-        # 2. Battery / Munition Payload Box Projected Polygon
+        # 2. Battery Projected Polygon (Top or Underslung Pack)
         batt_poly = aspect_geometry.get("battery_polygon")
         if batt_poly and len(batt_poly) >= 3 and point_in_convex_polygon(y_rel_m, z_rel_m, np.array(batt_poly)):
             return {
                 "is_hit": True,
                 "component": "battery_payload",
                 "is_lethal": bool(striking_energy_j >= e_core_lethal * 0.75),
+                "critical_system": True,
+                "striking_energy_j": striking_energy_j,
+            }
+
+        # 2b. Underslung Warhead Payload (e.g. PG-7M)
+        wh_poly = aspect_geometry.get("warhead_polygon")
+        if wh_poly and len(wh_poly) >= 3 and point_in_convex_polygon(y_rel_m, z_rel_m, np.array(wh_poly)):
+            return {
+                "is_hit": True,
+                "component": "warhead_pg7m",
+                "is_lethal": bool(striking_energy_j >= e_warhead_lethal),
                 "critical_system": True,
                 "striking_energy_j": striking_energy_j,
             }

@@ -1038,5 +1038,18 @@
     "used_for": "Verified Mild Steel THOR residual mass exponent (-1.195), NATO test firing/safety standards, and ISO 2859-1 Table 2-A Ac/Re acceptance plans",
     "workbenches": ["iatg", "physics", "validation", "literature"],
     "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S81",
+    "title": "An Experimental and Theoretical Investigation of Shot Cloud Ballistics",
+    "authors": "D. J. Compton",
+    "year": 1996,
+    "doi": "",
+    "category": "Exterior & Terminal Ballistics",
+    "type": "PhD Thesis (University College London)",
+    "url": "https://discovery.ucl.ac.uk/id/eprint/1382490/1/396689.pdf",
+    "used_for": "Mach-only smooth-sphere shot cloud aerodynamics, random force dispersion, and atmospheric corrections for 12-gauge C-UAS modeling",
+    "workbenches": ["cuas", "physics", "literature"],
+    "verification_status": "VERIFIED-SRC"
   }
 ]

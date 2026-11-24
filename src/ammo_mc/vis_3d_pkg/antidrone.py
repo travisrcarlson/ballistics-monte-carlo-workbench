@@ -225,6 +225,70 @@ def create_3d_antidrone_defense_figure(sim_res: dict[str, Any]) -> go.Figure:
         )
     )
 
+    # Top/Attached Li-Ion Battery Pack 3D Wireframe
+    l_bat = float(drone_spec.get("battery_l_m", l_f * 0.6))
+    w_bat = float(drone_spec.get("battery_w_m", w_f * 0.6))
+    h_bat = float(drone_spec.get("battery_h_m", h_f * 0.55))
+    z_bat = float(drone_spec.get("battery_offset_z_m", -h_f / 2 - h_bat / 2))
+    bat_b = np.array([
+        [-l_bat / 2, -w_bat / 2, z_bat - h_bat / 2],
+        [+l_bat / 2, -w_bat / 2, z_bat - h_bat / 2],
+        [+l_bat / 2, +w_bat / 2, z_bat - h_bat / 2],
+        [-l_bat / 2, +w_bat / 2, z_bat - h_bat / 2],
+        [-l_bat / 2, -w_bat / 2, z_bat - h_bat / 2],
+        [-l_bat / 2, -w_bat / 2, z_bat + h_bat / 2],
+        [+l_bat / 2, -w_bat / 2, z_bat + h_bat / 2],
+        [+l_bat / 2, +w_bat / 2, z_bat + h_bat / 2],
+        [-l_bat / 2, +w_bat / 2, z_bat + h_bat / 2],
+        [-l_bat / 2, -w_bat / 2, z_bat + h_bat / 2],
+    ], dtype=float)
+    bat_w = np.array([R, 0.0, 0.0]) + (bat_b @ M_rot.T)
+    fig.add_trace(
+        go.Scatter3d(
+            x=bat_w[:, 0],
+            y=bat_w[:, 1],
+            z=bat_w[:, 2],
+            mode="lines",
+            line=dict(color="#22C55E", width=4),
+            name="Li-Ion Battery Pack",
+            showlegend=True,
+            hoverinfo="text",
+            hovertext=f"Battery ({l_bat*1000:.0f}x{w_bat*1000:.0f}x{h_bat*1000:.0f} mm)",
+        )
+    )
+
+    # Underslung PG-7M Warhead 3D Wireframe (when present)
+    if drone_spec.get("has_warhead"):
+        l_wh = float(drone_spec.get("warhead_length_m", 0.290))
+        r_wh = 0.5 * float(drone_spec.get("warhead_diam_m", 0.070))
+        z_wh = float(drone_spec.get("warhead_offset_z_m", -h_f / 2.0 - r_wh - 0.006))
+        th_wh = np.linspace(0, 2 * np.pi, 18)
+        ring_b = np.column_stack([
+            np.zeros_like(th_wh),
+            r_wh * np.cos(th_wh),
+            z_wh + r_wh * np.sin(th_wh),
+        ])
+        spine_b = np.array([
+            [+0.50 * l_wh, 0.0, z_wh],
+            [+0.05 * l_wh, 0.0, z_wh + r_wh],
+            [-0.50 * l_wh, 0.0, z_wh],
+            [+0.05 * l_wh, 0.0, z_wh - r_wh],
+            [+0.50 * l_wh, 0.0, z_wh],
+        ], dtype=float)
+        ring_w = np.array([R, 0.0, 0.0]) + (ring_b @ M_rot.T)
+        spine_w = np.array([R, 0.0, 0.0]) + (spine_b @ M_rot.T)
+        fig.add_trace(
+            go.Scatter3d(
+                x=np.concatenate([ring_w[:, 0], [None], spine_w[:, 0]]),
+                y=np.concatenate([ring_w[:, 1], [None], spine_w[:, 1]]),
+                z=np.concatenate([ring_w[:, 2], [None], spine_w[:, 2]]),
+                mode="lines",
+                line=dict(color="#F43F5E", width=4),
+                name=f"Underslung {drone_spec.get('warhead_type', 'PG-7M')} Warhead",
+                showlegend=True,
+            )
+        )
+
     # Central fuselage marker
     fig.add_trace(
         go.Scatter3d(
@@ -247,6 +311,7 @@ def create_3d_antidrone_defense_figure(sim_res: dict[str, Any]) -> go.Figure:
         sc_hit = np.array(scatter["is_hit"], dtype=bool)
         sc_lethal = np.array(scatter["is_lethal"], dtype=bool)
         sc_ke = np.array(scatter["striking_energy_j"])
+        sc_imp = np.array(scatter.get("striking_impulse_ns", [0.0] * len(sc_ke)))
         sc_x = np.full_like(sc_y, R)
 
         if np.any(sc_hit):
@@ -266,10 +331,11 @@ def create_3d_antidrone_defense_figure(sim_res: dict[str, Any]) -> go.Figure:
                     showlegend=True,
                     hoverinfo="text",
                     hovertext=[
-                        f"HIT: {comp} | Energy: {e:.1f}J | Lethal: {l}"
-                        for comp, e, l in zip(
+                        f"HIT: {comp} | E: {e:.1f} J | I: {imp:.3f} N·s | Lethal: {l}"
+                        for comp, e, imp, l in zip(
                             np.array(scatter["component"])[sc_hit],
                             sc_ke[sc_hit],
+                            sc_imp[sc_hit],
                             sc_lethal[sc_hit],
                         )
                     ],
@@ -291,7 +357,10 @@ def create_3d_antidrone_defense_figure(sim_res: dict[str, Any]) -> go.Figure:
                     name="Pellet Cloud (Intercept Net)",
                     showlegend=True,
                     hoverinfo="text",
-                    hovertext=[f"Miss Pellet: ({y:.2f}m, {z:.2f}m) | Energy: {e:.1f}J" for y, z, e in zip(sc_y[miss_idx], sc_z[miss_idx], sc_ke[miss_idx])],
+                    hovertext=[
+                        f"Miss Pellet: ({y:.2f}m, {z:.2f}m) | E: {e:.1f} J | I: {imp:.3f} N·s"
+                        for y, z, e, imp in zip(sc_y[miss_idx], sc_z[miss_idx], sc_ke[miss_idx], sc_imp[miss_idx])
+                    ],
                 )
             )
 
@@ -352,6 +421,17 @@ def create_2d_antidrone_intercept_figure(
             hoverinfo="skip",
         )
     )
+    fig.add_trace(
+        go.Scatter(
+            x=[-0.50, 0.50, 0.50, -0.50, -0.50],
+            y=[-0.50, -0.50, 0.50, 0.50, -0.50],
+            mode="lines",
+            line=dict(color="rgba(56, 189, 248, 0.38)", width=1.4, dash="dashdot"),
+            name=f"1 m² Area ({summary.get('pattern_1m2_pct', 0.0):.0f}% in 1m²)",
+            showlegend=True,
+            hoverinfo="skip",
+        )
+    )
 
     # 2. Drone Silhouette (3D Projected Cross-Section or Planform Fallback)
     aspect_geom = sim_res.get("aspect_geometry")
@@ -392,7 +472,7 @@ def create_2d_antidrone_intercept_figure(
                 )
             )
 
-        # C. Battery / Munition Payload Projected Polygon
+        # C. Li-Ion Battery Pack Projected Polygon
         batt_poly = aspect_geom.get("battery_polygon", [])
         if batt_poly and len(batt_poly) >= 3:
             bp_y = [pt[0] for pt in batt_poly] + [batt_poly[0][0]]
@@ -403,12 +483,32 @@ def create_2d_antidrone_intercept_figure(
                     y=bp_z,
                     mode="lines",
                     fill="toself",
-                    fillcolor="rgba(239, 68, 68, 0.32)",
-                    line=dict(color="#EF4444", width=2.0),
-                    name="Battery / Munition Payload",
+                    fillcolor="rgba(34, 197, 94, 0.30)",
+                    line=dict(color="#22C55E", width=2.2),
+                    name="Battery Pack (Li-Ion 21700)",
                     showlegend=True,
                     hoverinfo="text",
-                    hovertext=f"Battery Pack / Munition Core (Puncture = Instant Detonation)",
+                    hovertext=f"Battery Pack ({aspect_geom.get('battery_area_cm2', 0.0):.1f} cm²)",
+                )
+            )
+
+        # C2. Underslung Warhead Payload (PG-7M) Projected Polygon
+        wh_poly = aspect_geom.get("warhead_polygon", [])
+        if wh_poly and len(wh_poly) >= 3:
+            wh_y = [pt[0] for pt in wh_poly] + [wh_poly[0][0]]
+            wh_z = [pt[1] for pt in wh_poly] + [wh_poly[0][1]]
+            fig.add_trace(
+                go.Scatter(
+                    x=wh_y,
+                    y=wh_z,
+                    mode="lines",
+                    fill="toself",
+                    fillcolor="rgba(244, 63, 94, 0.34)",
+                    line=dict(color="#F43F5E", width=2.2),
+                    name=f"{drone_spec.get('warhead_type', 'PG-7M')} Warhead (Underslung)",
+                    showlegend=True,
+                    hoverinfo="text",
+                    hovertext=f"PG-7M Warhead ({aspect_geom.get('warhead_area_cm2', 0.0):.1f} cm², Lethal ≥{drone_spec.get('lethal_energy_warhead_j', 18):.0f} J)",
                 )
             )
 
@@ -575,6 +675,7 @@ def create_2d_antidrone_intercept_figure(
         sc_lethal = np.array(scatter["is_lethal"], dtype=bool)
         sc_comp = np.array(scatter["component"])
         sc_ke = np.array(scatter["striking_energy_j"])
+        sc_imp = np.array(scatter.get("striking_impulse_ns", [0.0] * len(sc_ke)))
 
         miss_mask = ~sc_hit
         if np.any(miss_mask):
@@ -591,7 +692,10 @@ def create_2d_antidrone_intercept_figure(
                     name="Miss Pellets",
                     showlegend=True,
                     hoverinfo="text",
-                    hovertext=[f"Pellet from {b}: ({y:.2f}m, {z:.2f}m) | {ke:.1f}J" for b, y, z, ke in zip(sc_b[miss_mask], sc_y[miss_mask], sc_z[miss_mask], sc_ke[miss_mask])],
+                    hovertext=[
+                        f"Pellet from {b}: ({y:.2f}m, {z:.2f}m) | {ke:.1f} J | {imp:.3f} N·s"
+                        for b, y, z, ke, imp in zip(sc_b[miss_mask], sc_y[miss_mask], sc_z[miss_mask], sc_ke[miss_mask], sc_imp[miss_mask])
+                    ],
                 )
             )
 
@@ -611,7 +715,10 @@ def create_2d_antidrone_intercept_figure(
                     name="Superficial Hits (Below Lethal Energy)",
                     showlegend=True,
                     hoverinfo="text",
-                    hovertext=[f"HIT {comp}: {ke:.1f}J (Sub-lethal)" for comp, ke in zip(sc_comp[nl_hits], sc_ke[nl_hits])],
+                    hovertext=[
+                        f"HIT {comp}: {ke:.1f} J | {imp:.3f} N·s (Sub-lethal)"
+                        for comp, ke, imp in zip(sc_comp[nl_hits], sc_ke[nl_hits], sc_imp[nl_hits])
+                    ],
                 )
             )
 
@@ -631,11 +738,15 @@ def create_2d_antidrone_intercept_figure(
                     name="💥 Lethal Hits (Component Disabled)",
                     showlegend=True,
                     hoverinfo="text",
-                    hovertext=[f"💥 LETHAL KILL on {comp}! Energy: {ke:.1f}J" for comp, ke in zip(sc_comp[l_hits], sc_ke[l_hits])],
+                    hovertext=[
+                        f"💥 LETHAL KILL on {comp}! {ke:.1f} J | {imp:.3f} N·s"
+                        for comp, ke, imp in zip(sc_comp[l_hits], sc_ke[l_hits], sc_imp[l_hits])
+                    ],
                 )
             )
 
     pk = summary.get("kill_probability_pct", 0.0)
+    phit = summary.get("hit_probability_pct", pk)
     pk_color = "#10B981" if pk >= 80.0 else ("#F59E0B" if pk >= 50.0 else "#EF4444")
 
     aspect_info_str = ""
@@ -649,7 +760,8 @@ def create_2d_antidrone_intercept_figure(
         title=(
             f"🎯 2D Anti-Drone Intercept Board & Silhouette Damage @ {R:.1f}m<br>"
             f"<sup>Target: {summary.get('drone_name', '')}{aspect_info_str} | "
-            f"<span style='color:{pk_color};font-weight:bold;'>P_kill: {pk:.1f}%</span> (Mean Lethal Hits: {summary.get('mean_lethal_hits', 0.0):.1f})</sup>"
+            f"P_hit: <b>{phit:.1f}%</b> | <span style='color:{pk_color};font-weight:bold;'>P_kill: {pk:.1f}%</span> "
+            f"| €{summary.get('cost_per_volley_eur', 0.0):.2f}/volley</sup>"
         ),
         xaxis=dict(title="Horizontal Crossrange Y (m)", range=[-1.2, 1.2], zeroline=True, zerolinecolor="#475569", scaleanchor="y", scaleratio=1),
         yaxis=dict(title="Vertical Height Z (m)", range=[-1.2, 1.2], zeroline=True, zerolinecolor="#475569"),
@@ -793,6 +905,175 @@ def create_drone_aspect_radar_figure(aspect_bench_res: dict[str, Any]) -> go.Fig
         height=490,
     )
     fig.update_annotations(font_size=12)
+    return fig
+
+
+def create_3d_pattern_vs_distance_figure(sim_by_distance: list[dict[str, Any]]) -> go.Figure:
+    """Interactive 3D shot cloud pattern overlay across multiple engagement distances (e.g. 25/50/75 m)."""
+    fig = go.Figure()
+    if not sim_by_distance:
+        return fig
+
+    slices = sorted(sim_by_distance, key=lambda s: float(s.get("summary", {}).get("target_distance_m", 0.0)))
+    r_max = max(float(s.get("summary", {}).get("target_distance_m", 50.0)) for s in slices)
+    th = np.linspace(0.0, 2.0 * np.pi, 48)
+
+    # Bore sight lines from muzzle (X=0) to X=r_max using farthest slice configuration
+    far_barrels = slices[-1].get("barrels", [])
+    for b in far_barrels:
+        y0 = float(b["y_m"])
+        z0 = float(b["z_m"])
+        yf = y0 + r_max * (float(b.get("aim_yaw_mrad", 0.0)) / 1000.0)
+        zf = z0 + r_max * (float(b.get("aim_pitch_mrad", 0.0)) / 1000.0)
+        fig.add_trace(
+            go.Scatter3d(
+                x=[0.0, r_max],
+                y=[y0, yf],
+                z=[z0, zf],
+                mode="lines",
+                line=dict(color="rgba(148, 163, 184, 0.35)", width=1.8),
+                showlegend=False,
+                hoverinfo="skip",
+            )
+        )
+
+    for idx, sim in enumerate(slices):
+        sm = sim.get("summary", {})
+        r_m = float(sm.get("target_distance_m", 25.0))
+        scatter = sim.get("sample_scatter", {})
+        drone_spec = sim.get("drone_spec", {})
+        aspect_geom = sim.get("aspect_geometry", {})
+        m_rot = np.array(aspect_geom.get("rotation_matrix", np.eye(3)), dtype=float)
+
+        # 30-inch benchmark circle at distance r_m
+        fig.add_trace(
+            go.Scatter3d(
+                x=np.full_like(th, r_m),
+                y=0.381 * np.cos(th),
+                z=0.381 * np.sin(th),
+                mode="lines",
+                line=dict(color="rgba(148, 163, 184, 0.45)", width=2, dash="dash"),
+                name="30-inch Reference Circle" if idx == 0 else None,
+                showlegend=(idx == 0),
+                hoverinfo="skip",
+            )
+        )
+
+        # Oriented drone fuselage + battery + warhead + rotors at X=r_m
+        l_f = float(drone_spec.get("fuselage_l_m", 0.20))
+        w_f = float(drone_spec.get("fuselage_w_m", 0.10))
+        h_f = float(drone_spec.get("fuselage_h_m", 0.06))
+        box_b = np.array([
+            [-l_f / 2, -w_f / 2, -h_f / 2],
+            [+l_f / 2, -w_f / 2, -h_f / 2],
+            [+l_f / 2, +w_f / 2, -h_f / 2],
+            [-l_f / 2, +w_f / 2, -h_f / 2],
+            [-l_f / 2, -w_f / 2, -h_f / 2],
+            [-l_f / 2, -w_f / 2, +h_f / 2],
+            [+l_f / 2, -w_f / 2, +h_f / 2],
+            [+l_f / 2, +w_f / 2, +h_f / 2],
+            [-l_f / 2, +w_f / 2, +h_f / 2],
+            [-l_f / 2, -w_f / 2, +h_f / 2],
+        ], dtype=float)
+        bw = np.array([r_m, 0.0, 0.0]) + (box_b @ m_rot.T)
+        fig.add_trace(
+            go.Scatter3d(
+                x=bw[:, 0],
+                y=bw[:, 1],
+                z=bw[:, 2],
+                mode="lines",
+                line=dict(color="#F59E0B", width=4),
+                name="Drone Frame + Battery + PG-7M" if idx == 0 else None,
+                showlegend=(idx == 0),
+                hoverinfo="text",
+                hovertext=f"R={r_m:.0f}m | P_hit={sm.get('hit_probability_pct', 0.0):.1f}% | P_kill={sm.get('kill_probability_pct', 0.0):.1f}%",
+            )
+        )
+        # Battery wireframe on each range slice
+        l_bat = float(drone_spec.get("battery_l_m", l_f * 0.6))
+        w_bat = float(drone_spec.get("battery_w_m", w_f * 0.6))
+        h_bat = float(drone_spec.get("battery_h_m", h_f * 0.55))
+        z_bat = float(drone_spec.get("battery_offset_z_m", 0.045))
+        bat_b = np.array([
+            [-l_bat / 2, -w_bat / 2, z_bat + h_bat / 2],
+            [+l_bat / 2, -w_bat / 2, z_bat + h_bat / 2],
+            [+l_bat / 2, +w_bat / 2, z_bat + h_bat / 2],
+            [-l_bat / 2, +w_bat / 2, z_bat + h_bat / 2],
+            [-l_bat / 2, -w_bat / 2, z_bat + h_bat / 2],
+        ], dtype=float)
+        bat_w = np.array([r_m, 0.0, 0.0]) + (bat_b @ m_rot.T)
+        fig.add_trace(
+            go.Scatter3d(
+                x=bat_w[:, 0],
+                y=bat_w[:, 1],
+                z=bat_w[:, 2],
+                mode="lines",
+                line=dict(color="#22C55E", width=3.5),
+                showlegend=False,
+                hoverinfo="skip",
+            )
+        )
+        if drone_spec.get("has_warhead"):
+            l_wh = float(drone_spec.get("warhead_length_m", 0.290))
+            r_wh = 0.5 * float(drone_spec.get("warhead_diam_m", 0.070))
+            z_wh = float(drone_spec.get("warhead_offset_z_m", -0.06))
+            wh_b = np.array([
+                [+0.5 * l_wh, 0.0, z_wh],
+                [+0.05 * l_wh, 0.0, z_wh + r_wh],
+                [-0.5 * l_wh, 0.0, z_wh],
+                [+0.05 * l_wh, 0.0, z_wh - r_wh],
+                [+0.5 * l_wh, 0.0, z_wh],
+            ], dtype=float)
+            wh_w = np.array([r_m, 0.0, 0.0]) + (wh_b @ m_rot.T)
+            fig.add_trace(
+                go.Scatter3d(
+                    x=wh_w[:, 0],
+                    y=wh_w[:, 1],
+                    z=wh_w[:, 2],
+                    mode="lines",
+                    line=dict(color="#F43F5E", width=3.5),
+                    showlegend=False,
+                    hoverinfo="skip",
+                )
+            )
+
+        # Pellets at slice X=r_m
+        if scatter.get("y"):
+            sy = np.asarray(scatter["y"], dtype=float)
+            sz = np.asarray(scatter["z"], dtype=float)
+            shit = np.asarray(scatter["is_hit"], dtype=bool)
+            slet = np.asarray(scatter["is_lethal"], dtype=bool)
+            if len(sy) > 220:
+                keep = np.linspace(0, len(sy) - 1, 220, dtype=int)
+                keep = np.unique(np.concatenate([keep, np.where(shit)[0]]))
+                sy, sz, shit, slet = sy[keep], sz[keep], shit[keep], slet[keep]
+            cols = ["#EF4444" if (h and l) else ("#FACC15" if h else "#38BDF8") for h, l in zip(shit, slet)]
+            sizes = [6 if h else 2.5 for h in shit]
+            fig.add_trace(
+                go.Scatter3d(
+                    x=np.full(len(sy), r_m),
+                    y=sy,
+                    z=sz,
+                    mode="markers",
+                    marker=dict(size=sizes, color=cols, opacity=0.82),
+                    name=f"Shot Cloud @ {r_m:.0f}m (P_kill {sm.get('kill_probability_pct', 0.0):.0f}%)",
+                    showlegend=True,
+                )
+            )
+
+    fig.update_layout(
+        title="🌐 3D Multi-Distance Shot Cloud Pattern Overlay vs. Oriented Drone Target",
+        scene=dict(
+            xaxis=dict(title="Range X (m)", backgroundcolor="#0F172A", gridcolor="#1E293B", showbackground=True),
+            yaxis=dict(title="Crossrange Y (m)", backgroundcolor="#0F172A", gridcolor="#1E293B", showbackground=True),
+            zaxis=dict(title="Vertical Z (m)", backgroundcolor="#0F172A", gridcolor="#1E293B", showbackground=True),
+            aspectratio=dict(x=2.4, y=1.0, z=1.0),
+            camera=dict(eye=dict(x=-1.75, y=-1.45, z=0.75)),
+        ),
+        margin=dict(l=10, r=10, t=55, b=10),
+        legend=dict(x=0.01, y=0.98, bgcolor="rgba(15, 23, 42, 0.8)", font=dict(color="#F8FAFC", size=10)),
+        height=560,
+    )
     return fig
 
 
