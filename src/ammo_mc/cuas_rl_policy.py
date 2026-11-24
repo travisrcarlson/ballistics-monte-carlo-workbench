@@ -15,7 +15,11 @@ import numpy as np
 
 from ammo_mc.aero_sphere import exact_quadratic_drag_tof_and_velocity
 from ammo_mc.cuas_adversarial import normalize_blue_config, normalize_red_config
-from ammo_mc.cuas_defense import CUAS_SENSOR_PRESETS, _trapezoidal_slew_time
+from ammo_mc.cuas_defense import (
+    CUAS_SENSOR_PRESETS,
+    _estimate_burst_pk_analytics,
+    _trapezoidal_slew_time,
+)
 from ammo_mc.cuas_mission import _resolve_shotgun_ammo
 from ammo_mc.small_arms import (
     compute_drone_projected_geometry,
@@ -751,3 +755,263 @@ def train_fire_control_policy_es(
             "n_eval_episodes": eval_eps,
         },
     }
+
+
+def run_hil_fire_control_trace(
+    policy_or_dict: NeuralFireControlPolicy | dict[str, Any] | str | None = None,
+    track_csv_or_scenario: str = "evasive_fpv_dive",
+    blue_config: dict[str, Any] | None = None,
+    calibration_profile: dict[str, Any] | None = None,
+    dt_ms: float = 100.0,
+    breach_radius_m: float = 12.0,
+    seed: int = 42,
+) -> dict[str, Any]:
+    """Step a trained RL or heuristic fire-control policy through recorded drone telemetry millisecond-by-millisecond."""
+    import csv as _csv
+    import io as _io
+    import json as _json
+    from ammo_mc.cuas_track_replay import generate_sample_drone_track_csv, parse_drone_track_csv
+
+    _ = seed
+    blue_n = normalize_blue_config(blue_config or {})
+    cp = dict(calibration_profile or {})
+
+    if policy_or_dict is None:
+        pol: NeuralFireControlPolicy | str = NeuralFireControlPolicy(seed=42)
+        pol_name = "RL Neural Policy (Default)"
+    elif isinstance(policy_or_dict, NeuralFireControlPolicy):
+        pol = policy_or_dict
+        pol_name = "RL Neural Policy"
+    elif isinstance(policy_or_dict, dict):
+        p_dict = policy_or_dict.get("policy_dict", policy_or_dict)
+        if isinstance(p_dict, dict) and "params" in p_dict:
+            pol = NeuralFireControlPolicy.from_dict(p_dict)
+            pol_name = "RL Neural Policy (Trained)"
+        else:
+            pol = NeuralFireControlPolicy(seed=42)
+            pol_name = "RL Neural Policy (Default)"
+    else:
+        pol = str(policy_or_dict)
+        pol_name = f"Heuristic: {pol}"
+
+    raw_str = str(track_csv_or_scenario or "evasive_fpv_dive").strip()
+    if "," in raw_str and "\n" in raw_str:
+        csv_txt = raw_str
+    else:
+        csv_txt = generate_sample_drone_track_csv(scenario=raw_str or "evasive_fpv_dive", seed=42)
+    parsed = parse_drone_track_csv(csv_txt)
+    tracks = parsed["tracks"]
+    t0 = float(parsed["t_min_s"])
+    t1 = float(parsed["t_max_s"])
+
+    dt_s = max(0.02, min(0.50, float(dt_ms) / 1000.0))
+    n_steps = max(2, int(math.floor((t1 - t0) / dt_s)) + 1)
+
+    drone_specs = get_drone_target_specs()
+    ammo_key = blue_n["ammunition_preset"]
+    _, ammo = _resolve_shotgun_ammo(ammo_key)
+    slew_rate = float(cp.get("measured_slew_rate_deg_s") or blue_n["slew_rate_deg_s"])
+    slew_accel = float(cp.get("measured_slew_accel_deg_s2") or 680.0)
+    settle_t = float(cp.get("measured_settle_time_s") or 0.10)
+    n_bbl = int(blue_n["n_barrels"])
+    max_burst = int(blue_n["barrels_per_burst"])
+    max_rng = float(blue_n["max_engagement_range_m"])
+
+    b_ready = n_bbl
+    reload_until_s = -1.0
+    tur_az = 0.0
+    tur_el = 15.0
+    engaged_until_s = -1.0
+    killed_targets: set[str] = set()
+    breached_targets: set[str] = set()
+    total_shots = 0
+    hold_frames = 0
+    fire_events = 0
+    frames: list[dict[str, Any]] = []
+
+    for idx in range(n_steps):
+        t_cur = t0 + idx * dt_s
+        if b_ready <= 0 and reload_until_s < 0.0:
+            reload_until_s = t_cur + float(blue_n["reload_time_s"])
+        if reload_until_s >= 0.0 and t_cur >= reload_until_s:
+            b_ready = n_bbl
+            reload_until_s = -1.0
+
+        candidates: list[dict[str, Any]] = []
+        for tid, tr in tracks.items():
+            if tid in killed_targets or tid in breached_targets:
+                continue
+            ts_arr = tr["t_s"]
+            if t_cur < float(ts_arr[0]) or t_cur > float(ts_arr[-1]):
+                continue
+            rng_m = float(np.interp(t_cur, ts_arr, tr["range_m"]))
+            spd_mps = float(np.interp(t_cur, ts_arr, tr["speed_mps"]))
+            az_d = float(np.interp(t_cur, ts_arr, np.unwrap(np.radians(tr["az_deg"]))))
+            az_deg = math.degrees(az_d) % 360.0
+            el_deg = float(np.interp(t_cur, ts_arr, tr["el_deg"]))
+            lat_g = float(np.interp(t_cur, ts_arr, tr["lat_g"]))
+            if rng_m <= float(breach_radius_m):
+                breached_targets.add(tid)
+                continue
+            if rng_m > max_rng:
+                continue
+            d_az = ((az_deg - tur_az + 180.0) % 360.0) - 180.0
+            d_el = el_deg - tur_el
+            t_sl = _trapezoidal_slew_time(math.hypot(d_az, d_el), slew_rate, slew_accel)
+            ttb_s = max(0.0, rng_m - float(breach_radius_m)) / max(spd_mps, 1.0)
+            d_spec = drone_specs.get(tr["drone_model"], drone_specs["fpv_quad_small"])
+            pk_1 = _estimate_burst_pk_analytics(
+                slant_range_m=rng_m,
+                barrels_fired=1,
+                pellets_per_shot=int(ammo["pellets_per_shot"]),
+                pellet_diameter_mm=float(ammo["pellet_diameter_mm"]),
+                pellet_mass_g=float(ammo["pellet_mass_g"]),
+                v0_mps=float(ammo["v0_mps"]),
+                choke_name=blue_n["choke"],
+                drone_spec=d_spec,
+                base_cd=float(ammo.get("effective_cd", 0.47)),
+                calibration_profile=calibration_profile,
+            )
+            candidates.append(
+                {
+                    "tid": tid,
+                    "range_m": rng_m,
+                    "spd_mps": spd_mps,
+                    "az_deg": az_deg,
+                    "el_deg": el_deg,
+                    "lat_g": lat_g,
+                    "slew_time_s": t_sl,
+                    "ttb_s": ttb_s,
+                    "pk_1": pk_1,
+                    "d_spec": d_spec,
+                }
+            )
+
+        if not candidates or b_ready <= 0 or t_cur < engaged_until_s:
+            reason = "Reloading" if b_ready <= 0 else ("Slewing / Settling" if t_cur < engaged_until_s else "No Target in Envelope")
+            frames.append(
+                {
+                    "t_ms": round(t_cur * 1000.0, 0),
+                    "target_id": candidates[0]["tid"] if candidates else "—",
+                    "slant_range_m": round(candidates[0]["range_m"], 2) if candidates else None,
+                    "ttb_s": round(candidates[0]["ttb_s"], 2) if candidates else None,
+                    "cmd_az_deg": round(tur_az, 1),
+                    "cmd_el_deg": round(tur_el, 1),
+                    "cmd_burst_size": 0,
+                    "hold_fire_prob": 0.0,
+                    "fire_commanded": False,
+                    "barrels_ready": b_ready,
+                    "pk_est_pct": round(100.0 * candidates[0]["pk_1"], 1) if candidates else 0.0,
+                    "decision_reason": reason,
+                }
+            )
+            continue
+
+        n_alive = len(candidates)
+        if isinstance(pol, NeuralFireControlPolicy):
+            X_cand = np.vstack(
+                [
+                    NeuralFireControlPolicy.build_target_features(
+                        slant_range_m=c["range_m"],
+                        max_engage_range_m=max_rng,
+                        ttb_s=c["ttb_s"],
+                        slew_time_s=c["slew_time_s"],
+                        speed_mps=c["spd_mps"],
+                        maneuver_g=c["lat_g"],
+                        b_ready=b_ready,
+                        n_barrels=n_bbl,
+                        n_alive=n_alive,
+                        swarm_size=max(len(tracks), n_alive),
+                        est_pk_1bbl=c["pk_1"],
+                    )
+                    for c in candidates
+                ]
+            )
+            act = pol.select_action(X_cand, b_ready=b_ready, max_burst=max_burst)
+            sel = candidates[act["target_idx"]]
+            burst_req = int(act["burst_size"])
+            hold_prob = float(act["hold_fire_prob"])
+            should_hold = bool(hold_prob > 0.55 and sel["ttb_s"] > 0.85 and sel["range_m"] > 0.48 * max_rng)
+        else:
+            if pol == "nearest_slant_range":
+                sel = min(candidates, key=lambda c: c["range_m"])
+            elif pol == "minimum_slew_angle":
+                sel = min(candidates, key=lambda c: c["slew_time_s"])
+            else:
+                sel = min(candidates, key=lambda c: c["ttb_s"])
+            burst_req = min(b_ready, max_burst)
+            hold_prob = 0.0
+            should_hold = False
+
+        tur_az = sel["az_deg"]
+        tur_el = sel["el_deg"]
+        if should_hold:
+            hold_frames += 1
+            reason = f"HOLD FIRE (p={hold_prob:.2f}, range={sel['range_m']:.1f} m > sweet spot)"
+            cmd_fire = False
+            burst_cmd = 0
+            pk_est = sel["pk_1"] * 100.0
+        else:
+            cmd_fire = True
+            fire_events += 1
+            burst_cmd = min(b_ready, burst_req)
+            b_ready -= burst_cmd
+            total_shots += burst_cmd
+            engaged_until_s = t_cur + sel["slew_time_s"] + settle_t
+            pk_est = 100.0 * _estimate_burst_pk_analytics(
+                slant_range_m=sel["range_m"],
+                barrels_fired=burst_cmd,
+                pellets_per_shot=int(ammo["pellets_per_shot"]),
+                pellet_diameter_mm=float(ammo["pellet_diameter_mm"]),
+                pellet_mass_g=float(ammo["pellet_mass_g"]),
+                v0_mps=float(ammo["v0_mps"]),
+                choke_name=blue_n["choke"],
+                drone_spec=sel["d_spec"],
+                base_cd=float(ammo.get("effective_cd", 0.47)),
+                calibration_profile=calibration_profile,
+            )
+            reason = f"FIRE {burst_cmd}B @ {sel['tid']} ({sel['range_m']:.1f} m, est Pk {pk_est:.0f}%)"
+            if pk_est >= 82.0:
+                killed_targets.add(sel["tid"])
+
+        frames.append(
+            {
+                "t_ms": round(t_cur * 1000.0, 0),
+                "target_id": sel["tid"],
+                "slant_range_m": round(sel["range_m"], 2),
+                "ttb_s": round(sel["ttb_s"], 2),
+                "cmd_az_deg": round(tur_az, 1),
+                "cmd_el_deg": round(tur_el, 1),
+                "cmd_burst_size": burst_cmd,
+                "hold_fire_prob": round(hold_prob, 3),
+                "fire_commanded": cmd_fire,
+                "barrels_ready": b_ready,
+                "pk_est_pct": round(pk_est, 1),
+                "decision_reason": reason,
+            }
+        )
+
+    csv_buf = _io.StringIO()
+    if frames:
+        writer = _csv.DictWriter(csv_buf, fieldnames=list(frames[0].keys()))
+        writer.writeheader()
+        writer.writerows(frames)
+
+    summary = {
+        "policy_name": pol_name,
+        "dt_ms": round(dt_s * 1000.0, 1),
+        "n_frames": len(frames),
+        "fire_commands": fire_events,
+        "hold_fire_frames": hold_frames,
+        "total_rounds_commanded": total_shots,
+        "targets_neutralized": len(killed_targets),
+        "targets_breached": len(breached_targets),
+        "total_tracks": len(tracks),
+    }
+    return {
+        "summary": summary,
+        "frames": frames,
+        "json_stream": _json.dumps({"summary": summary, "frames": frames}, indent=2),
+        "csv_stream": csv_buf.getvalue(),
+    }
+

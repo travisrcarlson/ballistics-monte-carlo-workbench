@@ -342,6 +342,64 @@ def _make_adversarial_ml_chart_fig(adv_res: dict[str, Any]) -> Figure:
     return fig
 
 
+def _make_calibration_certificate_fig(cal_res: dict[str, Any]) -> Figure:
+    fig = Figure(figsize=(11.0, 6.2), facecolor="#0F172A")
+    twin = cal_res.get("twin", {})
+    drift = cal_res.get("drift", cal_res)
+
+    ax1 = fig.add_subplot(1, 2, 1, facecolor="#1E293B")
+    nom = drift.get("nominal", {})
+    cal = drift.get("calibrated", {})
+    r_vals = nom.get("ranges_m", [])
+    if r_vals and nom.get("pk_pct") and cal.get("pk_pct"):
+        ax1.plot(r_vals, nom["pk_pct"], "--o", color="#94A3B8", linewidth=2.0, label=f"Nominal R80={nom.get('r80_m', 0.0):.1f} m")
+        ax1.plot(r_vals, cal["pk_pct"], "-s", color="#10B981", linewidth=2.4, label=f"Calibrated R80={cal.get('r80_m', 0.0):.1f} m")
+        ax1.axhline(80.0, color="#F59E0B", linestyle=":", linewidth=1.3, label="80% R80 Threshold")
+    ax1.set_ylim(0, 105)
+    ax1.set_xlabel("Slant Range (m)", color="#CBD5E1")
+    ax1.set_ylabel("Burst Kill Probability (%)", color="#CBD5E1")
+    ax1.tick_params(colors="#CBD5E1")
+    ax1.set_title(
+        f"Nominal vs Recalibrated P_kill(R) (Drift: {drift.get('r80_drift_m', 0.0):+.1f} m)",
+        color="#F8FAFC",
+        fontsize=10.5,
+        fontweight="bold",
+    )
+    ax1.legend(facecolor="#0F172A", labelcolor="#E2E8F0", fontsize=8)
+    ax1.grid(color="#334155", alpha=0.45)
+
+    ax2 = fig.add_subplot(1, 2, 2, facecolor="#0F172A")
+    ax2.axis("off")
+    param_rows = [
+        ["Spread Multiplier / Exp", f"{twin.get('spread_factor', 1.0):.2f}x (p={twin.get('spread_exponent', 1.15):.2f})"],
+        ["MV Scale / SD / Cd Scale", f"{twin.get('mv_scale', 1.0):.3f}x | {twin.get('mv_sd_mps', 4.0):.1f} m/s | {twin.get('pellet_cd_scale', 1.0):.2f}x"],
+        ["Drone A_vuln / E_crit Scale", f"{twin.get('drone_avuln_scale', 1.0):.2f}x / {twin.get('drone_ecrit_scale', 1.0):.2f}x"],
+        ["Recoil Scale / Zero Scatter", f"{twin.get('recoil_force_scale', 1.0):.2f}x / {twin.get('barrel_zero_scatter_mrad', 0.0):.2f} mrad"],
+        ["Lethality Brier Score", f"{twin.get('lethality_brier_score', 'N/A')} ({twin.get('lethality_n_trials', 0)} trials)"],
+        ["Nominal -> Cal R80", f"{nom.get('r80_m', 0.0):.1f} m -> {cal.get('r80_m', 0.0):.1f} m"],
+    ]
+    tbl = ax2.table(
+        cellText=param_rows,
+        colLabels=["Digital Twin Parameter", "Calibrated Value"],
+        loc="center",
+        bbox=[0.0, 0.15, 1.0, 0.72],
+        cellLoc="left",
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(8.5)
+    for (ri, _), cell in tbl.get_celld().items():
+        cell.set_edgecolor("#334155")
+        if ri == 0:
+            cell.set_facecolor("#1E3A8A")
+            cell.set_text_props(color="#FFFFFF", fontweight="bold")
+        else:
+            cell.set_facecolor("#1E293B" if ri % 2 == 1 else "#0F172A")
+            cell.set_text_props(color="#E2E8F0")
+    ax2.set_title("Empirical Digital Twin Parameters", color="#F8FAFC", fontsize=10.5, fontweight="bold")
+    fig.tight_layout(pad=2.0)
+    return fig
+
+
 def _resolve_citations(source_ids: list[str] | None) -> list[dict[str, Any]]:
     cat = get_literature_catalog()
     by_id = {r["source_id"]: r for r in cat}
@@ -360,6 +418,7 @@ def _collect_briefing_sections(
     simulator_summary: dict[str, Any] | None = None,
     source_ids: list[str] | None = None,
     adversarial_result: dict[str, Any] | None = None,
+    calibration_result: dict[str, Any] | None = None,
 ) -> tuple[list[tuple[str, str, str]], list[tuple[str, Figure]], list[dict[str, Any]]]:
     kpis: list[tuple[str, str, str]] = []
     if simulator_summary:
@@ -397,6 +456,16 @@ def _collect_briefing_sections(
                 f"{asm.get('nash_value', 0.0):.2f} / {asm.get('cv_r2', 0.0):.3f} ({asm.get('best_blue_name', 'Nash')})",
             )
         )
+    if calibration_result:
+        tw = calibration_result.get("twin", {})
+        dr = calibration_result.get("drift", calibration_result)
+        kpis.append(
+            (
+                "Digital Twin (M13)",
+                "Spread / E_crit / R80 Drift",
+                f"{tw.get('spread_factor', 1.0):.2f}x / {tw.get('drone_ecrit_scale', 1.0):.2f}x / {dr.get('r80_drift_m', 0.0):+.1f} m",
+            )
+        )
     if not kpis:
         kpis.append(("Workbench Baseline", "Status", "Ready — execute modules to populate quantitative KPIs"))
 
@@ -413,6 +482,8 @@ def _collect_briefing_sections(
         figs.append(("Sustained Logistics & Payload Economics", _make_logistics_chart_fig(logistics_result)))
     if adversarial_result and (adversarial_result.get("generation_history") or adversarial_result.get("feature_importance")):
         figs.append(("Adversarial ML Co-Evolution & Nash Drivers", _make_adversarial_ml_chart_fig(adversarial_result)))
+    if calibration_result:
+        figs.append(("Empirical Calibration & Digital Twin Drift", _make_calibration_certificate_fig(calibration_result)))
 
     citations = _resolve_citations(source_ids)
     figs.append(("Scientific Literature & Provenance Citations", _make_sources_figure(citations)))
@@ -430,6 +501,7 @@ def generate_executive_briefing_pdf(
     simulator_summary: dict[str, Any] | None = None,
     source_ids: list[str] | None = None,
     adversarial_result: dict[str, Any] | None = None,
+    calibration_result: dict[str, Any] | None = None,
 ) -> bytes:
     """Render multi-page landscape executive PDF briefing into raw bytes."""
     _, figs, _ = _collect_briefing_sections(
@@ -443,6 +515,7 @@ def generate_executive_briefing_pdf(
         simulator_summary=simulator_summary,
         source_ids=source_ids,
         adversarial_result=adversarial_result,
+        calibration_result=calibration_result,
     )
     buf = io.BytesIO()
     with PdfPages(buf) as pdf:
@@ -462,6 +535,7 @@ def generate_executive_briefing_pptx(
     simulator_summary: dict[str, Any] | None = None,
     source_ids: list[str] | None = None,
     adversarial_result: dict[str, Any] | None = None,
+    calibration_result: dict[str, Any] | None = None,
 ) -> bytes:
     """Build native 16:9 widescreen PowerPoint (.pptx) deck with charts, tables & citations."""
     kpis, figs, citations = _collect_briefing_sections(
@@ -475,6 +549,7 @@ def generate_executive_briefing_pptx(
         simulator_summary=simulator_summary,
         source_ids=source_ids,
         adversarial_result=adversarial_result,
+        calibration_result=calibration_result,
     )
     prs = Presentation()
     prs.slide_width = Inches(13.333)
@@ -784,3 +859,111 @@ def generate_cuas_array_spec_sheet_pdf(
             pdf.savefig(fig2, facecolor=fig2.get_facecolor())
 
     return buf.getvalue()
+
+
+def generate_calibration_certificate_pdf(
+    twin: dict[str, Any],
+    drift_res: dict[str, Any],
+    test_plan: dict[str, Any] | None = None,
+    title: str = "C-UAS Empirical Digital Twin Calibration Certificate",
+) -> bytes:
+    """Render 1-2 page landscape PDF Calibration Certificate comparing Nominal vs Fitted Design Twin."""
+    cal_payload = {"twin": twin, "drift": drift_res}
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        fig1 = Figure(figsize=(11.69, 8.27), facecolor="#0F172A")
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        fig1.text(0.04, 0.945, title[:78], fontsize=15.5, fontweight="bold", color="#F8FAFC")
+        fig1.text(
+            0.04,
+            0.910,
+            f"Generated by ammo-mc v{__version__} | {stamp} | Lot: {twin.get('lot_number', 'N/A')} | Serial: {twin.get('barrel_serial', 'N/A')}",
+            fontsize=10.0,
+            color="#38BDF8",
+        )
+        fig1.text(0.04, 0.875, f"DIAGNOSIS: {drift_res.get('diagnosis', 'Calibrated Digital Twin active.')[:118]}", fontsize=9.0, color="#FDE68A")
+
+        nom = drift_res.get("nominal", {})
+        cal = drift_res.get("calibrated", {})
+        ax_d = fig1.add_axes([0.06, 0.44, 0.42, 0.37], facecolor="#1E293B")
+        r_vals = nom.get("ranges_m", [])
+        if r_vals and nom.get("pk_pct") and cal.get("pk_pct"):
+            ax_d.plot(r_vals, nom["pk_pct"], "--o", color="#94A3B8", linewidth=2.0, label=f"Nominal R80={nom.get('r80_m', 0.0):.1f} m")
+            ax_d.plot(r_vals, cal["pk_pct"], "-s", color="#10B981", linewidth=2.4, label=f"Calibrated R80={cal.get('r80_m', 0.0):.1f} m")
+            ax_d.axhline(80.0, color="#F59E0B", linestyle=":", linewidth=1.2)
+            ax_d.legend(loc="lower left", frameon=False, labelcolor="#E2E8F0", fontsize=8)
+        ax_d.set_ylim(0, 105)
+        ax_d.set_xlabel("Slant Range (m)", color="#CBD5E1", fontsize=9)
+        ax_d.set_ylabel("Burst P_kill (%)", color="#CBD5E1", fontsize=9)
+        ax_d.tick_params(colors="#CBD5E1", labelsize=8)
+        ax_d.set_title("Model Drift Curve (Nominal vs Calibrated Twin)", color="#F8FAFC", fontsize=10.5, fontweight="bold")
+        ax_d.grid(color="#334155", alpha=0.45)
+
+        ax_p = fig1.add_axes([0.54, 0.44, 0.42, 0.37])
+        ax_p.axis("off")
+        p_rows = [
+            ["Spread Factor & Exp", f"{twin.get('spread_factor', 1.0):.3f}x | p={twin.get('spread_exponent', 1.15):.3f}"],
+            ["MV Scale & Lot SD", f"{twin.get('mv_scale', 1.0):.3f}x | {twin.get('mv_sd_mps', 4.0):.2f} m/s"],
+            ["Pellet Cd Scale", f"{twin.get('pellet_cd_scale', 1.0):.3f}x"],
+            ["Drone A_vuln & E_crit", f"{twin.get('drone_avuln_scale', 1.0):.3f}x | {twin.get('drone_ecrit_scale', 1.0):.3f}x"],
+            ["Recoil Scale & Bbl Zero", f"{twin.get('recoil_force_scale', 1.0):.3f}x | {twin.get('barrel_zero_scatter_mrad', 0.0):.2f} mrad"],
+            ["R80 Drift / Mass", f"{drift_res.get('r80_drift_m', 0.0):+.1f} m | {cal.get('mass_kg', 0.0):.1f} kg"],
+        ]
+        tp = ax_p.table(cellText=p_rows, colLabels=["Twin Parameter", "Empirical Fit"], loc="center", cellLoc="left", colWidths=[0.46, 0.54])
+        tp.auto_set_font_size(False)
+        tp.set_fontsize(8.5)
+        for (ri, _), cell in tp.get_celld().items():
+            cell.set_edgecolor("#334155")
+            if ri == 0:
+                cell.set_facecolor("#1E3A8A")
+                cell.set_text_props(color="#FFFFFF", fontweight="bold")
+            else:
+                cell.set_facecolor("#1E293B" if ri % 2 == 1 else "#0F172A")
+                cell.set_text_props(color="#E2E8F0")
+
+        ax_f = fig1.add_axes([0.04, 0.05, 0.92, 0.31])
+        ax_f.axis("off")
+        fixes = drift_res.get("recommended_fixes", [])
+        f_rows = [
+            [
+                f"#{i+1} {f['fix_name']}",
+                f"{f['r80_m']:.1f} m ({f['r80_gain_m']:+.1f} m)",
+                f"{f['pk_at_req_pct']:.1f}%",
+                f"{f['mass_kg']:.1f} kg / {f['peak_recoil_kn']:.2f} kN",
+                "Yes" if f["mount_feasible"] else "Exceeds",
+            ]
+            for i, f in enumerate(fixes[:3])
+        ]
+        if test_plan and test_plan.get("top_recommendations"):
+            for nxt in test_plan["top_recommendations"][:2]:
+                f_rows.append(
+                    [
+                        f"Next Test #{nxt['priority']}: {nxt['domain']}",
+                        f"-{nxt['expected_ci_shrink_m']:.2f} m CI",
+                        f"{nxt['variance_share_pct']:.0f}% var",
+                        nxt["sample_size"],
+                        f"${nxt['est_cost_usd']:.0f}",
+                    ]
+                )
+        if f_rows:
+            tf = ax_f.table(
+                cellText=f_rows,
+                colLabels=["Recommended Design Fix / Next Range Test", "R80 / CI Gain", "Pk@Req / Var", "SWaP / Samples", "Mount / Cost"],
+                loc="center",
+                cellLoc="left",
+            )
+            tf.auto_set_font_size(False)
+            tf.set_fontsize(8.0)
+            for (ri, _), cell in tf.get_celld().items():
+                cell.set_edgecolor("#334155")
+                if ri == 0:
+                    cell.set_facecolor("#1E3A8A")
+                    cell.set_text_props(color="#FFFFFF", fontweight="bold")
+                else:
+                    cell.set_facecolor("#1E293B" if ri % 2 == 1 else "#0F172A")
+                    cell.set_text_props(color="#E2E8F0")
+
+        pdf.savefig(fig1, facecolor=fig1.get_facecolor())
+        _ = cal_payload
+    return buf.getvalue()
+

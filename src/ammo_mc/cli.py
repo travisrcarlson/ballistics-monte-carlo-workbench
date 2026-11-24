@@ -700,14 +700,19 @@ def cmd_cuas_swap_c(
     choke: str = typer.Option("Modified", "--choke", help="Default choke."),
     pointing: str = typer.Option("convergent", "--pointing", help="Pointing mode."),
     splay_mrad: float = typer.Option(0.0, "--splay-mrad", help="Curtain splay angle in mrad."),
+    thickness_mm: float = typer.Option(22.0, "--thickness-mm", help="Clamp plate thickness in mm for FEA & STL."),
+    material: str = typer.Option("7075-T6", "--material", help="Clamp plate alloy (7075-T6|6061-T6|4140-Steel)."),
     out_dxf: Optional[Path] = typer.Option(None, "--out-dxf", help="Write parametric AutoCAD DXF drawing."),
     out_svg: Optional[Path] = typer.Option(None, "--out-svg", help="Write parametric blueprint SVG."),
-    as_json: bool = typer.Option(False, "--json", help="Output JSON SWaP-C breakdown."),
+    out_stl: Optional[Path] = typer.Option(None, "--out-stl", help="Write extruded 3D ASCII STL CAD solid."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON SWaP-C + FEA breakdown."),
 ) -> None:
-    """Compute turret SWaP-C mass/power/BOM budget and export parametric 2D muzzle-plate CAD."""
+    """Compute turret SWaP-C mass/power/BOM, bolt-shear FEA, and export 2D/3D muzzle-plate CAD."""
     from ammo_mc.cuas_hardware import (
         estimate_turret_swap_c,
+        evaluate_muzzle_plate_fea,
         export_muzzle_plate_dxf,
+        export_muzzle_plate_stl,
         export_muzzle_plate_svg,
     )
     from ammo_mc.small_arms import generate_multishotgun_array_layout
@@ -716,6 +721,14 @@ def cmd_cuas_swap_c(
     bbls = generate_multishotgun_array_layout(
         layout_type=layout, n_barrels=barrels, default_choke=choke, default_ammunition_preset=ammo
     )
+    fea = evaluate_muzzle_plate_fea(
+        bbls,
+        layout_type=layout,
+        peak_recoil_force_kn=float(res["summary"]["peak_recoil_force_kn"]),
+        plate_thickness_mm=thickness_mm,
+        material=material,
+    )
+    res["fea"] = fea
     if out_dxf:
         out_dxf.parent.mkdir(parents=True, exist_ok=True)
         out_dxf.write_text(
@@ -730,13 +743,109 @@ def cmd_cuas_swap_c(
             encoding="utf-8",
         )
         typer.echo(f"Wrote SVG blueprint to {out_svg}")
+    if out_stl:
+        out_stl.parent.mkdir(parents=True, exist_ok=True)
+        out_stl.write_text(
+            export_muzzle_plate_stl(bbls, layout_type=layout, plate_thickness_mm=thickness_mm),
+            encoding="utf-8",
+        )
+        typer.echo(f"Wrote 3D ASCII STL to {out_stl}")
     if as_json:
         typer.echo(json.dumps(res, indent=2))
         return
     sm = res["summary"]
     typer.echo(
         f"SWaP-C [{barrels}B {layout}]: Mass={sm['total_mass_kg']:.1f} kg | Power={sm['peak_power_w']:.0f} W | "
-        f"Recoil={sm['peak_recoil_force_kn']:.2f} kN | BOM=${sm['unit_bom_usd']:,.0f} | Mount={sm['recommended_mount_class']}"
+        f"Recoil={sm['peak_recoil_force_kn']:.2f} kN | BOM=${sm['unit_bom_usd']:,.0f} | "
+        f"FEA={fea['verdict']} (SF={fea['overall_safety_factor']:.2f}x) | Mount={sm['recommended_mount_class']}"
+    )
+
+
+@cuas_app.command("calibrate-twin")
+def cmd_cuas_calibrate_twin(
+    drone: str = typer.Option("fpv_quad_small", "--drone", help="Reference drone model."),
+    range_m: float = typer.Option(45.0, "--range-m", help="Required intercept range (m)."),
+    barrels: int = typer.Option(6, "--barrels", "-b", help="Baseline turret barrels."),
+    save_name: Optional[str] = typer.Option(None, "--save-name", help="Save calibrated profile into SQLite store."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON calibration & drift summary."),
+) -> None:
+    """Run closed-loop empirical recalibration across range/lethality/hardware and analyze design drift."""
+    from ammo_mc.cuas_calibration_twin import (
+        CalibrationProfileStore,
+        analyze_calibration_design_delta,
+        calibrate_hardware_bench_tests,
+        calibrate_livefire_drone_lethality,
+        calibrate_multirange_pattern_and_drag,
+        generate_sample_hardware_bench_tests,
+        generate_sample_livefire_drone_trials,
+        generate_sample_multirange_pattern_rows,
+        merge_twin_updates,
+        recommend_next_range_tests,
+    )
+
+    mr = calibrate_multirange_pattern_and_drag(generate_sample_multirange_pattern_rows())
+    lf = calibrate_livefire_drone_lethality(generate_sample_livefire_drone_trials(drone_model=drone), drone_model=drone)
+    hb = calibrate_hardware_bench_tests({"n_barrels": barrels}, generate_sample_hardware_bench_tests(barrels))
+    twin = merge_twin_updates(None, {**mr["twin_patch"], **lf["twin_patch"], **hb["twin_patch"]}, domain="cli")
+    drift = analyze_calibration_design_delta({"n_barrels": barrels, "barrels_per_burst": 2}, twin, drone_model=drone, required_range_m=range_m)
+    plan = recommend_next_range_tests({"n_barrels": barrels, "barrels_per_burst": 2}, twin, drone_model=drone, target_range_m=range_m)
+    saved_id = None
+    if save_name:
+        saved_id = CalibrationProfileStore().save_profile(save_name, twin)["id"]
+    payload = {"twin": twin, "drift": drift, "test_plan": plan, "saved_profile_id": saved_id}
+    if as_json:
+        typer.echo(json.dumps(payload, indent=2))
+        return
+    typer.echo(
+        f"Calibrated Digital Twin [{drone}]: spread={twin['spread_factor']:.2f}x (p={twin['spread_exponent']:.2f}) | "
+        f"E_crit={twin['drone_ecrit_scale']:.2f}x | R80 {drift['nominal']['r80_m']:.1f}m -> {drift['calibrated']['r80_m']:.1f}m | "
+        f"Top Fix={drift['recommended_fixes'][0]['fix_name']}"
+    )
+
+
+@cuas_app.command("safety-envelope")
+def cmd_cuas_safety_envelope(
+    barrels: int = typer.Option(6, "--barrels", "-b", help="Turret barrels."),
+    ammo: str = typer.Option("12G_NO4_BUCK_C_UAS", "--ammo", help="Ammunition preset."),
+    elevation: float = typer.Option(35.0, "--elevation", help="Firing elevation angle (deg)."),
+    env: str = typer.Option("urban_permissive", "--env", help="Environment (urban_permissive|urban_canyon)."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON safety envelope breakdown."),
+) -> None:
+    """Evaluate acoustic blast dB contours, friendly danger cone & falling-pellet collateral risk."""
+    from ammo_mc.cuas_safety_envelope import evaluate_cuas_collateral_safety_envelope
+
+    res = evaluate_cuas_collateral_safety_envelope(
+        n_barrels=barrels, ammunition_preset=ammo, firing_elevation_deg=elevation, environment_type=env
+    )
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    sm = res["summary"]
+    typer.echo(
+        f"Collateral Safety Envelope [{sm['verdict']}]: 140dB={sm['acoustic_140db_downrange_m']:.0f}m | "
+        f"Crew Rear={sm['crew_rear_140db_standoff_m']:.1f}m | Fallout 99%={sm['fallout_99pct_range_m']:.0f}m | "
+        f"Lethal(>15J)={sm['lethal_15j_pct']:.1f}%"
+    )
+
+
+@cuas_app.command("hil-trace")
+def cmd_cuas_hil_trace(
+    scenario: str = typer.Option("evasive_fpv_dive", "--scenario", help="Track scenario or CSV path."),
+    dt_ms: float = typer.Option(100.0, "--dt-ms", help="Control-loop step size (ms)."),
+    breach_r: float = typer.Option(12.0, "--breach-r", help="Perimeter keepout radius (m)."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON HIL command stream."),
+) -> None:
+    """Step RL fire-control policy over recorded drone telemetry millisecond-by-millisecond."""
+    from ammo_mc.cuas_rl_policy import run_hil_fire_control_trace
+
+    res = run_hil_fire_control_trace(None, track_csv_or_scenario=scenario, dt_ms=dt_ms, breach_radius_m=breach_r)
+    if as_json:
+        typer.echo(json.dumps({"summary": res["summary"], "frames": res["frames"]}, indent=2))
+        return
+    sm = res["summary"]
+    typer.echo(
+        f"HIL Policy Trace ({sm['policy_name']}): Frames={sm['n_frames']} | Fire Cmds={sm['fire_commands']} | "
+        f"Hold Gates={sm['hold_fire_frames']} | Neutralized={sm['targets_neutralized']}/{sm['total_tracks']}"
     )
 
 

@@ -71,8 +71,16 @@ def simulate_unified_tactical_raid_mc(
     seed: int = 42,
     swarm_package: list[dict[str, Any]] | None = None,
     outer_layer_type: str = "none",
+    calibration_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run Monte Carlo time-stepped cooperative multi-turret 3D C-UAS raid defense."""
+    cp = dict(calibration_profile or {})
+    if cp.get("measured_slew_rate_deg_s") is not None:
+        turret_slew_rate_deg_s = float(cp["measured_slew_rate_deg_s"])
+    if cp.get("measured_slew_accel_deg_s2") is not None:
+        turret_slew_accel_deg_s2 = float(cp["measured_slew_accel_deg_s2"])
+    if cp.get("measured_settle_time_s") is not None:
+        salvo_cycle_time_s = max(float(salvo_cycle_time_s), float(cp["measured_settle_time_s"]) + 0.25)
     rng = np.random.default_rng(seed)
     site = SITE_DEFENSE_PRESETS.get(site_preset, SITE_DEFENSE_PRESETS["fob_compound_4_turret"])
     turrets_in = [dict(t) for t in (custom_turrets if custom_turrets is not None else site["turrets"])]
@@ -598,6 +606,7 @@ def simulate_unified_tactical_raid_mc(
                             base_cd=float(ammo.get("effective_cd", 0.47)),
                             aspect_mode="head_on_frontal",
                             aspect_geom=chosen_d["aspect_geom"],
+                            calibration_profile=cp if cp else None,
                         )
                         * thermal_pen
                         * ev_pen,

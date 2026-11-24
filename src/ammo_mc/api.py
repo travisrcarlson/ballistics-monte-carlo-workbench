@@ -802,6 +802,318 @@ def post_cuas_duel(req: CuasDuelRequest) -> dict[str, Any]:
     return _to_json_safe(run_red_vs_blue_duel_diagnostic(**req.model_dump()))
 
 
+class CuasStlAndFeaRequest(CuasSwapCRequest):
+    plate_thickness_mm: float = 22.0
+    material: str = "7075-T6"
+    bolt_grade: str = "8.8"
+
+
+@app.post("/cuas/cad/stl", tags=["C-UAS", "Export"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_cad_stl(req: CuasStlAndFeaRequest) -> Response:
+    """Export parametric extruded 3D watertight ASCII STL solid of the muzzle clamp plate."""
+    from ammo_mc.cuas_hardware import export_muzzle_plate_stl
+
+    bbls = generate_multishotgun_array_layout(
+        layout_type=req.layout_type,
+        n_barrels=req.n_barrels,
+        mount_radius_m=req.mount_radius_m,
+        default_choke=req.default_choke,
+        default_barrel_length_in=req.barrel_length_in,
+        default_ammunition_preset=req.ammunition_preset,
+    )
+    stl_txt = export_muzzle_plate_stl(
+        barrels=bbls,
+        layout_type=req.layout_type,
+        plate_thickness_mm=req.plate_thickness_mm,
+        title=f"cuas_{req.layout_type}_{req.n_barrels}bbl_clamp",
+    )
+    return Response(
+        content=stl_txt.encode("utf-8"),
+        media_type="model/stl",
+        headers={"Content-Disposition": "attachment; filename=cuas_muzzle_plate.stl"},
+    )
+
+
+@app.post("/cuas/hardware/fea", tags=["C-UAS"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_hardware_fea(req: CuasStlAndFeaRequest) -> dict[str, Any]:
+    """Run first-principles bolt-shear, bearing & geometric ligament FEA sanity check."""
+    from ammo_mc.cuas_hardware import estimate_turret_swap_c, evaluate_muzzle_plate_fea
+
+    swap = estimate_turret_swap_c(
+        n_barrels=req.n_barrels,
+        barrel_length_in=req.barrel_length_in,
+        layout_type=req.layout_type,
+        mount_radius_m=req.mount_radius_m,
+        ammunition_preset=req.ammunition_preset,
+        firing_mode=req.firing_mode,
+        ripple_delay_ms=req.ripple_delay_ms,
+        hybrid_mode=req.hybrid_mode,
+    )
+    bbls = generate_multishotgun_array_layout(
+        layout_type=req.layout_type,
+        n_barrels=req.n_barrels,
+        mount_radius_m=req.mount_radius_m,
+        default_choke=req.default_choke,
+        default_barrel_length_in=req.barrel_length_in,
+        default_ammunition_preset=req.ammunition_preset,
+    )
+    return _to_json_safe(
+        evaluate_muzzle_plate_fea(
+            barrels=bbls,
+            layout_type=req.layout_type,
+            peak_recoil_force_kn=float(swap["summary"]["peak_recoil_force_kn"]),
+            plate_thickness_mm=req.plate_thickness_mm,
+            material=req.material,
+            bolt_grade=req.bolt_grade,
+        )
+    )
+
+
+class CuasSafetyEnvelopeRequest(BaseModel):
+    n_barrels: int = 6
+    barrels_per_burst: int = 2
+    ammunition_preset: str = "12G_NO4_BUCK_C_UAS"
+    default_choke: str = "Modified"
+    default_barrel_length_in: float = 24.0
+    firing_elevation_deg: float = 35.0
+    firing_azimuth_deg: float = 0.0
+    turret_height_m: float = 2.0
+    wind_downrange_mps: float = 0.0
+    wind_crossrange_mps: float = 0.0
+    environment_type: str = "urban_permissive"
+    calibration_profile: Optional[dict[str, Any]] = None
+    n_sample_pellets: int = 200
+    seed: int = 42
+
+
+@app.post("/cuas/safety-envelope", tags=["C-UAS", "Safety"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_safety_envelope(req: CuasSafetyEnvelopeRequest) -> dict[str, Any]:
+    """Compute acoustic muzzle-blast dB contours, danger cone & falling-pellet collateral risk tiers."""
+    from ammo_mc.cuas_safety_envelope import evaluate_cuas_collateral_safety_envelope
+
+    return _to_json_safe(evaluate_cuas_collateral_safety_envelope(**req.model_dump()))
+
+
+class CuasHilTraceRequest(BaseModel):
+    policy_dict: Optional[dict[str, Any]] = None
+    track_csv_or_scenario: str = "evasive_fpv_dive"
+    blue_config: Optional[dict[str, Any]] = None
+    calibration_profile: Optional[dict[str, Any]] = None
+    dt_ms: float = 100.0
+    breach_radius_m: float = 12.0
+
+
+@app.post("/cuas/hil-trace", tags=["C-UAS"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_hil_trace(req: CuasHilTraceRequest) -> dict[str, Any]:
+    """Step RL fire-control policy through recorded drone telemetry millisecond-by-millisecond."""
+    from ammo_mc.cuas_rl_policy import run_hil_fire_control_trace
+
+    return _to_json_safe(
+        run_hil_fire_control_trace(
+            policy_or_dict=req.policy_dict,
+            track_csv_or_scenario=req.track_csv_or_scenario,
+            blue_config=req.blue_config,
+            calibration_profile=req.calibration_profile,
+            dt_ms=req.dt_ms,
+            breach_radius_m=req.breach_radius_m,
+        )
+    )
+
+
+class CalibrateMultiRangeRequest(BaseModel):
+    rows_or_csv: Optional[Any] = None
+    nominal_choke: str = "Modified"
+    ammunition_preset: str = "12G_NO4_BUCK_C_UAS"
+
+
+class CalibratePhotoPatternRequest(BaseModel):
+    image_base64: Optional[str] = None
+    use_synthetic_sample: bool = True
+    board_width_m: float = 1.0
+    board_height_m: float = 1.0
+    range_m: float = 36.58
+    nominal_choke: str = "Modified"
+    ammunition_preset: str = "12G_NO4_BUCK_C_UAS"
+    threshold_sigma: float = 2.6
+
+
+class CalibrateLethalityRequest(BaseModel):
+    trials_or_csv: Optional[Any] = None
+    drone_model: str = "fpv_quad_small"
+    base_twin: Optional[dict[str, Any]] = None
+
+
+class CalibrateHardwareBenchRequest(BaseModel):
+    nominal_turret_cfg: Optional[dict[str, Any]] = None
+    bench_measurements: Optional[dict[str, Any]] = None
+
+
+class CalibrateTrackerRequest(BaseModel):
+    rows_or_csv: Optional[Any] = None
+    sensor_preset: str = "Sensor_Fused_Radar_EOIR"
+
+
+class CalibrateDesignDeltaRequest(BaseModel):
+    turret_cfg: Optional[dict[str, Any]] = None
+    calibration_twin: Optional[dict[str, Any]] = None
+    drone_model: str = "fpv_quad_small"
+    required_range_m: float = 45.0
+    mount_class: str = "light_ugv"
+
+
+class CalibrationProfileSaveRequest(BaseModel):
+    name: str
+    twin: dict[str, Any]
+    notes: str = ""
+    tags: Optional[list[str]] = None
+    profile_id: Optional[str] = None
+
+
+@app.post("/cuas/calibrate/multirange", tags=["Calibration"], dependencies=[Depends(_verify_api_auth)])
+def post_calibrate_multirange(req: CalibrateMultiRangeRequest) -> dict[str, Any]:
+    """Fit multi-range pattern spread factor, range exponent & pellet Cd scale."""
+    from ammo_mc.cuas_calibration_twin import (
+        calibrate_multirange_pattern_and_drag,
+        generate_sample_multirange_pattern_rows,
+    )
+
+    rows = req.rows_or_csv if req.rows_or_csv is not None else generate_sample_multirange_pattern_rows(nominal_choke=req.nominal_choke)
+    try:
+        return _to_json_safe(calibrate_multirange_pattern_and_drag(rows, nominal_choke=req.nominal_choke, ammunition_preset=req.ammunition_preset))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@app.post("/cuas/calibrate/pattern-photo", tags=["Calibration"], dependencies=[Depends(_verify_api_auth)])
+def post_calibrate_pattern_photo(req: CalibratePhotoPatternRequest) -> dict[str, Any]:
+    """Digitize target-board photo holes and fit calibrated Rayleigh dispersion."""
+    import base64
+    from ammo_mc.cuas_calibration_twin import (
+        digitize_pattern_board_image,
+        generate_synthetic_pattern_board_png,
+    )
+
+    if req.image_base64:
+        img_bytes = base64.b64decode(req.image_base64)
+    elif req.use_synthetic_sample:
+        img_bytes = generate_synthetic_pattern_board_png(range_m=req.range_m, nominal_choke=req.nominal_choke)
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Provide `image_base64` or set `use_synthetic_sample=true`.")
+    try:
+        return _to_json_safe(
+            digitize_pattern_board_image(
+                img_bytes,
+                board_width_m=req.board_width_m,
+                board_height_m=req.board_height_m,
+                range_m=req.range_m,
+                nominal_choke=req.nominal_choke,
+                ammunition_preset=req.ammunition_preset,
+                threshold_sigma=req.threshold_sigma,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@app.post("/cuas/calibrate/lethality", tags=["Calibration"], dependencies=[Depends(_verify_api_auth)])
+def post_calibrate_lethality(req: CalibrateLethalityRequest) -> dict[str, Any]:
+    """Bayesian MAP calibration of drone A_vuln & E_crit against live-fire shoot-down trials."""
+    from ammo_mc.cuas_calibration_twin import (
+        calibrate_livefire_drone_lethality,
+        generate_sample_livefire_drone_trials,
+    )
+
+    trials = req.trials_or_csv if req.trials_or_csv is not None else generate_sample_livefire_drone_trials(drone_model=req.drone_model)
+    try:
+        return _to_json_safe(calibrate_livefire_drone_lethality(trials, drone_model=req.drone_model, base_twin=req.base_twin))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@app.post("/cuas/calibrate/hardware", tags=["Calibration"], dependencies=[Depends(_verify_api_auth)])
+def post_calibrate_hardware(req: CalibrateHardwareBenchRequest) -> dict[str, Any]:
+    """Calibrate turret recoil force, settle/slew times, mass & barrel zero scatter vs bench measurements."""
+    from ammo_mc.cuas_calibration_twin import (
+        calibrate_hardware_bench_tests,
+        generate_sample_hardware_bench_tests,
+    )
+
+    bm = req.bench_measurements if req.bench_measurements is not None else generate_sample_hardware_bench_tests()
+    return _to_json_safe(calibrate_hardware_bench_tests(req.nominal_turret_cfg, bm))
+
+
+@app.post("/cuas/calibrate/tracker", tags=["Calibration"], dependencies=[Depends(_verify_api_auth)])
+def post_calibrate_tracker(req: CalibrateTrackerRequest) -> dict[str, Any]:
+    """Calibrate sensor RMS angular tracking jitter, latency & OTM residual LOS jitter."""
+    from ammo_mc.cuas_calibration_twin import (
+        calibrate_tracker_telemetry,
+        generate_sample_tracker_test_rows,
+    )
+
+    rows = req.rows_or_csv if req.rows_or_csv is not None else generate_sample_tracker_test_rows(sensor_preset=req.sensor_preset)
+    try:
+        return _to_json_safe(calibrate_tracker_telemetry(rows, sensor_preset=req.sensor_preset))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@app.post("/cuas/calibrate/design-delta", tags=["Calibration"], dependencies=[Depends(_verify_api_auth)])
+def post_calibrate_design_delta(req: CalibrateDesignDeltaRequest) -> dict[str, Any]:
+    """Compute Nominal vs Calibrated design drift, Top-3 design fixes & active test recommendations."""
+    from ammo_mc.cuas_calibration_twin import (
+        analyze_calibration_design_delta,
+        recommend_next_range_tests,
+    )
+
+    drift = analyze_calibration_design_delta(**req.model_dump())
+    plan = recommend_next_range_tests(
+        req.turret_cfg,
+        req.calibration_twin,
+        drone_model=req.drone_model,
+        target_range_m=req.required_range_m,
+    )
+    return _to_json_safe({"drift": drift, "test_plan": plan})
+
+
+@app.get("/cuas/calibration-profiles", tags=["Calibration"], dependencies=[Depends(_verify_api_auth)])
+def get_calibration_profiles(search: str = Query(default="")) -> dict[str, Any]:
+    """List saved Digital Twin calibration profiles from persistent SQLite library."""
+    from ammo_mc.cuas_calibration_twin import CalibrationProfileStore
+
+    return _to_json_safe({"profiles": CalibrationProfileStore().list_profiles(search=search)})
+
+
+@app.post("/cuas/calibration-profiles", tags=["Calibration"], dependencies=[Depends(_verify_api_auth)])
+def post_calibration_profile(req: CalibrationProfileSaveRequest) -> dict[str, Any]:
+    """Save or update a named Digital Twin calibration profile in SQLite store."""
+    from ammo_mc.cuas_calibration_twin import CalibrationProfileStore
+
+    return _to_json_safe(CalibrationProfileStore().save_profile(**req.model_dump()))
+
+
+@app.post("/export/calibration-certificate", tags=["Calibration", "Export"], dependencies=[Depends(_verify_api_auth)])
+def post_export_calibration_certificate(req: CalibrateDesignDeltaRequest) -> Response:
+    """Render and download a landscape PDF Empirical Calibration Certificate."""
+    from ammo_mc.briefing_export import generate_calibration_certificate_pdf
+    from ammo_mc.cuas_calibration_twin import (
+        analyze_calibration_design_delta,
+        merge_twin_updates,
+        recommend_next_range_tests,
+    )
+
+    twin = merge_twin_updates(None, req.calibration_twin or {})
+    drift = analyze_calibration_design_delta(
+        req.turret_cfg, twin, drone_model=req.drone_model, required_range_m=req.required_range_m, mount_class=req.mount_class
+    )
+    plan = recommend_next_range_tests(req.turret_cfg, twin, drone_model=req.drone_model, target_range_m=req.required_range_m)
+    pdf_bytes = generate_calibration_certificate_pdf(twin=twin, drift_res=drift, test_plan=plan)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=cuas_calibration_certificate.pdf"},
+    )
+
+
 class CalibratePatternRequest(BaseModel):
     csv_text: str
     range_m: float = 36.58
@@ -877,6 +1189,7 @@ class BriefingExportRequest(BaseModel):
     simulator_summary: Optional[dict[str, Any]] = None
     source_ids: Optional[list[str]] = None
     adversarial_result: Optional[dict[str, Any]] = None
+    calibration_result: Optional[dict[str, Any]] = None
 
 
 @app.post("/cuas/briefing/pdf", tags=["C-UAS", "Export"], dependencies=[Depends(_verify_api_auth)])

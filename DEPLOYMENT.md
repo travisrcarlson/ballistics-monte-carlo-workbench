@@ -24,15 +24,15 @@ This workbench is packaged cleanly for zero-DevOps cloud deployment on **Streaml
 
 Share direct links into any consolidated workbench or C-UAS stage module via query parameters:
 - `?wb=home` — 3-Click C-UAS Turret Sizing Wizard, Task-First Quick-Start Home & Scenario Presets
-- `?wb=cuas&mod=array` — Stage 1 Multi-Shotgun Array Designer, Custom Drone/Shell Builders, Hardware SWaP-C/OTM, DXF/SVG Muzzle CAD & Spec Sheets
+- `?wb=cuas&mod=array` — Stage 1 Multi-Shotgun Array Designer, Custom Drone/Shell Builders, Hardware SWaP-C/OTM, Bolt-Shear FEA, DXF/SVG/STL CAD & Spec Sheets
 - `?wb=cuas&mod=fcs` — Stage 2 Closed-Loop FCS & Evasive Drones (with Stage 1 Profile Sync)
-- `?wb=cuas&mod=sdz` — Stage 3 Elevated Pellet Fallout & Surface Danger Zone (with Stage 1 Profile Sync)
+- `?wb=cuas&mod=sdz` — Stage 3 Elevated Pellet Fallout, Acoustic Blast & Urban Collateral Safety Envelope
 - `?wb=cuas&mod=raid` — Unified 3D Cooperative Multi-Turret Raid Simulator (with Nash Battlespace Handoff & Layered Effectors)
-- `?wb=cuas&mod=calibration` — Field-Test Calibration Digital Twin & Recorded Drone-Track CSV/MAVLink Replay
+- `?wb=cuas&mod=calibration` — Closed-Loop Test Recalibration (Photo Digitizer, Multi-Range, Bayesian Lethality, Hardware Bench, Persistent SQLite Digital Twin, Design Fixes & Active Test Planner)
 - `?wb=cuas&mod=site_defense` — Custom Site Builder, DEM LOS Masking & Real-World OSM GIS Map
 - `?wb=cuas&mod=comparator` — A/B Turret Architecture Comparator & Layered Defense
 - `?wb=cuas&mod=sensitivity` — Automated OAT Sensitivity & Bottleneck Tornado
-- `?wb=cuas&mod=adversarial` — Stage 4 Adversarial Red-vs-Blue ML Optimizer (Hybrid/Robust, Dynamic RL Fire Control, 3D Battlespace ML & Beat-the-AI Duel)
+- `?wb=cuas&mod=adversarial` — Stage 4 Adversarial Red-vs-Blue ML Optimizer (Hybrid/Robust, Dynamic RL Fire Control, Live HIL Telemetry Replay, 3D Battlespace ML & Beat-the-AI Duel)
 - `?wb=sim` / `?wb=3d` / `?wb=firing` — Ballistics & 3D Trajectory Simulation Domain
 - `?wb=physics` / `?wb=mcdrag` — Physics & Aero Labs + McCoy MCDRAG 3D CAD
 - `?wb=iatg` — UNODA IATG 01.80 / 02.20 Safety & Quantity-Distance Workbench

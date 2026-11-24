@@ -233,6 +233,7 @@ def run_turret_sizing_wizard(
     mount_class: str = "light_ugv",
     budget_priority: str = "balanced",
     seed: int = 42,
+    calibration_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Size and rank Top 3 feasible C-UAS multi-barrel shotgun turret configurations from 3 inputs."""
     _ = seed  # Deterministic analytical envelope & SWaP-C sizing
@@ -259,6 +260,7 @@ def run_turret_sizing_wizard(
             firing_mode=cfg["firing_mode"],
             ripple_delay_ms=cfg["ripple_delay_ms"],
             hybrid_mode=bool(cfg.get("hybrid_mode", False)),
+            calibration_profile=calibration_profile,
         )
         sw_sm = swap["summary"]
         mass_ok = sw_sm["total_mass_kg"] <= mc_spec["max_mass_kg"]
@@ -289,6 +291,7 @@ def run_turret_sizing_wizard(
                 base_cd=float(a_sel.get("effective_cd", 0.47)),
                 aspect_mode="head_on_frontal",
                 aspect_geom=aspect_geom,
+                calibration_profile=calibration_profile,
             )
             curt_fac = 0.96 if cfg["pointing_mode"] == "divergent_curtain" else 1.0
             return round(min(99.8, 100.0 * pk * spd_pen * curt_fac), 1)

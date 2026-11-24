@@ -343,10 +343,12 @@ def _cached_antidrone_array_mc(
     inner_choke: str | None = None,
     custom_drone_spec_json: str = "",
     custom_shell_spec_json: str = "",
+    calibration_profile_json: str = "",
 ) -> dict[str, Any]:
     custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
     custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
     custom_shell = json.loads(custom_shell_spec_json) if custom_shell_spec_json else None
+    cal_prof = json.loads(calibration_profile_json) if calibration_profile_json else None
     return simulate_anti_drone_multishotgun_mc(
         layout_type=layout_type,
         n_barrels=n_barrels,
@@ -380,6 +382,7 @@ def _cached_antidrone_array_mc(
         inner_choke=inner_choke,
         custom_drone_spec=custom_drone,
         custom_shell_spec=custom_shell,
+        calibration_profile=cal_prof,
     )
 
 
@@ -418,10 +421,12 @@ def _cached_antidrone_range_envelope(
     custom_drone_spec_json: str = "",
     custom_shell_spec_json: str = "",
     compare_ammo_presets: tuple[str, ...] = (),
+    calibration_profile_json: str = "",
 ) -> dict[str, Any]:
     custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
     custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
     custom_shell = json.loads(custom_shell_spec_json) if custom_shell_spec_json else None
+    cal_prof = json.loads(calibration_profile_json) if calibration_profile_json else None
     return evaluate_antidrone_effective_range_envelope(
         distance_stations_m=list(distance_stations_m),
         layout_type=layout_type,
@@ -456,6 +461,7 @@ def _cached_antidrone_range_envelope(
         custom_drone_spec=custom_drone,
         custom_shell_spec=custom_shell,
         compare_ammo_presets=list(compare_ammo_presets) if compare_ammo_presets else None,
+        calibration_profile=cal_prof,
     )
 
 
@@ -493,10 +499,12 @@ def _cached_antidrone_range_speed_heatmap(
     inner_choke: str | None = None,
     custom_drone_spec_json: str = "",
     custom_shell_spec_json: str = "",
+    calibration_profile_json: str = "",
 ) -> dict[str, Any]:
     custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
     custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
     custom_shell = json.loads(custom_shell_spec_json) if custom_shell_spec_json else None
+    cal_prof = json.loads(calibration_profile_json) if calibration_profile_json else None
     return evaluate_antidrone_range_speed_heatmap(
         distance_stations_m=list(distance_stations_m),
         speed_stations_mps=list(speed_stations_mps),
@@ -530,6 +538,7 @@ def _cached_antidrone_range_speed_heatmap(
         inner_choke=inner_choke,
         custom_drone_spec=custom_drone,
         custom_shell_spec=custom_shell,
+        calibration_profile=cal_prof,
     )
 
 
@@ -1088,6 +1097,7 @@ def _cached_unified_raid(
     seed: int = 42,
     swarm_package_json: str = "",
     outer_layer_type: str = "none",
+    calibration_profile_json: str = "",
 ) -> dict[str, Any]:
     from ammo_mc.cuas_raid import simulate_unified_tactical_raid_mc
     from ammo_mc.terrain_dem import TerrainDEMGrid
@@ -1117,6 +1127,7 @@ def _cached_unified_raid(
         seed=seed,
         swarm_package=json.loads(swarm_package_json) if swarm_package_json else None,
         outer_layer_type=outer_layer_type,
+        calibration_profile=json.loads(calibration_profile_json) if calibration_profile_json else None,
     )
 
 
@@ -1167,6 +1178,7 @@ def _cached_turret_sizing_wizard(
     mount_class: str,
     budget_priority: str = "balanced",
     seed: int = 42,
+    calibration_profile_json: str = "",
 ) -> dict[str, Any]:
     from ammo_mc.cuas_wizard import run_turret_sizing_wizard
 
@@ -1177,6 +1189,7 @@ def _cached_turret_sizing_wizard(
         mount_class=mount_class,
         budget_priority=budget_priority,
         seed=seed,
+        calibration_profile=json.loads(calibration_profile_json) if calibration_profile_json else None,
     )
 
 
@@ -1249,6 +1262,7 @@ def _cached_otm_stabilization(
     ambient_temp_c: float,
     crosswind_mps: float,
     drone_model: str,
+    calibration_profile_json: str = "",
 ) -> dict[str, Any]:
     from ammo_mc.cuas_hardware import evaluate_otm_stabilization_degradation
 
@@ -1260,12 +1274,170 @@ def _cached_otm_stabilization(
         ambient_temp_c=ambient_temp_c,
         crosswind_mps=crosswind_mps,
         drone_model=drone_model,
+        calibration_profile=json.loads(calibration_profile_json) if calibration_profile_json else None,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_calibration_design_delta(
+    turret_cfg_json: str,
+    calibration_twin_json: str,
+    drone_model: str = "fpv_quad_small",
+    required_range_m: float = 45.0,
+    mount_class: str = "light_ugv",
+) -> dict[str, Any]:
+    from ammo_mc.cuas_calibration_twin import analyze_calibration_design_delta
+
+    return analyze_calibration_design_delta(
+        turret_cfg=json.loads(turret_cfg_json) if turret_cfg_json else None,
+        calibration_twin=json.loads(calibration_twin_json) if calibration_twin_json else None,
+        drone_model=drone_model,
+        required_range_m=required_range_m,
+        mount_class=mount_class,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_active_test_plan(
+    turret_cfg_json: str,
+    calibration_twin_json: str,
+    drone_model: str = "fpv_quad_small",
+    target_range_m: float = 45.0,
+) -> dict[str, Any]:
+    from ammo_mc.cuas_calibration_twin import recommend_next_range_tests
+
+    return recommend_next_range_tests(
+        turret_cfg=json.loads(turret_cfg_json) if turret_cfg_json else None,
+        calibration_twin=json.loads(calibration_twin_json) if calibration_twin_json else None,
+        drone_model=drone_model,
+        target_range_m=target_range_m,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_collateral_safety_envelope(
+    n_barrels: int,
+    barrels_per_burst: int,
+    ammunition_preset: str,
+    default_choke: str,
+    default_barrel_length_in: float,
+    firing_elevation_deg: float,
+    firing_azimuth_deg: float,
+    turret_height_m: float,
+    wind_downrange_mps: float,
+    wind_crossrange_mps: float,
+    environment_type: str,
+    calibration_profile_json: str = "",
+    n_sample_pellets: int = 220,
+    seed: int = 42,
+) -> dict[str, Any]:
+    from ammo_mc.cuas_safety_envelope import evaluate_cuas_collateral_safety_envelope
+
+    return evaluate_cuas_collateral_safety_envelope(
+        n_barrels=n_barrels,
+        barrels_per_burst=barrels_per_burst,
+        ammunition_preset=ammunition_preset,
+        default_choke=default_choke,
+        default_barrel_length_in=default_barrel_length_in,
+        firing_elevation_deg=firing_elevation_deg,
+        firing_azimuth_deg=firing_azimuth_deg,
+        turret_height_m=turret_height_m,
+        wind_downrange_mps=wind_downrange_mps,
+        wind_crossrange_mps=wind_crossrange_mps,
+        environment_type=environment_type,
+        calibration_profile=json.loads(calibration_profile_json) if calibration_profile_json else None,
+        n_sample_pellets=n_sample_pellets,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_hil_policy_trace(
+    policy_json: str,
+    track_scenario_or_csv: str,
+    blue_config_json: str,
+    calibration_profile_json: str = "",
+    dt_ms: float = 100.0,
+    breach_radius_m: float = 12.0,
+) -> dict[str, Any]:
+    from ammo_mc.cuas_rl_policy import run_hil_fire_control_trace
+
+    return run_hil_fire_control_trace(
+        policy_or_dict=json.loads(policy_json) if policy_json else None,
+        track_csv_or_scenario=track_scenario_or_csv,
+        blue_config=json.loads(blue_config_json) if blue_config_json else None,
+        calibration_profile=json.loads(calibration_profile_json) if calibration_profile_json else None,
+        dt_ms=dt_ms,
+        breach_radius_m=breach_radius_m,
     )
 
 
 # -------------------------------------------------------------------------
-# FOCUS MODE & NAVIGATION CALLBACKS + URL DEEP-LINKING
+# FOCUS MODE, DIGITAL TWIN CONTROL & NAVIGATION CALLBACKS
 # -------------------------------------------------------------------------
+
+
+def get_active_calibration_profile() -> dict[str, Any] | None:
+    """Return active Empirical Digital Twin dict when global calibration toggle is enabled, else None."""
+    if not st.session_state.get("ui_digital_twin_active", False):
+        return None
+    twin = st.session_state.get("_calibrated_digital_twin")
+    return dict(twin) if isinstance(twin, dict) and twin else None
+
+
+def _on_saved_cal_profile_change() -> None:
+    from ammo_mc.cuas_calibration_twin import CalibrationProfileStore
+
+    pid = st.session_state.get("ui_cal_profile_pick")
+    if pid and pid != "__session__":
+        rec = CalibrationProfileStore().get_profile(str(pid))
+        if rec is not None:
+            st.session_state["_calibrated_digital_twin"] = rec["twin"]
+            st.session_state["_active_cal_profile_name"] = rec["name"]
+
+
+def render_digital_twin_sidebar_control() -> None:
+    """Render global Nominal vs Calibrated Digital Twin switch and SQLite profile selector in sidebar."""
+    from ammo_mc.cuas_calibration_twin import CalibrationProfileStore
+
+    if st.session_state.pop("_digital_twin_pending_enable", False):
+        st.session_state["ui_digital_twin_active"] = True
+
+    twin = st.session_state.get("_calibrated_digital_twin")
+    active = bool(
+        st.toggle(
+            "🧬 Calibrated Digital Twin",
+            value=bool(st.session_state.get("ui_digital_twin_active", False)),
+            key="ui_digital_twin_active",
+            help="When enabled, field-test empirical fits (spread, MV, Cd, lethality, recoil, slew) propagate across the workbench.",
+        )
+    )
+    if active:
+        try:
+            saved = CalibrationProfileStore().list_profiles()
+        except Exception:
+            saved = []
+        if saved:
+            opts = ["__session__"] + [p["id"] for p in saved]
+            lbl_map = {"__session__": "Active Session Fit"}
+            for p in saved:
+                lbl_map[p["id"]] = f"{p['name'][:26]} ({p['updated_at'][:10]})"
+            if st.session_state.get("ui_cal_profile_pick") not in opts:
+                st.session_state["ui_cal_profile_pick"] = opts[0]
+            st.selectbox(
+                "Active Twin Profile",
+                opts,
+                format_func=lambda k: lbl_map.get(k, k),
+                key="ui_cal_profile_pick",
+                on_change=_on_saved_cal_profile_change,
+            )
+        if isinstance(twin, dict) and twin:
+            st.caption(
+                f"Twin: spread **{twin.get('spread_factor', 1.0):.2f}x** (p={twin.get('spread_exponent', 1.15):.2f}) | "
+                f"MV **{twin.get('mv_scale', 1.0):.3f}x** | E_crit **{twin.get('drone_ecrit_scale', 1.0):.2f}x**"
+            )
+        else:
+            st.caption("No range measurements applied yet — fit data in Tab 13 Calibration or select a saved profile.")
 
 def is_expert_mode() -> bool:
     """Return True when the user has unlocked Expert Mode in the sidebar."""

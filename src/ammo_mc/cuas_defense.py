@@ -565,26 +565,35 @@ def _estimate_burst_pk_analytics(
     base_cd: float = 0.47,
     aspect_mode: str = "head_on_frontal",
     aspect_geom: dict[str, Any] | None = None,
+    calibration_profile: dict[str, Any] | None = None,
 ) -> float:
     """Analytical Poisson + lethal energy single-burst P_kill estimate at slant_range_m."""
+    cp = dict(calibration_profile or {})
+    spread_factor = max(0.35, float(cp.get("spread_factor", 1.0) or 1.0))
+    spread_exp = max(0.80, min(1.80, float(cp.get("spread_exponent", 1.15) or 1.15)))
+    mv_scale = max(0.50, min(1.50, float(cp.get("mv_scale", 1.0) or 1.0)))
+    cd_scale = max(0.40, min(2.20, float(cp.get("pellet_cd_scale", 1.0) or 1.0)))
+    avuln_scale = max(0.25, min(2.50, float(cp.get("drone_avuln_scale", 1.0) or 1.0)))
+    ecrit_scale = max(0.30, min(2.60, float(cp.get("drone_ecrit_scale", 1.0) or 1.0)))
+
     choke_defs = get_choke_definitions()
     c_info = choke_defs.get(choke_name, choke_defs["Modified"])
     p_bench = float(c_info["benchmark_40yd_30in_pct"])
     sigma_ref = 0.381 / math.sqrt(-2.0 * math.log(1.0 - p_bench))
     theta_choke = sigma_ref / 36.58
     R = max(slant_range_m, 5.0)
-    sigma_r = 0.01852 / 4.0 + theta_choke * R * (R / 36.58) ** 0.15
+    sigma_r = (0.01852 / 4.0 + theta_choke * R * ((R / 36.58) ** (spread_exp - 1.0))) * spread_factor
 
     # Pellet striking energy at range R
     rho_air = 1.225
     d_m = pellet_diameter_mm / 1000.0
     m_kg = pellet_mass_g / 1000.0
     area_m2 = math.pi * 0.25 * (d_m ** 2)
-    kappa = (rho_air * base_cd * area_m2) / (2.0 * max(m_kg, 1e-6))
-    v_imp = v0_mps * math.exp(-kappa * R)
+    kappa = (rho_air * base_cd * cd_scale * area_m2) / (2.0 * max(m_kg, 1e-6))
+    v_imp = (v0_mps * mv_scale) * math.exp(-kappa * R)
     ke_j = 0.5 * m_kg * (v_imp ** 2)
 
-    e_rotor = float(drone_spec.get("lethal_energy_rotor_j", 8.0))
+    e_rotor = float(drone_spec.get("lethal_energy_rotor_j", 8.0)) * ecrit_scale
     if ke_j < e_rotor:
         return 0.0
 
@@ -599,14 +608,22 @@ def _estimate_burst_pk_analytics(
         area_rotors = sum(math.pi * (float(r["radius_m"]) ** 2) for r in rotors)
         area_core = float(drone_spec.get("fuselage_w_m", 0.10)) * float(drone_spec.get("fuselage_h_m", 0.10))
         area_vuln = min(area_rotors + area_core, math.pi * (float(drone_spec.get("span_m", 0.4)) ** 2) * 0.65)
+    area_vuln *= avuln_scale
 
-    # Gaussian core hit probability inside vulnerable disk (including nominal 1.2 mrad aim variance)
+    # Gaussian core hit probability inside vulnerable disk (nominal 1.2 mrad + empirical biases/jitters)
     r_eq_sq = area_vuln / math.pi
-    sigma_aim = 0.0012 * R
+    nom_trk = float(cp.get("tracker_jitter_mrad")) if cp.get("tracker_jitter_mrad") is not None else 1.2
+    aim_err_mrad = math.sqrt(
+        (nom_trk ** 2)
+        + (float(cp.get("aim_bias_mrad", 0.0) or 0.0) ** 2)
+        + (float(cp.get("barrel_zero_scatter_mrad", 0.0) or 0.0) ** 2)
+        + (float(cp.get("otm_jitter_mrad", 0.0) or 0.0) ** 2)
+    )
+    sigma_aim = (aim_err_mrad / 1000.0) * R
     sigma_eff_sq = (sigma_r ** 2) + (sigma_aim ** 2)
     p_pellet = 1.0 - math.exp(-r_eq_sq / max(2.0 * sigma_eff_sq, 1e-6))
     # Transition smoothly between rotor-only lethality (~0.55) and full core lethality (1.0)
-    e_core = float(drone_spec.get("lethal_energy_core_j", 20.0))
+    e_core = float(drone_spec.get("lethal_energy_core_j", 20.0)) * ecrit_scale
     energy_factor = 0.55 + 0.45 * min(1.0, max(0.0, ke_j - e_rotor) / max(e_core - e_rotor, 1.0))
     lam_lethal = barrels_fired * pellets_per_shot * p_pellet * 0.78 * energy_factor
 

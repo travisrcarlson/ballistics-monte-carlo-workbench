@@ -280,6 +280,7 @@ from ammo_mc.vis_calibration import (
     create_pattern_calibration_figure,
 )
 from ammo_mc.briefing_export import (
+    generate_calibration_certificate_pdf,
     generate_cuas_array_spec_sheet_pdf,
     generate_executive_briefing_pdf,
     generate_executive_briefing_pptx,
@@ -289,18 +290,41 @@ from ammo_mc.cuas_adversarial import (
     export_adversarial_dataset_csv,
     recommend_ml_defense_policy,
 )
+from ammo_mc.cuas_calibration_twin import (
+    CalibrationProfileStore,
+    calibrate_hardware_bench_tests,
+    calibrate_livefire_drone_lethality,
+    calibrate_multirange_pattern_and_drag,
+    calibrate_tracker_telemetry,
+    digitize_pattern_board_image,
+    export_range_test_card_csv,
+    generate_sample_hardware_bench_tests,
+    generate_sample_livefire_drone_trials,
+    generate_sample_multirange_pattern_rows,
+    generate_sample_tracker_test_rows,
+    generate_synthetic_pattern_board_png,
+    get_default_nominal_twin,
+    merge_twin_updates,
+)
 from ammo_mc.cuas_hardware import (
     CARRIER_OTM_PROFILES,
     GYRO_STABILIZATION_GRADES,
+    MOUNT_CLASS_SPECS,
     estimate_turret_swap_c,
+    evaluate_muzzle_plate_fea,
     export_muzzle_plate_dxf,
+    export_muzzle_plate_stl,
     export_muzzle_plate_svg,
 )
 from ammo_mc.cuas_track_replay import generate_sample_drone_track_csv
 from ammo_mc.cuas_wizard import run_red_vs_blue_duel_diagnostic
 from ammo_mc.vis_cuas_advanced import (
+    create_active_test_planner_figure,
     create_battlespace_coevolution_figure,
+    create_calibration_reliability_and_drift_figure,
+    create_collateral_safety_envelope_figure,
     create_duel_root_cause_figure,
+    create_hil_policy_timeline_figure,
     create_recorded_track_replay_figure,
     create_rl_action_heatmap_figure,
     create_rl_policy_benchmark_figure,
@@ -324,6 +348,7 @@ from ammo_mc.ui.common import (
     _PHYSICS_LABS,
     _SMALL_ARMS_MODES,
     _WORKBENCH_OPTIONS,
+    _cached_active_test_plan,
     _cached_adversarial_coevolution,
     _cached_antidrone_array_mc,
     _cached_antidrone_range_envelope,
@@ -331,13 +356,16 @@ from ammo_mc.ui.common import (
     _cached_battlespace_coevolution,
     _cached_benchmark_drone_aspect,
     _cached_benchmark_multibarrel_aspect,
+    _cached_calibration_design_delta,
     _cached_closed_loop_fcs,
+    _cached_collateral_safety_envelope,
     _cached_compare_anti_drone_layouts,
     _cached_compare_cuas_fallout,
     _cached_compare_cuas_payloads,
     _cached_compare_ab,
     _cached_cuas_tornado,
     _cached_artillery_tornado,
+    _cached_hil_policy_trace,
     _cached_intercept_replay,
     _cached_kill_chain,
     _cached_layered_defense,
@@ -354,8 +382,42 @@ from ammo_mc.ui.common import (
     _render_sidebar_header,
     _set_active_workbench,
     _set_cuas_module,
+    get_active_calibration_profile,
     is_expert_mode,
 )
+
+def _get_cal_twin_json() -> str:
+    twin = get_active_calibration_profile()
+    return json.dumps(twin, sort_keys=True) if twin else ""
+
+
+def _apply_stage1_fix_callback(patch: dict[str, Any], label: str = "Calibrated Design Fix") -> None:
+    """Apply a recommended design compensation patch to Stage 1 controls cleanly via callback."""
+    if "layout_type" in patch:
+        st.session_state["cuas_layout"] = str(patch["layout_type"])
+    if "n_barrels" in patch:
+        st.session_state["cuas_n_barrels"] = int(patch["n_barrels"])
+    if "ammunition_preset" in patch:
+        st.session_state["cuas_ammo"] = str(patch["ammunition_preset"])
+    if "choke" in patch or "default_choke" in patch:
+        st.session_state["cuas_choke"] = str(patch.get("choke", patch.get("default_choke", "Modified")))
+    if "pointing_mode" in patch:
+        st.session_state["cuas_pointing"] = str(patch["pointing_mode"])
+    if "splay_angle_mrad" in patch:
+        st.session_state["cuas_splay"] = float(patch["splay_angle_mrad"])
+    if "firing_mode" in patch:
+        st.session_state["cuas_fire_mode"] = str(patch["firing_mode"])
+    if "hybrid_mode" in patch:
+        st.session_state["cuas_mixed_loadout"] = bool(patch["hybrid_mode"])
+    if patch.get("inner_ammunition_preset"):
+        st.session_state["cuas_inner_ammo"] = str(patch["inner_ammunition_preset"])
+    if patch.get("inner_choke"):
+        st.session_state["cuas_inner_choke"] = str(patch["inner_choke"])
+    prof = dict(st.session_state.get("_active_cuas_profile") or {})
+    prof.update(patch)
+    prof["label"] = label
+    st.session_state["_active_cuas_profile"] = prof
+    _navigate_to("cuas", None, "array")
 
 _SITE_GEO_ANCHORS: dict[str, tuple[float, float]] = {
     "Desert Test Range (32.9000°N, -106.4000°W)": (32.9000, -106.4000),
@@ -493,6 +555,7 @@ def _render_effective_range_tab(
             custom_drone_spec_json=custom_drone_spec_json,
             custom_shell_spec_json=custom_shell_spec_json,
             compare_ammo_presets=tuple(comp_loads),
+            calibration_profile_json=_get_cal_twin_json(),
         )
     st.session_state["_report_range_envelope"] = env_res
     esm = env_res["summary"]
@@ -545,6 +608,7 @@ def _render_effective_range_tab(
                 inner_choke=inner_choke,
                 custom_drone_spec_json=custom_drone_spec_json,
                 custom_shell_spec_json=custom_shell_spec_json,
+                calibration_profile_json=_get_cal_twin_json(),
             )
         st.plotly_chart(create_antidrone_range_speed_heatmap_figure(hm_res), width="stretch")
         st.dataframe(pd.DataFrame(hm_res["r80_by_speed_m"]), width="stretch")
@@ -571,7 +635,9 @@ def _render_stage1_hardware_cad_tab(
     hybrid_mode: bool,
     custom_barrel_specs: list[dict[str, Any]] | None = None,
 ) -> None:
-    """Render Stage 1 SWaP-C mass/power/BOM budget, OTM stabilization, and 2D DXF/SVG muzzle CAD."""
+    """Render Stage 1 SWaP-C mass/power/BOM budget, OTM stabilization, bolt-shear FEA, and 2D/3D CAD."""
+    cal_prof_hw = get_active_calibration_profile()
+    cal_json_hw = json.dumps(cal_prof_hw, sort_keys=True) if cal_prof_hw else ""
     swap_res = estimate_turret_swap_c(
         n_barrels=int(n_barrels),
         barrel_length_in=float(default_barrel_length_in),
@@ -583,6 +649,7 @@ def _render_stage1_hardware_cad_tab(
         firing_mode=str(firing_mode),
         ripple_delay_ms=float(ripple_delay_ms),
         hybrid_mode=bool(hybrid_mode),
+        calibration_profile=cal_prof_hw,
     )
     sw = swap_res["summary"]
     hm1, hm2, hm3, hm4 = st.columns(4)
@@ -632,16 +699,17 @@ def _render_stage1_hardware_cad_tab(
         ambient_temp_c=float(otm_temp),
         crosswind_mps=float(crosswind_mps),
         drone_model=str(drone_model if drone_model != "CUSTOM_DRONE" else "fpv_quad_small"),
+        calibration_profile_json=cal_json_hw,
     )
     st.caption(
         f"Active LOS Stabilization Jitter: **{otm_res['residual_los_jitter_mrad']:.2f} mrad** | "
         f"Static R80: **{otm_res['r80_static_m']:.1f} m** -> Active OTM R80: **{otm_res['r80_active_m']:.1f} m** "
         f"(-{otm_res['range_loss_pct']:.1f}% range reduction)"
     )
-    st.plotly_chart(create_swap_c_and_otm_figure(swap_res, otm_res), width="stretch")
+    st.plotly_chart(create_swap_c_and_otm_figure(swap_res, otm_res), width="stretch", key="cuas_swap_otm_fig")
 
     st.divider()
-    st.markdown("##### 📐 Parametric 2D Muzzle-Clamp Blueprint (`.dxf` AutoCAD & `.svg`)")
+    st.markdown("##### 📐 Parametric Muzzle-Clamp Blueprint (`.dxf` / `.svg` / 3D `.stl`) & Bolt-Shear FEA")
     barrels_cad = generate_multishotgun_array_layout(
         layout_type=str(layout_type),
         n_barrels=int(n_barrels),
@@ -655,6 +723,34 @@ def _render_stage1_hardware_cad_tab(
         custom_specs=custom_barrel_specs,
         default_ammunition_preset=str(ammunition_preset),
     )
+    fea_c1, fea_c2, fea_c3 = st.columns(3)
+    with fea_c1:
+        plate_thk_mm = st.slider("Clamp Plate Thickness (mm)", 10.0, 40.0, 22.0, 2.0, key="cuas_fea_thk")
+    with fea_c2:
+        plate_mat = st.selectbox("Clamp Alloy", ["7075-T6", "6061-T6", "4140-Steel"], index=0, key="cuas_fea_mat")
+    with fea_c3:
+        bolt_grd = st.selectbox("8x M8 Fastener Grade", ["8.8", "10.9", "12.9"], index=0, key="cuas_fea_bolt")
+
+    fea_res = evaluate_muzzle_plate_fea(
+        barrels=barrels_cad,
+        layout_type=str(layout_type),
+        peak_recoil_force_kn=float(sw["peak_recoil_force_kn"]),
+        plate_thickness_mm=float(plate_thk_mm),
+        material=str(plate_mat),
+        bolt_grade=str(bolt_grd),
+    )
+    fm1, fm2, fm3, fm4 = st.columns(4)
+    fm1.metric("Structural FEA Verdict", fea_res["verdict"], delta=f"Min SF: {fea_res['overall_safety_factor']:.2f}×")
+    fm2.metric("M8 Bolt Stress SF", f"{fea_res['sf_bolt']:.2f}×", delta=f"{fea_res['bolt_von_mises_mpa']:.0f} MPa vM")
+    fm3.metric("Plate Bearing/Bend SF", f"{fea_res['sf_plate']:.2f}×", delta=f"{fea_res['plate_combined_stress_mpa']:.0f} MPa")
+    fm4.metric("Min Ligament Wall", f"{fea_res['min_ligament_mm']:.1f} mm", delta=f"Clamp Mass: {fea_res['clamp_mass_kg']:.2f} kg")
+    if fea_res["verdict"] == "PASS":
+        st.success(fea_res["note"])
+    elif fea_res["verdict"] == "MARGINAL":
+        st.warning(fea_res["note"])
+    else:
+        st.error(fea_res["note"])
+
     svg_txt = export_muzzle_plate_svg(
         barrels=barrels_cad,
         layout_type=str(layout_type),
@@ -669,10 +765,16 @@ def _render_stage1_hardware_cad_tab(
         splay_angle_mrad=float(splay_angle_mrad),
         pointing_mode=str(pointing_mode),
     )
+    stl_txt = export_muzzle_plate_stl(
+        barrels=barrels_cad,
+        layout_type=str(layout_type),
+        plate_thickness_mm=float(plate_thk_mm),
+        title=f"cuas_{layout_type}_{int(n_barrels)}bbl_clamp",
+    )
     st.markdown(svg_txt, unsafe_allow_html=True)
-    cad_c1, cad_c2 = st.columns(2)
+    cad_c1, cad_c2, cad_c3 = st.columns(3)
     cad_c1.download_button(
-        "📥 Download Manufacturing Drawing (.dxf)",
+        "📥 2D Manufacturing Drawing (.dxf)",
         data=dxf_txt.encode("utf-8"),
         file_name=f"cuas_{layout_type}_{n_barrels}bbl_muzzle_plate.dxf",
         mime="application/dxf",
@@ -680,12 +782,20 @@ def _render_stage1_hardware_cad_tab(
         key="cuas_stage1_dl_dxf",
     )
     cad_c2.download_button(
-        "📥 Download Scaled Vector Blueprint (.svg)",
+        "📥 2D Vector Blueprint (.svg)",
         data=svg_txt.encode("utf-8"),
         file_name=f"cuas_{layout_type}_{n_barrels}bbl_muzzle_plate.svg",
         mime="image/svg+xml",
         width="stretch",
         key="cuas_stage1_dl_svg",
+    )
+    cad_c3.download_button(
+        "🧊 3D CAD Solid (.stl)",
+        data=stl_txt.encode("utf-8"),
+        file_name=f"cuas_{layout_type}_{n_barrels}bbl_muzzle_plate.stl",
+        mime="model/stl",
+        width="stretch",
+        key="cuas_stage1_dl_stl",
     )
 
 
@@ -1743,6 +1853,14 @@ def tab_cuas_and_small_arms() -> None:
             custom_drone_json = json.dumps(custom_drone_spec, sort_keys=True) if custom_drone_spec else ""
             custom_shell_json = json.dumps(custom_shell_spec, sort_keys=True) if custom_shell_spec else ""
 
+            _cal_twin_s1 = get_active_calibration_profile()
+            _cal_twin_s1_json = json.dumps(_cal_twin_s1, sort_keys=True) if _cal_twin_s1 else ""
+            if _cal_twin_s1:
+                st.info(
+                    f"🧬 **Calibrated Digital Twin Active:** spread={_cal_twin_s1.get('spread_factor', 1.0):.2f}x "
+                    f"(exp={_cal_twin_s1.get('spread_exponent', 1.15):.2f}) | MV={_cal_twin_s1.get('mv_scale', 1.0):.3f}x | "
+                    f"E_crit={_cal_twin_s1.get('drone_ecrit_scale', 1.0):.2f}x"
+                )
             with st.spinner("Simulating Multi-Shotgun Counter-UAS Volley Monte Carlo..."):
                 cuas_sim = _cached_antidrone_array_mc(
                     layout_type=str(cuas_layout),
@@ -1777,6 +1895,7 @@ def tab_cuas_and_small_arms() -> None:
                     inner_choke=cuas_inner_choke,
                     custom_drone_spec_json=custom_drone_json,
                     custom_shell_spec_json=custom_shell_json,
+                    calibration_profile_json=_cal_twin_s1_json,
                 )
 
             cu_sm = cuas_sim["summary"]
@@ -2717,7 +2836,12 @@ def tab_cuas_and_small_arms() -> None:
             sdk3.metric("Ocular (Unprotected Eye) Risk", f"{ssm['eye_hazard_pct']:.1f} %", delta="≥0.06 J/mm² or ≥1.5 J threshold")
             sdk4.metric("Skin Penetration / IATG Risk", f"{ssm['skin_hazard_pct']:.1f} %", delta=f"IATG ≥79 J Rate: {ssm['iatg_hazard_pct']:.1f} %")
 
-            sdt1, sdt2, sdt3 = st.tabs(["🌐 3D Elevated Fallout Arcs", "🗺️ 2D Ground SDZ Map & Multi-Load Bands", "📊 Multi-Load Safety Footprint Data & CSV"])
+            sdt1, sdt2, sdt3, sdt4 = st.tabs([
+                "🌐 3D Elevated Fallout Arcs",
+                "🗺️ 2D Ground SDZ Map & Multi-Load Bands",
+                "📊 Multi-Load Safety Footprint Data & CSV",
+                "🔊 Acoustic Blast, Danger Cone & Urban Collateral",
+            ])
             with sdt1:
                 st.plotly_chart(create_3d_cuas_fallout_footprint_figure(sd_res), width="stretch")
             with sdt2:
@@ -2727,6 +2851,46 @@ def tab_cuas_and_small_arms() -> None:
                 st.dataframe(comp_df_sd, width="stretch")
                 gi_df = pd.DataFrame(sd_res["ground_impacts"])
                 st.download_button("📥 Download Ground Pellet Impact Fallout Log (.csv)", gi_df.to_csv(index=False).encode("utf-8"), "cuas_pellet_fallout_sdz.csv", "text/csv", key="cuas18_dl_sdz")
+            with sdt4:
+                _s_prof = st.session_state.get("_active_cuas_profile") or {}
+                cs1, cs2 = st.columns(2)
+                with cs1:
+                    collat_env = st.selectbox(
+                        "Deployment Environment",
+                        ["urban_permissive", "urban_canyon"],
+                        format_func=lambda k: {"urban_permissive": "Open / Suburban Base Perimeter", "urban_canyon": "Dense Urban Canyon (Reflective Facades)"}.get(k, k),
+                        key="cuas18_collat_env",
+                    )
+                with cs2:
+                    collat_bpb = st.slider("Burst Barrels Fired Together", 1, 6, min(6, int(_s_prof.get("barrels_per_burst", 2))), 1, key="cuas18_collat_bpb")
+                collat_res = _cached_collateral_safety_envelope(
+                    n_barrels=int(_s_prof.get("n_barrels", 6)),
+                    barrels_per_burst=int(collat_bpb),
+                    ammunition_preset=str(sd_ammo),
+                    default_choke=str(sd_choke),
+                    default_barrel_length_in=24.0,
+                    firing_elevation_deg=float(sd_el),
+                    firing_azimuth_deg=float(sd_az),
+                    turret_height_m=float(sd_h),
+                    wind_downrange_mps=float(sd_w_down),
+                    wind_crossrange_mps=float(sd_w_cross),
+                    environment_type=str(collat_env),
+                    calibration_profile_json=_get_cal_twin_json(),
+                    n_sample_pellets=int(sd_n_p),
+                    seed=42,
+                )
+                csm = collat_res["summary"]
+                cm1, cm2, cm3, cm4 = st.columns(4)
+                cm1.metric("Deployment Verdict", csm["verdict"], delta=f"Min Safe El >= {csm['recommended_min_elevation_deg']:.0f}°")
+                cm2.metric("140 / 165 dB Blast Standoff", f"{csm['acoustic_140db_downrange_m']:.0f} / {csm['acoustic_165db_downrange_m']:.0f} m", delta=f"1m Peak: {csm['muzzle_peak_1m_db']:.1f} dB")
+                cm3.metric("Crew Rear 140 dB Standoff", f"{csm['crew_rear_140db_standoff_m']:.1f} m", delta=f"Direct Cone: {csm['direct_fire_cone_range_m']:.0f} m")
+                cm4.metric("Falling Lethal (>15 J) Share", f"{csm['lethal_15j_pct']:.1f}%", delta=f"Injury (>=2 J): {csm['injury_2j_pct']:.1f}%")
+                if csm["verdict"] == "RESTRICTED_ELEVATION_OR_AMMO":
+                    st.error(csm["verdict_note"])
+                else:
+                    st.info(csm["verdict_note"])
+                st.plotly_chart(create_collateral_safety_envelope_figure(collat_res), width="stretch", key="cuas18_sd_collat_fig")
+                st.dataframe(pd.DataFrame(collat_res["tier_breakdown"]), width="stretch", hide_index=True)
 
         # --- TAB 18.6: MULTI-SENSOR DETECTION, CLASSIFICATION & KILL-CHAIN TIMELINE ---
         elif active_cuas_mod == _CUAS18_MODULES[5]:
@@ -3283,6 +3447,16 @@ def tab_cuas_and_small_arms() -> None:
                     key="cuas18_dl_html_report",
                     width="stretch",
                 )
+            _rep_cal_twin = get_active_calibration_profile()
+            _rep_cal_payload = None
+            if _rep_cal_twin:
+                _rep_drift = _cached_calibration_design_delta(
+                    turret_cfg_json=json.dumps(rep_cfg, sort_keys=True),
+                    calibration_twin_json=json.dumps(_rep_cal_twin, sort_keys=True),
+                    drone_model=str(lg_drone),
+                    required_range_m=float(lg_dist),
+                )
+                _rep_cal_payload = {"twin": _rep_cal_twin, "drift": _rep_drift}
             with rep_c2:
                 pdf_deck = generate_executive_briefing_pdf(
                     title=str(rep_name),
@@ -3293,6 +3467,7 @@ def tab_cuas_and_small_arms() -> None:
                     logistics_result=log_res,
                     raid_result=st.session_state.get("_report_raid_result"),
                     adversarial_result=st.session_state.get("_report_adversarial_result"),
+                    calibration_result=_rep_cal_payload,
                 )
                 st.download_button(
                     "📑 Executive Briefing (.pdf)",
@@ -3312,6 +3487,7 @@ def tab_cuas_and_small_arms() -> None:
                     logistics_result=log_res,
                     raid_result=st.session_state.get("_report_raid_result"),
                     adversarial_result=st.session_state.get("_report_adversarial_result"),
+                    calibration_result=_rep_cal_payload,
                 )
                 st.download_button(
                     "📊 PowerPoint Deck (.pptx)",
@@ -3384,6 +3560,8 @@ def tab_cuas_and_small_arms() -> None:
                             if diff_res["metric_diffs"]:
                                 st.markdown("**Outcome Metric Delta (B - A)**")
                                 st.dataframe(pd.DataFrame(diff_res["metric_diffs"][:10]), width="stretch")
+                    else:
+                        st.caption("Save 2 or more scenario snapshots above to compare metrics & configuration diffs side-by-side.")
 
         # --- TAB 18.10: A/B TURRET COMPARATOR & LAYERED C-UAS DEFENSE ---
         elif active_cuas_mod == _CUAS18_MODULES[9]:
@@ -3789,6 +3967,7 @@ def tab_cuas_and_small_arms() -> None:
                     seed=42,
                     swarm_package_json=swarm_pkg_json,
                     outer_layer_type=str(r_outer_layer),
+                    calibration_profile_json=_get_cal_twin_json(),
                 )
             st.session_state["_report_raid_result"] = raid_res
 
@@ -3817,60 +3996,174 @@ def tab_cuas_and_small_arms() -> None:
                 st.markdown("##### 📝 Representative Trial Tactical Event Feed")
                 st.dataframe(pd.DataFrame(raid_res["event_log"]), width="stretch", height=300)
 
-        # --- TAB 18.13: FIELD-TEST CALIBRATION & EMPIRICAL RESIDUALS ---
+        # --- TAB 18.13: FIELD-TEST CALIBRATION & CLOSED-LOOP DIGITAL TWIN ---
         elif active_cuas_mod == _CUAS18_MODULES[12]:
-            st.markdown("#### 🧪 Field-Test Calibration & Empirical vs. Model Residual Diagnostics")
+            st.markdown("#### 🧪 Closed-Loop Test-to-Design Recalibration & Persistent Digital Twin")
             st.caption(
-                "Upload range CSV measurements (or load realistic synthetic field logs) to fit choke spread multipliers, "
-                "chronograph MV & FM 6-40 temperature sensitivity, and exterior ballistic drag form factors via SciPy nonlinear least squares."
+                "Ingest single-range CSVs, multi-range tables, target-board photos, chronograph logs, recorded flight tracks, "
+                "live-fire drone shoot-down results, and hardware/tracker bench measurements — then sync into the global Calibrated Digital Twin."
             )
-            cal_t1, cal_t2, cal_t3, cal_t4 = st.tabs([
-                "🎯 Shotgun Patterning-Board Fit",
-                "📏 Chronograph MV & Temp Lot Fit",
-                "🚀 Exterior Drag Form-Factor (i) Fit",
-                "🛰️ Recorded Drone-Track Replay (CSV / MAVLink)",
+            cal_t1, cal_t2, cal_t3, cal_t4, cal_t5, cal_t6, cal_t7 = st.tabs([
+                "🎯 Patterning (CSV / Multi-Range / Photo)",
+                "📏 Chronograph MV & Temp",
+                "🚀 Exterior Drag Form-Factor",
+                "🛰️ Recorded Track Replay",
+                "💥 Live-Fire Drone Lethality",
+                "🔧 Hardware Bench & Tracker",
+                "🧬 Twin Manager, Drift & Test Planner",
             ])
 
             with cal_t1:
+                pat_mode = st.radio(
+                    "Pattern Input Mode",
+                    [
+                        "Single-Range CSV",
+                        "Multi-Range Spread Exponent & Pellet Drag",
+                        "Photo-to-Pattern Hole Digitizer (PNG / JPG)",
+                    ],
+                    horizontal=True,
+                    key="cal_pat_mode",
+                )
                 pc1, pc2, pc3 = st.columns(3)
                 with pc1:
-                    pat_rng = st.number_input("Patterning Range (m)", 10.0, 100.0, 36.58, 1.0, key="cal_pat_rng")
+                    pat_rng = st.number_input("Reference Range (m)", 10.0, 100.0, 36.58, 1.0, key="cal_pat_rng")
                 with pc2:
                     pat_choke = st.selectbox("Nominal Choke", list(get_choke_definitions().keys()), index=3, key="cal_pat_choke")
                 with pc3:
                     pat_ammo = st.selectbox("Reference Load", list(sg_presets_18.keys()), index=0, key="cal_pat_ammo")
-                pat_up = st.file_uploader("Upload Pellet Impact CSV (`y_m,z_m` or `y_cm,z_cm` or `y_in,z_in`)", type=["csv"], key="cal_pat_up")
-                if st.button("📋 Load Sample Patterning-Board CSV", key="cal_pat_sample_btn"):
-                    st.session_state["_cal_pat_csv"] = generate_sample_pattern_csv(range_m=float(pat_rng), nominal_choke=str(pat_choke))
-                pat_csv = pat_up.getvalue().decode("utf-8", errors="replace") if pat_up is not None else st.session_state.get("_cal_pat_csv") or generate_sample_pattern_csv(range_m=float(pat_rng), nominal_choke=str(pat_choke))
-                try:
-                    pat_res = calibrate_shotgun_pattern_from_csv(
-                        pat_csv,
+
+                if pat_mode == "Single-Range CSV":
+                    pat_up = st.file_uploader("Upload Pellet Impact CSV (`y_m,z_m` or `y_cm,z_cm` or `y_in,z_in`)", type=["csv"], key="cal_pat_up")
+                    if st.button("📋 Load Sample Patterning-Board CSV", key="cal_pat_sample_btn"):
+                        st.session_state["_cal_pat_csv"] = generate_sample_pattern_csv(range_m=float(pat_rng), nominal_choke=str(pat_choke))
+                    pat_csv = pat_up.getvalue().decode("utf-8", errors="replace") if pat_up is not None else st.session_state.get("_cal_pat_csv") or generate_sample_pattern_csv(range_m=float(pat_rng), nominal_choke=str(pat_choke))
+                    try:
+                        pat_res = calibrate_shotgun_pattern_from_csv(
+                            pat_csv,
+                            range_m=float(pat_rng),
+                            nominal_choke=str(pat_choke),
+                            ammunition_preset=str(pat_ammo),
+                        )
+                        pm1, pm2, pm3, pm4 = st.columns(4)
+                        pm1.metric("Fitted Spread Multiplier", f"{pat_res['calibrated_spread_factor']:.2f}×", delta=f"Closest: {pat_res['closest_standard_choke']}")
+                        pm2.metric("POI Bias (Y / Z)", f"{pat_res['poi_bias_y_mrad']:+.1f} / {pat_res['poi_bias_z_mrad']:+.1f} mrad", delta=f"40-yd 30\" Eff: {pat_res['fitted_40yd_30in_pct']:.1f}%")
+                        pm3.metric("Fitted R50 / R90", f"{pat_res['r50_fit_m']:.2f} / {pat_res['r90_fit_m']:.2f} m", delta=f"σ_fit={pat_res['sigma_fit_m']:.3f} m")
+                        pm4.metric("Rayleigh Goodness-of-Fit", f"R²={pat_res['r2_cdf']:.3f}", delta=f"KS p={pat_res['ks_pvalue']:.3f} (RMSE={pat_res['rmse_cdf']:.3f})")
+                        st.plotly_chart(create_pattern_calibration_figure(pat_res), width="stretch", key="cal_pat_fig")
+                        if st.button("✅ Apply Patterning Fit & Bias to Digital Twin", type="primary", key="cal_pat_apply_btn"):
+                            rad_bias = round(math.hypot(pat_res["poi_bias_y_mrad"], pat_res["poi_bias_z_mrad"]), 2)
+                            st.session_state["cuas_choke"] = pat_res["closest_standard_choke"]
+                            st.session_state["_calibrated_aim_bias_mrad"] = rad_bias
+                            st.session_state["_calibrated_digital_twin"] = merge_twin_updates(
+                                st.session_state.get("_calibrated_digital_twin"),
+                                {
+                                    "spread_factor": float(pat_res["calibrated_spread_factor"]),
+                                    "spread_factor_se": round(float(pat_res["sigma_fit_se_m"] / max(pat_res["sigma_nominal_m"], 1e-4)), 3),
+                                    "poi_bias_y_mrad": float(pat_res["poi_bias_y_mrad"]),
+                                    "poi_bias_z_mrad": float(pat_res["poi_bias_z_mrad"]),
+                                    "aim_bias_mrad": rad_bias,
+                                },
+                                domain="Single-Range Pattern",
+                                summary=f"Spread {pat_res['calibrated_spread_factor']:.2f}x, aim bias {rad_bias:.1f} mrad",
+                            )
+                            st.session_state["_digital_twin_pending_enable"] = True
+                            st.success(f"Applied spread={pat_res['calibrated_spread_factor']:.2f}x & enabled Calibrated Digital Twin!")
+                    except Exception as exc:
+                        st.error(f"Pattern calibration error: {exc}")
+
+                elif pat_mode == "Multi-Range Spread Exponent & Pellet Drag":
+                    st.caption("Edit multi-distance range test measurements directly (or paste from Excel) to jointly fit spread factor, range growth exponent p, and downrange pellet Cd scale.")
+                    if "_cal_mr_rows" not in st.session_state or st.button("📋 Reset Multi-Range Test Table", key="cal_mr_reset_btn"):
+                        st.session_state["_cal_mr_rows"] = generate_sample_multirange_pattern_rows(
+                            nominal_choke=str(pat_choke),
+                            ammunition_preset=str(pat_ammo),
+                        )
+                    mr_df = st.data_editor(
+                        pd.DataFrame(st.session_state["_cal_mr_rows"]),
+                        num_rows="dynamic",
+                        width="stretch",
+                        key="cal_mr_editor",
+                    )
+                    try:
+                        mr_res = calibrate_multirange_pattern_and_drag(
+                            mr_df.to_dict(orient="records"),
+                            nominal_choke=str(pat_choke),
+                            ammunition_preset=str(pat_ammo),
+                        )
+                        mm1, mm2, mm3, mm4 = st.columns(4)
+                        mm1.metric("Spread Factor (k_σ)", f"{mr_res['spread_factor']:.2f}×", delta=f"± {mr_res['spread_factor_se']:.2f} SE")
+                        mm2.metric("Range Growth Exponent (p)", f"{mr_res['spread_exponent']:.2f}", delta=f"Nominal 1.15 (± {mr_res['spread_exponent_se']:.2f})")
+                        mm3.metric("Pellet Drag Cd Scale", f"{mr_res['pellet_cd_scale']:.2f}×", delta=f"v RMSE: {mr_res['rmse_velocity_mps']} m/s" if mr_res["rmse_velocity_mps"] is not None else "No velocity column")
+                        mm4.metric("Sigma Fit R² / RMSE", f"R²={mr_res['r2_spread']:.4f}", delta=f"RMSE: {mr_res['rmse_spread_m']:.4f} m ({mr_res['n_stations']} ranges)")
+                        st.dataframe(pd.DataFrame(mr_res["stations"]), width="stretch", hide_index=True)
+                        if st.button("✅ Apply Multi-Range Spread, Exponent & Cd to Digital Twin", type="primary", key="cal_mr_apply_btn"):
+                            st.session_state["_calibrated_digital_twin"] = merge_twin_updates(
+                                st.session_state.get("_calibrated_digital_twin"),
+                                mr_res["twin_patch"],
+                                domain="Multi-Range Pattern & Drag",
+                                summary=f"Spread {mr_res['spread_factor']:.2f}x, exp p={mr_res['spread_exponent']:.2f}, Cd {mr_res['pellet_cd_scale']:.2f}x",
+                            )
+                            st.session_state["_digital_twin_pending_enable"] = True
+                            st.success("Applied multi-range spread factor, exponent & Cd scale to Calibrated Digital Twin!")
+                    except Exception as exc:
+                        st.error(f"Multi-range calibration error: {exc}")
+
+                else:
+                    ph1, ph2, ph3 = st.columns(3)
+                    with ph1:
+                        bd_w_m = st.number_input("Board Width (m)", 0.4, 3.0, 1.0, 0.1, key="cal_ph_bw")
+                    with ph2:
+                        bd_h_m = st.number_input("Board Height (m)", 0.4, 3.0, 1.0, 0.1, key="cal_ph_bh")
+                    with ph3:
+                        bd_sig = st.slider("Hole Threshold (σ MAD)", 1.6, 4.5, 2.6, 0.2, key="cal_ph_sig")
+                    ph_up = st.file_uploader("Upload Patterning Target Photo (.png / .jpg)", type=["png", "jpg", "jpeg"], key="cal_ph_up")
+                    if st.button("📸 Load Built-In Synthetic Target-Board Photo", key="cal_ph_sample_btn"):
+                        st.session_state["_cal_ph_bytes"] = generate_synthetic_pattern_board_png(
+                            range_m=float(pat_rng),
+                            nominal_choke=str(pat_choke),
+                            board_width_m=float(bd_w_m),
+                            board_height_m=float(bd_h_m),
+                            seed=42,
+                        )
+                    img_bytes = ph_up.getvalue() if ph_up is not None else st.session_state.get("_cal_ph_bytes") or generate_synthetic_pattern_board_png(
                         range_m=float(pat_rng),
                         nominal_choke=str(pat_choke),
-                        ammunition_preset=str(pat_ammo),
+                        board_width_m=float(bd_w_m),
+                        board_height_m=float(bd_h_m),
+                        seed=42,
                     )
-                    pm1, pm2, pm3, pm4 = st.columns(4)
-                    pm1.metric("Fitted Spread Multiplier", f"{pat_res['calibrated_spread_factor']:.2f}×", delta=f"Closest: {pat_res['closest_standard_choke']}")
-                    pm2.metric("POI Bias (Y / Z)", f"{pat_res['poi_bias_y_mrad']:+.1f} / {pat_res['poi_bias_z_mrad']:+.1f} mrad", delta=f"40-yd 30\" Eff: {pat_res['fitted_40yd_30in_pct']:.1f}%")
-                    pm3.metric("Fitted R50 / R90", f"{pat_res['r50_fit_m']:.2f} / {pat_res['r90_fit_m']:.2f} m", delta=f"σ_fit={pat_res['sigma_fit_m']:.3f} m")
-                    pm4.metric("Rayleigh Goodness-of-Fit", f"R²={pat_res['r2_cdf']:.3f}", delta=f"KS p={pat_res['ks_pvalue']:.3f} (RMSE={pat_res['rmse_cdf']:.3f})")
-                    st.plotly_chart(create_pattern_calibration_figure(pat_res), width="stretch")
-                    if st.button("✅ Apply Calibrated Choke & Aim Bias to C-UAS Workbench", type="primary", key="cal_pat_apply_btn"):
-                        rad_bias = round(math.hypot(pat_res["poi_bias_y_mrad"], pat_res["poi_bias_z_mrad"]), 2)
-                        st.session_state["cuas_choke"] = pat_res["closest_standard_choke"]
-                        st.session_state["_calibrated_aim_bias_mrad"] = rad_bias
-                        twin = dict(st.session_state.get("_calibrated_digital_twin", {}))
-                        twin["spread_factor"] = float(pat_res["calibrated_spread_factor"])
-                        twin["spread_factor_se"] = float(pat_res["sigma_fit_se_m"] / max(pat_res["sigma_nominal_m"], 1e-4))
-                        twin["aim_bias_mrad"] = rad_bias
-                        st.session_state["_calibrated_digital_twin"] = twin
-                        st.success(
-                            f"Applied closest choke `{pat_res['closest_standard_choke']}`, spread={pat_res['calibrated_spread_factor']:.2f}x, "
-                            f"and radial bias {rad_bias:.2f} mrad to Digital Twin!"
+                    try:
+                        dig_res = digitize_pattern_board_image(
+                            img_bytes,
+                            board_width_m=float(bd_w_m),
+                            board_height_m=float(bd_h_m),
+                            range_m=float(pat_rng),
+                            nominal_choke=str(pat_choke),
+                            ammunition_preset=str(pat_ammo),
+                            threshold_sigma=float(bd_sig),
                         )
-                except Exception as exc:
-                    st.error(f"Pattern calibration error: {exc}")
+                        d_pat = dig_res["pattern_calibration"]
+                        dp1, dp2, dp3, dp4 = st.columns(4)
+                        dp1.metric("Detected Pellet Holes", f"{dig_res['n_detected_holes']}", delta=f"{dig_res['image_shape'][1]}×{dig_res['image_shape'][0]} px")
+                        dp2.metric("Fitted Spread Multiplier", f"{d_pat['calibrated_spread_factor']:.2f}×", delta=f"Closest: {d_pat['closest_standard_choke']}")
+                        dp3.metric("Fitted R50 / R90", f"{d_pat['r50_fit_m']:.2f} / {d_pat['r90_fit_m']:.2f} m", delta=f"POI Bias Y/Z: {d_pat['poi_bias_y_mrad']:+.1f}/{d_pat['poi_bias_z_mrad']:+.1f} mrad")
+                        dp4.metric("Rayleigh GOF R²", f"{d_pat['r2_cdf']:.3f}", delta=f"KS p={d_pat['ks_pvalue']:.3f}")
+                        im_col, ch_col = st.columns([0.85, 1.35])
+                        with im_col:
+                            st.image(img_bytes, caption=f"Analyzed Target Board ({dig_res['n_detected_holes']} holes extracted)", width="stretch")
+                        with ch_col:
+                            st.plotly_chart(create_pattern_calibration_figure(d_pat), width="stretch", key="cal_ph_fig")
+                        if st.button("✅ Apply Photo-Digitized Pattern to Digital Twin", type="primary", key="cal_ph_apply_btn"):
+                            st.session_state["_calibrated_digital_twin"] = merge_twin_updates(
+                                st.session_state.get("_calibrated_digital_twin"),
+                                dig_res["twin_patch"],
+                                domain="Photo Pattern Digitizer",
+                                summary=f"{dig_res['n_detected_holes']} holes detected, spread {d_pat['calibrated_spread_factor']:.2f}x",
+                            )
+                            st.session_state["_digital_twin_pending_enable"] = True
+                            st.success("Applied photo-digitized pattern fit to Calibrated Digital Twin!")
+                    except Exception as exc:
+                        st.error(f"Photo digitizer error: {exc}")
 
             with cal_t2:
                 ch1, ch2 = st.columns(2)
@@ -3889,20 +4182,25 @@ def tab_cuas_and_small_arms() -> None:
                     cm2.metric("Round-to-Round Residual SD", f"{ch_res['residual_sd_mps']:.2f} m/s", delta=f"Raw SD: {ch_res['sd_mps']:.2f} | ES: {ch_res['extreme_spread_mps']:.1f}")
                     cm3.metric("FM 6-40 dMV/dT Slope", f"{ch_res['dv_dt_mps_per_c']:+.3f} m/s/°C" if ch_res["has_temp_fit"] else "Single Temp", delta=f"R²={ch_res['r2_temp_fit']:.3f}" if ch_res["has_temp_fit"] else "Add temp_c column")
                     cm4.metric("Chrono Sample Size", f"{ch_res['n_shots']} shots", delta=f"{ch_res['min_mv_mps']:.1f}–{ch_res['max_mv_mps']:.1f} m/s")
-                    st.plotly_chart(create_chronograph_calibration_figure(ch_res), width="stretch")
-                    if st.button("✅ Apply Calibrated MV & SD to Monte Carlo Simulator", type="primary", key="cal_ch_apply_btn"):
+                    st.plotly_chart(create_chronograph_calibration_figure(ch_res), width="stretch", key="cal_ch_fig")
+                    if st.button("✅ Apply Calibrated MV & SD to Digital Twin", type="primary", key="cal_ch_apply_btn"):
                         st.session_state["_calibrated_mv_mps"] = float(ch_res["v_std_fit_mps"])
                         st.session_state["_calibrated_mv_sd_mps"] = float(ch_res["residual_sd_mps"])
-                        twin = dict(st.session_state.get("_calibrated_digital_twin", {}))
-                        twin["mv_scale"] = round(float(ch_res["v_std_fit_mps"]) / max(float(ch_nom), 1.0), 4)
-                        twin["mv_sd_mps"] = float(ch_res["residual_sd_mps"])
+                        ch_patch: dict[str, Any] = {
+                            "mv_scale": round(float(ch_res["v_std_fit_mps"]) / max(float(ch_nom), 1.0), 4),
+                            "mv_sd_mps": float(ch_res["residual_sd_mps"]),
+                        }
                         if ch_res["has_temp_fit"]:
                             st.session_state["_calibrated_dv_dt"] = float(ch_res["dv_dt_mps_per_c"])
-                            twin["dv_dt_mps_per_c"] = float(ch_res["dv_dt_mps_per_c"])
-                        st.session_state["_calibrated_digital_twin"] = twin
-                        st.success(
-                            f"Saved calibrated MV={ch_res['v_std_fit_mps']:.1f} m/s, SD={ch_res['residual_sd_mps']:.2f} m/s for Monte Carlo & ML Digital Twin!"
+                            ch_patch["dv_dt_mps_per_c"] = float(ch_res["dv_dt_mps_per_c"])
+                        st.session_state["_calibrated_digital_twin"] = merge_twin_updates(
+                            st.session_state.get("_calibrated_digital_twin"),
+                            ch_patch,
+                            domain="Chronograph MV & Temp",
+                            summary=f"MV scale {ch_patch['mv_scale']:.3f}x, SD {ch_patch['mv_sd_mps']:.2f} m/s",
                         )
+                        st.session_state["_digital_twin_pending_enable"] = True
+                        st.success(f"Applied MV={ch_res['v_std_fit_mps']:.1f} m/s & enabled Calibrated Digital Twin!")
                 except Exception as exc:
                     st.error(f"Chronograph calibration error: {exc}")
 
@@ -3932,7 +4230,7 @@ def tab_cuas_and_small_arms() -> None:
                     dm2.metric("Drop RMSE (Before -> After)", f"{(dg_res['rmse_drop_after_m'] or 0.0):.4f} m", delta=f"Before: {(dg_res['rmse_drop_before_m'] or 0.0):.4f} m")
                     dm3.metric("Velocity RMSE (After)", f"{(dg_res['rmse_vel_after_mps'] or 0.0):.2f} m/s" if dg_res["has_vel"] else "—", delta=f"Before: {(dg_res['rmse_vel_before_mps'] or 0.0):.2f} m/s" if dg_res["has_vel"] else "Drop-only fit")
                     dm4.metric("Fit R²", f"{dg_res['r2_fit']:.5f}", delta=f"{dg_res['n_stations']} stations ({dg_res['drag_ref']})")
-                    st.plotly_chart(create_drag_calibration_figure(dg_res), width="stretch")
+                    st.plotly_chart(create_drag_calibration_figure(dg_res), width="stretch", key="cal_dg_fig")
                     st.dataframe(pd.DataFrame(dg_res["stations"]), width="stretch")
                     if st.button("✅ Apply Calibrated Form Factor (i) to Monte Carlo Simulator", type="primary", key="cal_dg_apply_btn"):
                         st.session_state["_calibrated_form_factor"] = float(dg_res["calibrated_form_factor"])
@@ -3982,10 +4280,326 @@ def tab_cuas_and_small_arms() -> None:
                     tm2.metric("Mean Track Kill Rate", f"{tsm['mean_kill_rate_pct']:.1f} %", delta=f"Intercept: {tsm['mean_intercept_range_m']:.1f} m")
                     tm3.metric("Measured Peak Speed / G", f"{tsm['peak_speed_mps']:.1f} m/s", delta=f"Lateral: {tsm['peak_lat_g']:.2f} G")
                     tm4.metric("Rounds / Wave Cost", f"{tsm['mean_rounds_expended']:.1f} rds", delta=f"${tsm['mean_ammo_cost_usd']:.2f} ({tsm['turret_name'][:20]})")
-                    st.plotly_chart(create_recorded_track_replay_figure(trk_res), width="stretch")
+                    st.plotly_chart(create_recorded_track_replay_figure(trk_res), width="stretch", key="cal_trk_fig")
                     st.dataframe(pd.DataFrame(trk_res["tracks"]), width="stretch", hide_index=True)
                 except Exception as exc:
                     st.error(f"Track replay error: {exc}")
+
+            with cal_t5:
+                st.markdown("##### 💥 Live-Fire Drone Shoot-Down Bayesian Lethality Calibration")
+                st.caption(
+                    "Log actual drone engagement shots (`range_m, ammunition_preset, choke, barrels_fired, drone_killed`) "
+                    "to compute MAP posterior estimates of drone vulnerable area (A_vuln) and critical pellet kill energy (E_crit)."
+                )
+                lf1, lf2 = st.columns([1.3, 1.0])
+                with lf1:
+                    lf_drone = st.selectbox("Tested Target Airframe", list(drone_specs_18.keys()), format_func=lambda k: drone_specs_18[k]["name"], index=0, key="cal_lf_drone")
+                with lf2:
+                    st.write("")
+                    if st.button("📋 Reset Sample Live-Fire Range Log", key="cal_lf_reset_btn", width="stretch"):
+                        st.session_state["_cal_lf_rows"] = generate_sample_livefire_drone_trials(drone_model=str(lf_drone))
+                if "_cal_lf_rows" not in st.session_state:
+                    st.session_state["_cal_lf_rows"] = generate_sample_livefire_drone_trials(drone_model=str(lf_drone))
+                lf_up = st.file_uploader("Optional Shoot-Down Log CSV", type=["csv"], key="cal_lf_up")
+                if lf_up is not None:
+                    lf_src: list[dict[str, Any]] | str = lf_up.getvalue().decode("utf-8", errors="replace")
+                else:
+                    lf_edited_df = st.data_editor(
+                        pd.DataFrame(st.session_state["_cal_lf_rows"]),
+                        num_rows="dynamic",
+                        width="stretch",
+                        key="cal_lf_editor",
+                    )
+                    lf_src = lf_edited_df.to_dict(orient="records")
+                try:
+                    leth_res = calibrate_livefire_drone_lethality(
+                        lf_src,
+                        drone_model=str(lf_drone),
+                        base_twin=st.session_state.get("_calibrated_digital_twin"),
+                    )
+                    st.session_state["_cal_last_lethality"] = leth_res
+                    lm1, lm2, lm3, lm4 = st.columns(4)
+                    lm1.metric("Fitted Vulnerable Area (A_vuln)", f"{leth_res['drone_avuln_scale']:.2f}×", delta=f"95% CI {leth_res['drone_avuln_ci95'][0]:.2f}–{leth_res['drone_avuln_ci95'][1]:.2f}")
+                    lm2.metric("Fitted Critical Energy (E_crit)", f"{leth_res['drone_ecrit_scale']:.2f}×", delta=f"95% CI {leth_res['drone_ecrit_ci95'][0]:.2f}–{leth_res['drone_ecrit_ci95'][1]:.2f}")
+                    lm3.metric("Brier Score (Nominal -> Cal)", f"{leth_res['brier_after']:.4f}", delta=f"From {leth_res['brier_before']:.4f} ({leth_res['n_trials']} shots)")
+                    lm4.metric("Observed Shoot-Down Rate", f"{leth_res['observed_kill_rate_pct']:.1f}%", delta=f"Log-loss {leth_res['logloss_before']:.3f} -> {leth_res['logloss_after']:.3f}")
+                    cur_drift_preview = _cached_calibration_design_delta(
+                        turret_cfg_json=json.dumps(dict(st.session_state.get("_active_cuas_profile") or {}), sort_keys=True),
+                        calibration_twin_json=json.dumps(
+                            merge_twin_updates(st.session_state.get("_calibrated_digital_twin"), leth_res["twin_patch"]),
+                            sort_keys=True,
+                        ),
+                        drone_model=str(lf_drone),
+                    )
+                    st.plotly_chart(create_calibration_reliability_and_drift_figure(leth_res, cur_drift_preview), width="stretch", key="cal_lf_drift_fig")
+                    if st.button("✅ Apply Bayesian Lethality Fit to Digital Twin", type="primary", key="cal_lf_apply_btn"):
+                        st.session_state["_calibrated_digital_twin"] = merge_twin_updates(
+                            st.session_state.get("_calibrated_digital_twin"),
+                            leth_res["twin_patch"],
+                            domain="Bayesian Live-Fire Lethality",
+                            summary=f"A_vuln {leth_res['drone_avuln_scale']:.2f}x, E_crit {leth_res['drone_ecrit_scale']:.2f}x (Brier {leth_res['brier_after']:.3f})",
+                        )
+                        st.session_state["_digital_twin_pending_enable"] = True
+                        st.success("Applied Bayesian target vulnerability & lethal energy fit to Digital Twin!")
+                except Exception as exc:
+                    st.error(f"Live-fire lethality calibration error: {exc}")
+
+            with cal_t6:
+                st.markdown("##### 🔧 Hardware Bench-Test & Sensor Tracker Recalibration")
+                hb_col, trk_col = st.columns(2)
+                prof_hb = dict(st.session_state.get("_active_cuas_profile") or {"n_barrels": 6})
+                with hb_col:
+                    st.markdown("**Load-Cell Recoil, Servo Slew & Weighed Hardware Bench**")
+                    if st.button("📋 Load Sample Bench Telemetry", key="cal_hb_sample_btn"):
+                        samp_hb = generate_sample_hardware_bench_tests(int(prof_hb.get("n_barrels", 6)))
+                        st.session_state["cal_hb_recoil"] = float(np.mean(samp_hb["peak_recoil_kn_samples"]))
+                        st.session_state["cal_hb_settle"] = float(np.mean(samp_hb["settle_time_ms_samples"]))
+                        st.session_state["cal_hb_slew"] = float(np.mean(samp_hb["slew_rate_deg_s_samples"]))
+                        st.session_state["cal_hb_accel"] = float(np.mean(samp_hb["slew_accel_deg_s2_samples"]))
+                        st.session_state["cal_hb_mass"] = float(samp_hb["weighed_mass_kg"])
+                        st.session_state["cal_hb_pwr"] = float(samp_hb["measured_peak_power_w"])
+                        st.session_state["_cal_hb_zeros"] = samp_hb["barrel_zero_offsets_mrad"]
+                    hb_rec = st.number_input("Measured Peak Recoil (kN)", 0.5, 25.0, 5.12, 0.1, key="cal_hb_recoil")
+                    hb_settle = st.number_input("Measured Recoil Settle Time (ms)", 40.0, 1200.0, 215.0, 10.0, key="cal_hb_settle")
+                    hb_slew = st.number_input("Measured Max Slew Rate (deg/s)", 30.0, 320.0, 151.0, 5.0, key="cal_hb_slew")
+                    hb_accel = st.number_input("Measured Slew Accel (deg/s²)", 80.0, 1800.0, 585.0, 20.0, key="cal_hb_accel")
+                    hb_mass = st.number_input("Weighed Turret Mass (kg)", 10.0, 600.0, 63.4, 0.5, key="cal_hb_mass")
+                    hb_pwr = st.number_input("Measured Peak Bus Power (W)", 50.0, 5000.0, 468.0, 10.0, key="cal_hb_pwr")
+                    zeros_init = st.session_state.get("_cal_hb_zeros") or generate_sample_hardware_bench_tests(int(prof_hb.get("n_barrels", 6)))["barrel_zero_offsets_mrad"]
+                    zeros_df = st.data_editor(pd.DataFrame(zeros_init), num_rows="dynamic", width="stretch", key="cal_hb_zeros_ed")
+                    hb_res = calibrate_hardware_bench_tests(
+                        prof_hb,
+                        {
+                            "peak_recoil_kn_samples": [float(hb_rec)],
+                            "settle_time_ms_samples": [float(hb_settle)],
+                            "slew_rate_deg_s_samples": [float(hb_slew)],
+                            "slew_accel_deg_s2_samples": [float(hb_accel)],
+                            "weighed_mass_kg": float(hb_mass),
+                            "measured_peak_power_w": float(hb_pwr),
+                            "barrel_zero_offsets_mrad": zeros_df.to_dict(orient="records"),
+                        },
+                    )
+                    st.dataframe(pd.DataFrame(hb_res["comparisons"]), width="stretch", hide_index=True)
+                    for fl in hb_res["out_of_spec_flags"]:
+                        st.warning(fl)
+                    if st.button("✅ Apply Hardware Bench Calibration to Digital Twin", type="primary", key="cal_hb_apply_btn", width="stretch"):
+                        st.session_state["_calibrated_digital_twin"] = merge_twin_updates(
+                            st.session_state.get("_calibrated_digital_twin"),
+                            hb_res["twin_patch"],
+                            domain="Hardware Bench Calibration",
+                            summary=f"Recoil {hb_res['twin_patch']['recoil_force_scale']:.2f}x, Settle {hb_settle:.0f} ms, Zero RMS {hb_res['twin_patch']['barrel_zero_scatter_mrad']:.2f} mrad",
+                        )
+                        st.session_state["_digital_twin_pending_enable"] = True
+                        st.success("Applied measured recoil, slew/settle & barrel zeroing to Calibrated Digital Twin!")
+
+                with trk_col:
+                    st.markdown("**Sensor / Tracker Angular Error, Latency & OTM Jitter**")
+                    trk_sensor = st.selectbox("Reference Sensor Suite", list(get_cuas_sensor_presets().keys())[:3], key="cal_trk_sens")
+                    if "_cal_trktel_rows" not in st.session_state or st.button("📋 Reset Tracker Telemetry Log", key="cal_trktel_reset"):
+                        st.session_state["_cal_trktel_rows"] = generate_sample_tracker_test_rows(sensor_preset=str(trk_sensor))
+                    tt_df = st.data_editor(
+                        pd.DataFrame(st.session_state["_cal_trktel_rows"]),
+                        num_rows="dynamic",
+                        width="stretch",
+                        key="cal_trktel_ed",
+                    )
+                    try:
+                        tt_res = calibrate_tracker_telemetry(tt_df.to_dict(orient="records"), sensor_preset=str(trk_sensor))
+                        tm_a, tm_b, tm_c = st.columns(3)
+                        tm_a.metric("Measured RMS Jitter", f"{tt_res['measured_rms_mrad']:.2f} mrad", delta=f"Nom: {tt_res['nominal_rms_mrad']:.2f}")
+                        tm_b.metric("Mean / P95 Latency", f"{tt_res['measured_latency_ms']:.1f} ms", delta=f"P95: {tt_res['latency_p95_ms']:.1f} ms")
+                        tm_c.metric("Measured OTM Jitter", f"{tt_res['otm_jitter_mrad']:.2f} mrad", delta=f"{tt_res['n_samples']} samples")
+                        if st.button("✅ Apply Tracker & OTM Fit to Digital Twin", type="primary", key="cal_trktel_apply_btn", width="stretch"):
+                            st.session_state["_calibrated_digital_twin"] = merge_twin_updates(
+                                st.session_state.get("_calibrated_digital_twin"),
+                                tt_res["twin_patch"],
+                                domain="Tracker Telemetry",
+                                summary=f"RMS {tt_res['measured_rms_mrad']:.2f} mrad, Latency {tt_res['measured_latency_ms']:.0f} ms",
+                            )
+                            st.session_state["_digital_twin_pending_enable"] = True
+                            st.success("Applied tracker jitter & OTM measurements to Calibrated Digital Twin!")
+                    except Exception as exc:
+                        st.error(f"Tracker telemetry calibration error: {exc}")
+
+            with cal_t7:
+                st.markdown("##### 🧬 Persistent Digital Twin Manager, Design Drift & Active Test Planner")
+                active_twin = merge_twin_updates(None, st.session_state.get("_calibrated_digital_twin") or {})
+                prof_s1 = dict(st.session_state.get("_active_cuas_profile") or {})
+
+                mc1, mc2, mc3, mc4 = st.columns([1.1, 0.9, 0.9, 1.1])
+                with mc1:
+                    twin_name = st.text_input("Profile Name", value="Proto-V2_Range_Campaign", key="cal_mgr_name")
+                with mc2:
+                    twin_lot = st.text_input("Ammo Lot #", value=str(active_twin.get("lot_number", "LOT-2026-04")), key="cal_mgr_lot")
+                with mc3:
+                    twin_serial = st.text_input("Barrel / Turret Serial", value=str(active_twin.get("barrel_serial", "SN-001")), key="cal_mgr_serial")
+                with mc4:
+                    st.write("")
+                    if st.button("💾 Save Profile to SQLite Library", type="primary", key="cal_mgr_save_btn", width="stretch"):
+                        twin_to_save = dict(active_twin)
+                        twin_to_save["lot_number"] = twin_lot
+                        twin_to_save["barrel_serial"] = twin_serial
+                        saved_rec = CalibrationProfileStore().save_profile(
+                            name=twin_name,
+                            twin=twin_to_save,
+                            notes=f"R80 drift analysis & empirical test twin ({len(twin_to_save.get('history', []))} calibration updates)",
+                            tags=["cuas", "digital-twin", twin_lot],
+                        )
+                        st.session_state["_calibrated_digital_twin"] = saved_rec["twin"]
+                        st.session_state["_digital_twin_pending_enable"] = True
+                        st.success(f"Saved Digital Twin `{saved_rec['name']}` (id `{saved_rec['id']}`) to persistent SQLite store!")
+
+                store = CalibrationProfileStore()
+                all_saved_twins = store.list_profiles()
+                if all_saved_twins:
+                    st.dataframe(
+                        pd.DataFrame(
+                            [
+                                {
+                                    "ID": p["id"],
+                                    "Name": p["name"],
+                                    "Lot": p["lot_number"],
+                                    "Serial": p["barrel_serial"],
+                                    "Spread": f"{p['twin'].get('spread_factor', 1.0):.2f}x",
+                                    "E_crit": f"{p['twin'].get('drone_ecrit_scale', 1.0):.2f}x",
+                                    "Recoil": f"{p['twin'].get('recoil_force_scale', 1.0):.2f}x",
+                                    "Updated": p["updated_at"],
+                                }
+                                for p in all_saved_twins
+                            ]
+                        ),
+                        width="stretch",
+                        hide_index=True,
+                    )
+                    if len(all_saved_twins) >= 2:
+                        with st.expander("🔍 Compare Two Saved Digital Twin Profiles (Before vs After Diff)", expanded=False):
+                            p_id_map = {f"{p['name']} ({p['id']})": p for p in all_saved_twins}
+                            p_labels = list(p_id_map.keys())
+                            pd_c1, pd_c2 = st.columns(2)
+                            with pd_c1:
+                                twin_a_lbl = st.selectbox("Baseline Profile A", p_labels, index=min(1, len(p_labels) - 1), key="cal_diff_a")
+                            with pd_c2:
+                                twin_b_lbl = st.selectbox("Candidate Profile B", p_labels, index=0, key="cal_diff_b")
+                            tw_a = p_id_map[twin_a_lbl]["twin"]
+                            tw_b = p_id_map[twin_b_lbl]["twin"]
+                            diff_fields = [
+                                ("Spread Scale Factor", "spread_factor", "x"),
+                                ("Spread Growth Exponent (p)", "spread_exponent", ""),
+                                ("Muzzle Velocity Scale", "mv_scale", "x"),
+                                ("Pellet Drag Cd Scale", "pellet_cd_scale", "x"),
+                                ("Drone A_vuln Scale", "drone_avuln_scale", "x"),
+                                ("Drone E_crit Scale", "drone_ecrit_scale", "x"),
+                                ("Recoil Force Scale", "recoil_force_scale", "x"),
+                                ("Recoil Settle Time", "recoil_settle_ms", "ms"),
+                                ("Servo Slew Rate", "slew_rate_deg_s", "°/s"),
+                                ("Tracker RMS Jitter", "tracker_rms_mrad", "mrad"),
+                                ("Tracker Latency", "tracker_latency_ms", "ms"),
+                            ]
+                            diff_rows = []
+                            for f_lbl, f_key, f_unit in diff_fields:
+                                va = float(tw_a.get(f_key, 0.0) or 0.0)
+                                vb = float(tw_b.get(f_key, 0.0) or 0.0)
+                                diff_rows.append(
+                                    {
+                                        "Parameter": f_lbl,
+                                        "Profile A": f"{va:.3f} {f_unit}".strip(),
+                                        "Profile B": f"{vb:.3f} {f_unit}".strip(),
+                                        "Delta (B - A)": f"{vb - va:+.3f} {f_unit}".strip(),
+                                    }
+                                )
+                            st.dataframe(pd.DataFrame(diff_rows), width="stretch", hide_index=True)
+
+                dc_a, dc_b, dc_c = st.columns(3)
+                with dc_a:
+                    drift_drone = st.selectbox("Reference Threat Airframe", list(drone_specs_18.keys()), index=0, key="cal_drift_drone")
+                with dc_b:
+                    drift_rng = st.slider("Required Intercept Range (m)", 20.0, 75.0, 45.0, 5.0, key="cal_drift_rng")
+                with dc_c:
+                    drift_mnt = st.selectbox("Mount Class Constraint", list(MOUNT_CLASS_SPECS.keys()), index=1, key="cal_drift_mnt")
+
+                drift_res = _cached_calibration_design_delta(
+                    turret_cfg_json=json.dumps(prof_s1, sort_keys=True),
+                    calibration_twin_json=json.dumps(active_twin, sort_keys=True),
+                    drone_model=str(drift_drone),
+                    required_range_m=float(drift_rng),
+                    mount_class=str(drift_mnt),
+                )
+                plan_res = _cached_active_test_plan(
+                    turret_cfg_json=json.dumps(prof_s1, sort_keys=True),
+                    calibration_twin_json=json.dumps(active_twin, sort_keys=True),
+                    drone_model=str(drift_drone),
+                    target_range_m=float(drift_rng),
+                )
+
+                dm_1, dm_2, dm_3, dm_4 = st.columns(4)
+                dm_1.metric("Nominal -> Calibrated R80", f"{drift_res['calibrated']['r80_m']:.1f} m", delta=f"{drift_res['r80_drift_m']:+.1f} m drift")
+                dm_2.metric(f"Pk @ {drift_rng:.0f} m (Cal)", f"{drift_res['calibrated']['pk_at_req_pct']:.1f}%", delta=f"{drift_res['pk_at_req_drift_pp']:+.1f} pp vs nominal")
+                dm_3.metric("R80 95% Uncertainty", f"+/- {plan_res['r80_ci95_halfwidth_m']:.2f} m", delta="From posterior SEs")
+                dm_4.metric("Calibrated Mass / Recoil", f"{drift_res['calibrated']['mass_kg']:.1f} kg", delta=f"{drift_res['calibrated']['peak_recoil_kn']:.2f} kN")
+                st.info(f"**Model Drift Diagnosis:** {drift_res['diagnosis']}")
+
+                st.plotly_chart(
+                    create_calibration_reliability_and_drift_figure(st.session_state.get("_cal_last_lethality"), drift_res),
+                    width="stretch",
+                    key="cal_mgr_drift_fig",
+                )
+                fixes = drift_res.get("recommended_fixes", [])
+                if fixes:
+                    st.markdown("###### 🛠️ Top-3 Recommended Design Compensations Under Recalibrated Twin")
+                    st.dataframe(
+                        pd.DataFrame(
+                            [
+                                {
+                                    "Rank": f"#{i+1}",
+                                    "Recommended Design Change": f["fix_name"],
+                                    "Calibrated R80 (m)": f["r80_m"],
+                                    "Gain (m)": f"{f['r80_gain_m']:+.1f}",
+                                    f"Pk @ {drift_rng:.0f}m (%)": f["pk_at_req_pct"],
+                                    "Mass / Recoil": f"{f['mass_kg']:.1f} kg / {f['peak_recoil_kn']:.2f} kN",
+                                    "Fits Mount": "Yes" if f["mount_feasible"] else "No",
+                                }
+                                for i, f in enumerate(fixes)
+                            ]
+                        ),
+                        width="stretch",
+                        hide_index=True,
+                    )
+                    fb1, fb2 = st.columns(2)
+                    fb1.button(
+                        f"⚡ Apply Design Fix #1 ({fixes[0]['fix_name']}) to Stage 1",
+                        type="primary",
+                        on_click=_apply_stage1_fix_callback,
+                        args=(fixes[0]["stage1_patch"], fixes[0]["fix_name"]),
+                        width="stretch",
+                        key="cal_mgr_apply_fix1_btn",
+                    )
+                    cert_bytes = generate_calibration_certificate_pdf(
+                        twin=active_twin,
+                        drift_res=drift_res,
+                        test_plan=plan_res,
+                        title=f"Digital Twin Calibration Certificate — {twin_name}",
+                    )
+                    fb2.download_button(
+                        "📜 Download Calibration Certificate (.pdf)",
+                        data=cert_bytes,
+                        file_name="cuas_calibration_certificate.pdf",
+                        mime="application/pdf",
+                        width="stretch",
+                        key="cal_mgr_cert_dl",
+                    )
+
+                st.divider()
+                st.markdown("###### 🧪 Bayesian Active Test Planner — Highest-Value Next Range Tests")
+                st.plotly_chart(create_active_test_planner_figure(plan_res), width="stretch", key="cal_mgr_plan_fig")
+                st.dataframe(pd.DataFrame(plan_res["top_recommendations"]), width="stretch", hide_index=True)
+                st.download_button(
+                    "📋 Download Printable Range Test Card (.csv)",
+                    data=export_range_test_card_csv(plan_res).encode("utf-8"),
+                    file_name="cuas_range_test_card.csv",
+                    mime="text/csv",
+                    key="cal_mgr_testcard_dl",
+                    width="stretch",
+                )
 
         # --- TAB 18.14: ADVERSARIAL RED-VS-BLUE COMPETING MONTE CARLO & GP ML OPTIMIZER ---
         elif active_cuas_mod == _CUAS18_MODULES[13]:
@@ -4424,6 +5038,58 @@ def tab_cuas_and_small_arms() -> None:
                             key="cuas_rl_dl_btn",
                             width="stretch",
                         )
+
+                    st.divider()
+                    st.markdown("##### ⚡ Live Hardware-in-the-Loop (HIL) Telemetry Replay & Command Stream")
+                    st.caption(
+                        "Step the active Neural Fire-Control Policy (or default controller) millisecond-by-millisecond over recorded ENU/GPS drone telemetry to inspect aim commands, burst sizing, and hold-fire gates."
+                    )
+                    hl1, hl2, hl3 = st.columns(3)
+                    with hl1:
+                        hil_scn = st.selectbox(
+                            "Telemetry Track Scenario",
+                            ["evasive_fpv_dive", "multi_drone_pincer", "low_altitude_terrain_pop"],
+                            key="cuas_hil_scn",
+                        )
+                    with hl2:
+                        hil_dt = st.slider("Control Loop Step dt (ms)", 50.0, 200.0, 100.0, 25.0, key="cuas_hil_dt")
+                    with hl3:
+                        hil_breach = st.slider("Perimeter Keepout (m)", 8.0, 20.0, 12.0, 1.0, key="cuas_hil_br")
+
+                    _hil_pol_json = json.dumps(rl_cur["policy_dict"], sort_keys=True) if (rl_cur and rl_cur.get("policy_dict")) else ""
+                    hil_res = _cached_hil_policy_trace(
+                        policy_json=_hil_pol_json,
+                        track_scenario_or_csv=str(hil_scn),
+                        blue_config_json=json.dumps(best_blue, sort_keys=True),
+                        calibration_profile_json=_get_cal_twin_json(),
+                        dt_ms=float(hil_dt),
+                        breach_radius_m=float(hil_breach),
+                    )
+                    hsm = hil_res["summary"]
+                    hm_a, hm_b, hm_c, hm_d = st.columns(4)
+                    hm_a.metric("Control Frames Stepped", f"{hsm['n_frames']}", delta=f"dt={hsm['dt_ms']:.0f} ms")
+                    hm_b.metric("Fire Commands Issued", f"{hsm['fire_commands']}", delta=f"{hsm['total_rounds_commanded']} rounds")
+                    hm_c.metric("Hold-Fire Gate Frames", f"{hsm['hold_fire_frames']}", delta=hsm["policy_name"][:24])
+                    hm_d.metric("Neutralized / Breached", f"{hsm['targets_neutralized']} / {hsm['targets_breached']}", delta=f"of {hsm['total_tracks']} tracks")
+                    st.plotly_chart(create_hil_policy_timeline_figure(hil_res), width="stretch", key="cuas_hil_fig")
+                    st.dataframe(pd.DataFrame(hil_res["frames"][:25]), width="stretch", hide_index=True)
+                    hdl1, hdl2 = st.columns(2)
+                    hdl1.download_button(
+                        "📥 Download HIL Command Stream (.json)",
+                        data=hil_res["json_stream"].encode("utf-8"),
+                        file_name="cuas_hil_command_stream.json",
+                        mime="application/json",
+                        key="cuas_hil_dl_json",
+                        width="stretch",
+                    )
+                    hdl2.download_button(
+                        "📥 Download HIL Command Trace (.csv)",
+                        data=hil_res["csv_stream"].encode("utf-8"),
+                        file_name="cuas_hil_command_stream.csv",
+                        mime="text/csv",
+                        key="cuas_hil_dl_csv",
+                        width="stretch",
+                    )
 
                 with adv_tab6:
                     st.markdown("##### 🗺️ Multi-Turret 3D Battlespace & Heterogeneous Swarm Co-Evolution")

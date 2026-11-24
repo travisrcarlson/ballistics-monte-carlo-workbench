@@ -185,3 +185,73 @@ def test_ui_home_wizard_and_calibration_track_replay() -> None:
     assert not at_cal.exception
     assert "_calibrated_digital_twin" in at_cal.session_state
 
+
+def test_ui_digital_twin_sidebar_fea_sdz_and_calibration_v16(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify v1.6 Digital Twin sidebar switch, Stage 1 FEA, Tab 18.5 Collateral Safety, & Tab 18.13 modes."""
+    monkeypatch.setenv("AMMO_MC_SCENARIO_DB", str(tmp_path / "ui_v16.db"))
+
+    # 1. Stage 1 Array: FEA sliders/selectors + global Digital Twin toggle
+    at_arr = AppTest.from_file(ROOT_APP, default_timeout=60)
+    at_arr.session_state["authenticated"] = True
+    at_arr.query_params["wb"] = "cuas"
+    at_arr.query_params["mod"] = "array"
+    at_arr.run()
+    assert not at_arr.exception
+    assert at_arr.toggle(key="ui_digital_twin_active") is not None
+    assert at_arr.slider(key="cuas_fea_thk").value == 22.0
+    assert at_arr.selectbox(key="cuas_fea_mat").value == "7075-T6"
+
+    # Toggle global Digital Twin active
+    at_arr.toggle(key="ui_digital_twin_active").set_value(True).run()
+    assert not at_arr.exception
+
+    # 2. Tab 18.5 SDZ Collateral Safety Envelope controls render cleanly
+    at_sdz = AppTest.from_file(ROOT_APP, default_timeout=60)
+    at_sdz.session_state["authenticated"] = True
+    at_sdz.query_params["wb"] = "cuas"
+    at_sdz.query_params["mod"] = "sdz"
+    at_sdz.run()
+    assert not at_sdz.exception
+    assert at_sdz.selectbox(key="cuas18_collat_env").value == "urban_permissive"
+
+    # 3. Tab 18.13 Multi-Range, Photo Digitizer, Bayesian Lethality, Hardware Bench & Twin Save
+    at_cal = AppTest.from_file(ROOT_APP, default_timeout=60)
+    at_cal.session_state["authenticated"] = True
+    at_cal.query_params["wb"] = "cuas"
+    at_cal.query_params["mod"] = "calibration"
+    at_cal.run()
+    assert not at_cal.exception
+
+    at_cal.radio(key="cal_pat_mode").set_value("Multi-Range Spread Exponent & Pellet Drag").run()
+    assert not at_cal.exception
+    at_cal.button(key="cal_mr_apply_btn").click().run()
+    assert not at_cal.exception
+
+    at_cal.radio(key="cal_pat_mode").set_value("Photo-to-Pattern Hole Digitizer (PNG / JPG)").run()
+    assert not at_cal.exception
+    at_cal.button(key="cal_ph_apply_btn").click().run()
+    assert not at_cal.exception
+
+    at_cal.button(key="cal_lf_apply_btn").click().run()
+    assert not at_cal.exception
+    at_cal.button(key="cal_hb_apply_btn").click().run()
+    assert not at_cal.exception
+    at_cal.button(key="cal_mgr_save_btn").click().run()
+    assert not at_cal.exception
+    assert at_cal.session_state["ui_digital_twin_active"] is True
+    at_cal.text_input(key="cal_mgr_name").set_value("Proto-V3_Diff_Check")
+    at_cal.button(key="cal_mgr_save_btn").click().run()
+    assert not at_cal.exception
+    assert at_cal.selectbox(key="cal_diff_a") is not None
+    assert at_cal.selectbox(key="cal_diff_b") is not None
+
+    # 4. Tab 18.14 HIL telemetry widgets render cleanly
+    at_adv = AppTest.from_file(ROOT_APP, default_timeout=60)
+    at_adv.session_state["authenticated"] = True
+    at_adv.query_params["wb"] = "cuas"
+    at_adv.query_params["mod"] = "adversarial"
+    at_adv.run()
+    assert not at_adv.exception
+    assert at_adv.selectbox(key="cuas_hil_scn").value == "evasive_fpv_dive"
+
+

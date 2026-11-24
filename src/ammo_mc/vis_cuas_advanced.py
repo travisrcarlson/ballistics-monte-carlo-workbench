@@ -361,10 +361,11 @@ def create_swap_c_and_otm_figure(swap_res: dict[str, Any], otm_res: dict[str, An
         rows=1,
         cols=2,
         specs=[[{"type": "domain"}, {"type": "xy"}]],
-        horizontal_spacing=0.10,
+        column_widths=[0.40, 0.60],
+        horizontal_spacing=0.14,
         subplot_titles=[
-            f"SWaP-C Mass Budget ({swap_res.get('summary', {}).get('total_mass_kg', 0.0):.1f} kg Total)",
-            f"On-the-Move P_kill(R) vs Gyro Grade ({otm_res.get('carrier_profile', '')[:28]})",
+            f"SWaP-C Mass Budget ({swap_res.get('summary', {}).get('total_mass_kg', 0.0):.1f} kg)",
+            f"OTM P_kill(R) vs Gyro Grade ({otm_res.get('carrier_profile', '')[:24]})",
         ],
     )
 
@@ -374,8 +375,11 @@ def create_swap_c_and_otm_figure(swap_res: dict[str, Any], otm_res: dict[str, An
                 labels=list(mb.keys()),
                 values=list(mb.values()),
                 hole=0.45,
-                textinfo="label+percent",
-                showlegend=False,
+                textinfo="percent",
+                textposition="inside",
+                hoverinfo="label+value+percent",
+                showlegend=True,
+                legendgroup="mass",
             ),
             row=1,
             col=1,
@@ -398,6 +402,7 @@ def create_swap_c_and_otm_figure(swap_res: dict[str, Any], otm_res: dict[str, An
                     y=[p["pk_pct"] for p in pts],
                     mode="lines+markers",
                     name=lbl,
+                    legendgroup="otm",
                     line=dict(color=col, width=2.6, dash=dash_s),
                 ),
                 row=1,
@@ -422,9 +427,9 @@ def create_swap_c_and_otm_figure(swap_res: dict[str, Any], otm_res: dict[str, An
     fig.update_yaxes(title_text="Burst Kill Probability P_kill (%)", range=[0, 104], row=1, col=2)
     fig.update_layout(
         title="Hardware Prototyping SWaP-C Breakdown & On-the-Move Stabilization Envelope",
-        height=470,
-        margin=dict(l=30, r=30, t=80, b=55),
-        legend=dict(orientation="h", yanchor="bottom", y=-0.24, x=0.48, font=dict(size=10)),
+        height=495,
+        margin=dict(l=30, r=30, t=80, b=95),
+        legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="center", x=0.5, font=dict(size=10)),
     )
     fig.update_annotations(font_size=12)
     return fig
@@ -496,3 +501,322 @@ def create_duel_root_cause_figure(duel_res: dict[str, Any]) -> go.Figure:
     )
     fig.update_annotations(font_size=12)
     return fig
+
+
+def create_calibration_reliability_and_drift_figure(
+    lethality_res: dict[str, Any] | None,
+    drift_res: dict[str, Any] | None,
+) -> go.Figure:
+    """2-panel Empirical Calibration chart: Bayesian Reliability Curve + Nominal vs Calibrated P_kill(R)."""
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        horizontal_spacing=0.14,
+        subplot_titles=[
+            "Live-Fire Shoot-Down Bayesian Reliability (Predicted vs Observed)",
+            "Nominal vs Recalibrated Digital Twin P_kill(R) Drift",
+        ],
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=[0.0, 100.0],
+            y=[0.0, 100.0],
+            mode="lines",
+            name="Ideal Calibration (1:1)",
+            line=dict(color="#94A3B8", width=1.6, dash="dash"),
+        ),
+        row=1,
+        col=1,
+    )
+    if lethality_res and lethality_res.get("reliability_bins"):
+        rbins = lethality_res["reliability_bins"]
+        fig.add_trace(
+            go.Scatter(
+                x=[b["pred_pk_pct"] for b in rbins],
+                y=[b["obs_pk_pct"] for b in rbins],
+                error_y=dict(type="data", array=[b["ci95_half_pct"] for b in rbins], visible=True),
+                mode="lines+markers",
+                name=f"Observed Bins (Brier {lethality_res.get('brier_after', 0.0):.3f})",
+                marker=dict(size=10, color="#10B981"),
+                line=dict(color="#10B981", width=2.5),
+            ),
+            row=1,
+            col=1,
+        )
+
+    if drift_res:
+        nom = drift_res.get("nominal", {})
+        cal = drift_res.get("calibrated", {})
+        if nom.get("ranges_m") and nom.get("pk_pct"):
+            fig.add_trace(
+                go.Scatter(
+                    x=nom["ranges_m"],
+                    y=nom["pk_pct"],
+                    mode="lines+markers",
+                    name=f"Nominal (R80={nom.get('r80_m', 0.0):.1f} m)",
+                    line=dict(color="#94A3B8", width=2.2, dash="dash"),
+                ),
+                row=1,
+                col=2,
+            )
+        if cal.get("ranges_m") and cal.get("pk_pct"):
+            fig.add_trace(
+                go.Scatter(
+                    x=cal["ranges_m"],
+                    y=cal["pk_pct"],
+                    mode="lines+markers",
+                    name=f"Calibrated Twin (R80={cal.get('r80_m', 0.0):.1f} m)",
+                    line=dict(color="#38BDF8", width=2.8),
+                ),
+                row=1,
+                col=2,
+            )
+            r_list = cal["ranges_m"]
+            fig.add_trace(
+                go.Scatter(
+                    x=[min(r_list), max(r_list)],
+                    y=[80.0, 80.0],
+                    mode="lines",
+                    name="R80 Target (80%)",
+                    line=dict(color="#F59E0B", width=1.5, dash="dot"),
+                    hoverinfo="skip",
+                ),
+                row=1,
+                col=2,
+            )
+
+    fig.update_xaxes(title_text="Model Predicted P_kill (%)", range=[0, 105], row=1, col=1)
+    fig.update_yaxes(title_text="Observed Shoot-Down Rate (%)", range=[0, 105], row=1, col=1)
+    fig.update_xaxes(title_text="Slant Range (m)", row=1, col=2)
+    fig.update_yaxes(title_text="Burst P_kill (%)", range=[0, 105], row=1, col=2)
+    fig.update_layout(
+        title="Empirical Calibration Reliability & Digital Twin Model Drift",
+        height=485,
+        margin=dict(l=45, r=30, t=75, b=110),
+        legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="center", x=0.5, font=dict(size=10)),
+    )
+    fig.update_annotations(font_size=12)
+    return fig
+
+
+def create_active_test_planner_figure(test_plan: dict[str, Any]) -> go.Figure:
+    """Horizontal bar ranking of R80 uncertainty share & expected CI reduction by parameter."""
+    rows = list(test_plan.get("top_recommendations", test_plan.get("all_parameters", [])))
+    rows_rev = list(reversed(rows))
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        horizontal_spacing=0.14,
+        subplot_titles=[
+            "Uncertainty Variance Share in R80 (%)",
+            "Expected R80 95% CI Shrink per Test Batch (m)",
+        ],
+    )
+    if rows_rev:
+        lbls = [f"#{r['priority']} {r['domain']} ({r['parameter']})"[:34] for r in rows_rev]
+        fig.add_trace(
+            go.Bar(
+                y=lbls,
+                x=[r.get("variance_share_pct", 0.0) for r in rows_rev],
+                orientation="h",
+                marker_color="#F59E0B",
+                text=[f"{r.get('variance_share_pct', 0.0):.1f}%" for r in rows_rev],
+                textposition="outside",
+                showlegend=False,
+            ),
+            row=1,
+            col=1,
+        )
+        fig.add_trace(
+            go.Bar(
+                y=lbls,
+                x=[r.get("expected_ci_shrink_m", 0.0) for r in rows_rev],
+                orientation="h",
+                marker_color="#10B981",
+                text=[f"-{r.get('expected_ci_shrink_m', 0.0):.2f} m" for r in rows_rev],
+                textposition="outside",
+                showlegend=False,
+            ),
+            row=1,
+            col=2,
+        )
+    fig.update_xaxes(title_text="Variance Contribution (%)", range=[0, 115], row=1, col=1)
+    fig.update_xaxes(title_text="R80 CI Reduction (m)", row=1, col=2)
+    fig.update_layout(
+        title=f"Bayesian Active Test Planner (Current R80={test_plan.get('baseline_r80_m', 0.0):.1f} m +/- {test_plan.get('r80_ci95_halfwidth_m', 0.0):.1f} m)",
+        height=390,
+        margin=dict(l=40, r=40, t=70, b=45),
+    )
+    fig.update_annotations(font_size=12)
+    return fig
+
+
+def create_collateral_safety_envelope_figure(safety_res: dict[str, Any]) -> go.Figure:
+    """Planform polar/Cartesian acoustic blast contours, direct danger cone & falling pellet KE footprint."""
+    fig = go.Figure()
+    contours = safety_res.get("acoustic_contours", {})
+    cone = safety_res.get("direct_fire_cone", {})
+    impacts = safety_res.get("fallout_impacts", {})
+
+    style_c = [
+        ("db_140", "140 dB Acoustic Unprotected Limit", "rgba(56, 189, 248, 0.10)", "#38BDF8"),
+        ("db_165", "165 dB Single Hearing Protection", "rgba(245, 158, 11, 0.14)", "#F59E0B"),
+        ("db_175", "175 dB Peak Blast / Glass Alert", "rgba(239, 68, 68, 0.18)", "#EF4444"),
+    ]
+    for ck, cname, fill_c, line_c in style_c:
+        c = contours.get(ck, {})
+        if c.get("x_m"):
+            fig.add_trace(
+                go.Scatter(
+                    x=c["x_m"],
+                    y=c["y_m"],
+                    mode="lines",
+                    fill="toself",
+                    fillcolor=fill_c,
+                    line=dict(color=line_c, width=2.0),
+                    name=cname,
+                )
+            )
+
+    if cone.get("x_m"):
+        fig.add_trace(
+            go.Scatter(
+                x=cone["x_m"],
+                y=cone["y_m"],
+                mode="lines",
+                fill="toself",
+                fillcolor="rgba(236, 72, 153, 0.14)",
+                line=dict(color="#EC4899", width=2.2, dash="dash"),
+                name="Direct-Fire Danger Cone",
+            )
+        )
+
+    if impacts.get("x_m"):
+        tier_colors = {
+            "Lethal (>15 J)": "#EF4444",
+            "Injury (2-15 J)": "#F59E0B",
+            "Property/Glass (0.5-2 J)": "#38BDF8",
+            "Safe (<0.5 J)": "#10B981",
+        }
+        tiers_arr = impacts.get("risk_tier", [])
+        xs_arr = impacts["x_m"]
+        ys_arr = impacts["y_m"]
+        for t_lbl, t_col in tier_colors.items():
+            pts_idx = [i for i, tv in enumerate(tiers_arr) if tv == t_lbl]
+            if pts_idx:
+                fig.add_trace(
+                    go.Scatter(
+                        x=[xs_arr[i] for i in pts_idx],
+                        y=[ys_arr[i] for i in pts_idx],
+                        mode="markers",
+                        name=f"Fallout: {t_lbl}",
+                        marker=dict(size=6, color=t_col, opacity=0.78),
+                    )
+                )
+
+    fig.add_trace(
+        go.Scatter(
+            x=[0.0],
+            y=[0.0],
+            mode="markers",
+            name="C-UAS Turret Position",
+            marker=dict(size=12, color="#F8FAFC", symbol="diamond", line=dict(color="#38BDF8", width=2)),
+        )
+    )
+    sm = safety_res.get("summary", {})
+    fig.update_layout(
+        title=f"Muzzle-Blast Acoustic, Danger Cone & Collateral Fallout ({sm.get('verdict', 'EVALUATED')})",
+        xaxis_title="Downrange / East (m)",
+        yaxis_title="Crossrange / North (m)",
+        yaxis=dict(scaleanchor="x", scaleratio=1),
+        height=520,
+        margin=dict(l=50, r=30, t=75, b=95),
+        legend=dict(orientation="h", yanchor="top", y=-0.16, xanchor="center", x=0.5, font=dict(size=10)),
+    )
+    return fig
+
+
+def create_hil_policy_timeline_figure(hil_res: dict[str, Any]) -> go.Figure:
+    """2-panel Live HIL Policy Trace: Range & Estimated Pk + Burst Size & Hold-Fire Commands over ms."""
+    frames = hil_res.get("frames", [])
+    sm = hil_res.get("summary", {})
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.12,
+        subplot_titles=[
+            f"Telemetry Target Range & Burst Pk Estimate ({sm.get('policy_name', 'RL Policy')})",
+            "Millisecond Fire-Control Commands (Burst Size, Hold-Fire Gate & Barrels Ready)",
+        ],
+    )
+    if frames:
+        ts_ms = [f["t_ms"] for f in frames]
+        fig.add_trace(
+            go.Scatter(
+                x=ts_ms,
+                y=[f.get("slant_range_m") for f in frames],
+                mode="lines+markers",
+                name="Target Slant Range (m)",
+                line=dict(color="#38BDF8", width=2.2),
+            ),
+            row=1,
+            col=1,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=ts_ms,
+                y=[f.get("pk_est_pct", 0.0) for f in frames],
+                mode="lines",
+                name="Estimated Burst Pk (%)",
+                line=dict(color="#10B981", width=2.0, dash="dash"),
+            ),
+            row=1,
+            col=1,
+        )
+        fig.add_trace(
+            go.Bar(
+                x=ts_ms,
+                y=[f.get("cmd_burst_size", 0) for f in frames],
+                name="Commanded Burst (barrels)",
+                marker_color="#EF4444",
+            ),
+            row=2,
+            col=1,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=ts_ms,
+                y=[f.get("barrels_ready", 0) for f in frames],
+                mode="lines+markers",
+                name="Loaded Barrels Ready",
+                line=dict(color="#F59E0B", width=2.0),
+            ),
+            row=2,
+            col=1,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=ts_ms,
+                y=[round(10.0 * float(f.get("hold_fire_prob", 0.0)), 2) for f in frames],
+                mode="lines",
+                name="Hold-Fire Gate (x10 scale)",
+                line=dict(color="#A78BFA", width=1.8, dash="dot"),
+            ),
+            row=2,
+            col=1,
+        )
+
+    fig.update_yaxes(title_text="Range (m) / Pk (%)", row=1, col=1)
+    fig.update_yaxes(title_text="Barrels / Gate Score", row=2, col=1)
+    fig.update_xaxes(title_text="Mission Clock (ms)", row=2, col=1)
+    fig.update_layout(
+        title=f"Live HIL Telemetry Replay ({sm.get('fire_commands', 0)} fire events | {sm.get('hold_fire_frames', 0)} hold gates)",
+        height=550,
+        margin=dict(l=50, r=30, t=75, b=120),
+        legend=dict(orientation="h", yanchor="top", y=-0.22, xanchor="center", x=0.5, font=dict(size=10)),
+    )
+    fig.update_annotations(font_size=12)
+    return fig
+

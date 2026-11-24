@@ -406,6 +406,7 @@ def simulate_anti_drone_multishotgun_mc(
     drone_roll_deg: float = 0.0,
     custom_drone_spec: dict[str, Any] | None = None,
     custom_shell_spec: dict[str, Any] | None = None,
+    calibration_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute Monte Carlo simulation of an anti-drone defense volley using a multi-shotgun array.
 
@@ -420,6 +421,20 @@ def simulate_anti_drone_multishotgun_mc(
       - Overall drone kill probability P_kill, lethal hit counts, and energy deposition
     """
     rng = np.random.default_rng(seed)
+    cp = dict(calibration_profile or {})
+    cal_mv_scale = max(0.50, min(1.50, float(cp.get("mv_scale", 1.0) or 1.0)))
+    cal_spread_factor = max(0.35, float(cp.get("spread_factor", 1.0) or 1.0))
+    cal_spread_exp = max(0.80, min(1.80, float(cp.get("spread_exponent", 1.15) or 1.15)))
+    cal_cd_scale = max(0.40, min(2.20, float(cp.get("pellet_cd_scale", 1.0) or 1.0)))
+    cal_avuln_scale = max(0.25, min(2.50, float(cp.get("drone_avuln_scale", 1.0) or 1.0)))
+    cal_avuln_lin = math.sqrt(cal_avuln_scale)
+    cal_ecrit_scale = max(0.30, min(2.60, float(cp.get("drone_ecrit_scale", 1.0) or 1.0)))
+    cal_aim_extra_mrad = math.sqrt(
+        (float(cp.get("aim_bias_mrad", 0.0) or 0.0) ** 2)
+        + (float(cp.get("barrel_zero_scatter_mrad", 0.0) or 0.0) ** 2)
+        + (float(cp.get("otm_jitter_mrad", 0.0) or 0.0) ** 2)
+        + (max(0.0, float(cp.get("tracker_jitter_mrad")) - 1.2) ** 2 if cp.get("tracker_jitter_mrad") is not None else 0.0)
+    )
 
     # 1. Resolve Baseline Nominal Ammunition Parameters
     presets = get_shotgun_presets()
@@ -461,14 +476,17 @@ def simulate_anti_drone_multishotgun_mc(
     eff_pellets = nom_ammo["pellets"]
     eff_d_mm = nom_ammo["d_mm"]
     eff_m_g = nom_ammo["m_g"]
-    eff_v0 = nom_ammo["v0"]
+    eff_v0 = nom_ammo["v0"] * cal_mv_scale
 
     # 2. Resolve Drone Specs & 3D Projected Cross-Section Geometry
     drone_specs_cat = get_drone_target_specs()
     if custom_drone_spec is not None:
         drone_spec = dict(custom_drone_spec)
     else:
-        drone_spec = drone_specs_cat.get(drone_model, drone_specs_cat["commercial_quad_medium"])
+        drone_spec = dict(drone_specs_cat.get(drone_model, drone_specs_cat["commercial_quad_medium"]))
+    for ek in ("lethal_energy_rotor_j", "lethal_energy_core_j", "lethal_energy_battery_j", "lethal_energy_arm_j"):
+        if ek in drone_spec:
+            drone_spec[ek] = float(drone_spec[ek]) * cal_ecrit_scale
     crit_hits_req = int(drone_spec.get("critical_hits_for_kill", 3))
 
     aspect_geom = compute_drone_projected_geometry(
@@ -580,7 +598,8 @@ def simulate_anti_drone_multishotgun_mc(
         "flight_time_s": [],
     }
 
-    aim_sigma_m = target_distance_m * (aim_error_mrad / 1000.0) if aim_error_mrad > 0 else 0.0
+    eff_aim_err_mrad = math.hypot(max(0.0, float(aim_error_mrad)), cal_aim_extra_mrad)
+    aim_sigma_m = target_distance_m * (eff_aim_err_mrad / 1000.0) if eff_aim_err_mrad > 0 else 0.0
     choke_defs = get_choke_definitions()
 
     barrel_ammo_specs = [_resolve_barrel_ammo(str(b.get("ammunition_preset", ammunition_preset))) for b in barrels]
@@ -615,7 +634,7 @@ def simulate_anti_drone_multishotgun_mc(
             t_fire = fire_times_s[b_idx]
 
             # Barrel length velocity scaling & gas wash turbulence
-            v0_barrel = float(b_spec["v0"]) + 2.2 * (b_len - 28.0)
+            v0_barrel = (float(b_spec["v0"]) + 2.2 * (b_len - 28.0)) * cal_mv_scale
             wash_turb = 1.0 + 0.35 * (max(0.0, 24.0 - b_len) / 24.0) ** 1.5
 
             # Choke radial spread parameter
@@ -626,7 +645,11 @@ def simulate_anti_drone_multishotgun_mc(
             r_bench = 0.381
             sigma_ref = r_bench / math.sqrt(-2.0 * math.log(1.0 - p_bench))
             theta_choke = sigma_ref / 36.58
-            sigma_radial = (0.01852 / 4.0 + theta_choke * target_distance_m * (target_distance_m / 36.58) ** 0.15) * wash_turb
+            sigma_radial = (
+                (0.01852 / 4.0 + theta_choke * target_distance_m * ((target_distance_m / 36.58) ** (cal_spread_exp - 1.0)))
+                * wash_turb
+                * cal_spread_factor
+            )
 
             # Optional dynamic recoil muzzle climb / yaw walk offsets
             dyn_yaw = float(barrel_yaw_offsets_mrad[b_idx]) if barrel_yaw_offsets_mrad and b_idx < len(barrel_yaw_offsets_mrad) else 0.0
@@ -637,7 +660,7 @@ def simulate_anti_drone_multishotgun_mc(
             z_bore = z0 + target_distance_m * ((b["aim_pitch_mrad"] + dyn_pitch) / 1000.0) + aim_err_z
 
             barrel_stats_map[b_id]["pellets_fired"] += b_pellets
-            b_cd_path = _eff_path_cd(v0_barrel, b_d_m, b_m_kg, target_distance_m, b_cd_base)
+            b_cd_path = _eff_path_cd(v0_barrel, b_d_m, b_m_kg, target_distance_m, b_cd_base) * cal_cd_scale
 
             # Generate pellets for this barrel
             for _ in range(b_pellets):
@@ -666,8 +689,14 @@ def simulate_anti_drone_multishotgun_mc(
 
                 ke_pellet = 0.5 * b_m_kg * (v_impact**2)
 
-                # Component hit check
-                hit_info = evaluate_drone_impact(y_rel, z_rel, drone_spec, ke_pellet, aspect_geometry=aspect_geom)
+                # Component hit check (incorporate empirical A_vuln area scaling cleanly)
+                hit_info = evaluate_drone_impact(
+                    y_rel / cal_avuln_lin,
+                    z_rel / cal_avuln_lin,
+                    drone_spec,
+                    ke_pellet,
+                    aspect_geometry=aspect_geom,
+                )
 
                 if hit_info["is_hit"]:
                     v_hits += 1
@@ -1055,6 +1084,7 @@ def evaluate_antidrone_effective_range_envelope(
     custom_drone_spec: dict[str, Any] | None = None,
     custom_shell_spec: dict[str, Any] | None = None,
     compare_ammo_presets: list[str] | None = None,
+    calibration_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Sweep slant range for an anti-drone array to derive P_kill(R), R80, and R50 thresholds."""
     stations = sorted(float(d) for d in (distance_stations_m or [15.0, 25.0, 35.0, 45.0, 55.0, 65.0, 75.0, 85.0]))
@@ -1095,6 +1125,7 @@ def evaluate_antidrone_effective_range_envelope(
                 drone_roll_deg=drone_roll_deg,
                 custom_drone_spec=custom_drone_spec,
                 custom_shell_spec=custom_sh,
+                calibration_profile=calibration_profile,
             )
             sm = sim["summary"]
             records.append({
@@ -1185,6 +1216,7 @@ def evaluate_antidrone_range_speed_heatmap(
     drone_roll_deg: float = 0.0,
     custom_drone_spec: dict[str, Any] | None = None,
     custom_shell_spec: dict[str, Any] | None = None,
+    calibration_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compute a 2D Speed x Slant-Range P_kill engagement envelope heatmap."""
     d_stations = sorted(float(d) for d in (distance_stations_m or [15.0, 25.0, 35.0, 45.0, 60.0, 75.0]))
@@ -1234,6 +1266,7 @@ def evaluate_antidrone_range_speed_heatmap(
                 drone_roll_deg=drone_roll_deg,
                 custom_drone_spec=custom_drone_spec,
                 custom_shell_spec=custom_shell_spec,
+                calibration_profile=calibration_profile,
             )
             sm = sim["summary"]
             pk = float(sm["kill_probability_pct"])

@@ -19,6 +19,7 @@ from ammo_mc.ui.common import (
     _cached_turret_sizing_wizard,
     _navigate_to,
     _render_sidebar_header,
+    get_active_calibration_profile,
     is_expert_mode,
 )
 
@@ -29,8 +30,10 @@ def _cached_wizard_exports(
     drone_model: str,
     speed_mps: float,
     range_m: float,
+    calibration_profile_json: str = "",
 ) -> tuple[bytes, str]:
     cfg = json.loads(cfg_json)
+    cal_prof = json.loads(calibration_profile_json) if calibration_profile_json else None
     sim = simulate_anti_drone_multishotgun_mc(
         layout_type=str(cfg.get("layout_type", "circular")),
         n_barrels=int(cfg.get("n_barrels", 6)),
@@ -47,6 +50,7 @@ def _cached_wizard_exports(
         seed=42,
         inner_ammunition_preset=cfg.get("inner_ammunition_preset") or None,
         inner_choke=cfg.get("inner_choke") or None,
+        calibration_profile=cal_prof,
     )
     pdf_bytes = generate_cuas_array_spec_sheet_pdf(
         array_config=cfg,
@@ -168,12 +172,20 @@ def tab_home() -> None:
                 key="home_wiz_mount",
             )
 
+        cal_twin_home = get_active_calibration_profile()
+        cal_json_home = json.dumps(cal_twin_home, sort_keys=True) if cal_twin_home else ""
+        if cal_twin_home:
+            st.info(
+                f"🧬 Sizing against **Calibrated Digital Twin**: spread={cal_twin_home.get('spread_factor', 1.0):.2f}x, "
+                f"E_crit={cal_twin_home.get('drone_ecrit_scale', 1.0):.2f}x, recoil={cal_twin_home.get('recoil_force_scale', 1.0):.2f}x"
+            )
         wiz_res = _cached_turret_sizing_wizard(
             drone_model=str(wiz_drone),
             threat_speed_mps=float(wiz_speed),
             required_range_m=float(wiz_range),
             mount_class=str(wiz_mount),
             budget_priority="balanced",
+            calibration_profile_json=cal_json_home,
         )
         top_3 = wiz_res.get("top_3", [])
         if not wiz_res.get("has_feasible", False):
@@ -203,6 +215,7 @@ def tab_home() -> None:
                 str(wiz_drone),
                 float(wiz_speed),
                 float(wiz_range),
+                calibration_profile_json=cal_json_home,
             )
             wb1, wb2, wb3 = st.columns(3)
             wb1.button(
