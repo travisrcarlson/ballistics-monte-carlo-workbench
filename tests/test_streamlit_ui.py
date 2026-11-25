@@ -281,3 +281,30 @@ def test_ui_fpv_quincunx_alda_spartan_pg7m_controls() -> None:
     assert at.session_state["_report_array_summary"]["headwind_mps"] == 8.0
 
 
+def test_ui_scientific_vv_and_high_fidelity_controls() -> None:
+    """Verify high-fidelity physics expander in Stage 1 and Validation experimental benchmarks."""
+    at = AppTest.from_file(ROOT_APP, default_timeout=60)
+    at.session_state["authenticated"] = True
+    at.query_params["wb"] = "cuas"
+    at.query_params["mod"] = "array"
+    at.run()
+    assert not at.exception
+
+    at.checkbox(key="cuas_hf_rotor_solidity").set_value(True)
+    at.checkbox(key="cuas_hf_v50_limit").set_value(True)
+    at.checkbox(key="cuas_hf_ray_shield").set_value(True)
+    at.selectbox(key="cuas_pattern_dist").set_value("core_flyer_mixture")
+    at.slider(key="cuas_flyer_frac").set_value(0.18)
+    at.run()
+    assert not at.exception
+
+    # Validation tab with Experimental C-UAS Benchmarks E-01..E-06
+    at_val = AppTest.from_file(ROOT_APP, default_timeout=60)
+    at_val.session_state["authenticated"] = True
+    at_val.query_params["wb"] = "validation"
+    at_val.run()
+    assert not at_val.exception
+    assert at_val.session_state["active_workbench"] == "Audit & Sources"
+
+
+

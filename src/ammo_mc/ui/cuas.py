@@ -306,8 +306,31 @@ from ammo_mc.cuas_calibration_twin import (
     generate_sample_multirange_pattern_rows,
     generate_sample_tracker_test_rows,
     generate_synthetic_pattern_board_png,
+    generate_skewed_pattern_board_png_with_corners,
     get_default_nominal_twin,
     merge_twin_updates,
+)
+from ammo_mc.cuas_scientific_vv import (
+    build_reproducible_validation_bundle,
+    calibrate_doppler_radar_drag,
+    compute_epistemic_aleatory_uq_envelope,
+    export_doe_test_card_csv,
+    generate_sample_blind_holdout_dataset,
+    generate_sample_doppler_radar_csv,
+    generate_sample_shotstring_csv,
+    generate_scientific_vv_dossier_html,
+    generate_scientific_vv_dossier_markdown,
+    parse_weather_and_shotstring_csv,
+    plan_range_validation_doe,
+    run_blind_holdout_validation,
+    run_experimental_validation_benchmarks,
+)
+from ammo_mc.vis_cuas_vv import (
+    create_blind_holdout_validation_figure,
+    create_doppler_drag_fit_figure,
+    create_epistemic_uq_envelope_figure,
+    create_experimental_benchmarks_figure,
+    create_sprt_stopping_boundaries_figure,
 )
 from ammo_mc.cuas_hardware import (
     CARRIER_OTM_PROFILES,
@@ -516,6 +539,11 @@ def _render_effective_range_tab(
     propellant_type: str = "double_base",
     drag_model: str = "compressible_re_m",
     pellets_per_shot: int | None = None,
+    use_rotor_solidity: bool = False,
+    use_v50_ballistic_limit: bool = False,
+    enable_ray_shielding: bool = False,
+    pattern_distribution: str = "gaussian",
+    flyer_fraction: float = 0.12,
     annex_c_sample: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Render Stage 1 Effective Range Curve (R80 / R50), Annex C table, and optional Speed x Range Heatmap."""
@@ -585,6 +613,11 @@ def _render_effective_range_tab(
             propellant_type=propellant_type,
             drag_model=drag_model,
             pellets_per_shot=pellets_per_shot,
+            use_rotor_solidity=use_rotor_solidity,
+            use_v50_ballistic_limit=use_v50_ballistic_limit,
+            enable_ray_shielding=enable_ray_shielding,
+            pattern_distribution=pattern_distribution,
+            flyer_fraction=flyer_fraction,
         )
     st.session_state["_report_range_envelope"] = env_res
     esm = env_res["summary"]
@@ -1980,6 +2013,47 @@ def tab_cuas_and_small_arms() -> None:
                         key="cuas_drag_model",
                     )
 
+            with st.expander("🔬 High-Fidelity Physics & Terminal Realism", expanded=False):
+                hfc1, hfc2 = st.columns(2)
+                with hfc1:
+                    cuas_hf_rotor_solidity = st.checkbox(
+                        "Rotor Blade Swept Transit Kinematics (Solidity Ratio)",
+                        value=False,
+                        key="cuas_hf_rotor_solidity",
+                        help="Calculates rotating blade sweep volume during pellet transit across the rotor disc plane.",
+                    )
+                    cuas_hf_v50_limit = st.checkbox(
+                        "Sectional Density V50 Ballistic Limit & Recht-Ipson Residual Velocity",
+                        value=False,
+                        key="cuas_hf_v50_limit",
+                        help="Evaluates component-specific armor profiles and Recht-Ipson ballistic limit perforation.",
+                    )
+                    cuas_hf_ray_shield = st.checkbox(
+                        "3D Front-to-Back Component Ray Shielding",
+                        value=False,
+                        key="cuas_hf_ray_shield",
+                        help="Shields rear components when pellets perforate or are stopped by front components.",
+                    )
+                with hfc2:
+                    cuas_pattern_dist = st.selectbox(
+                        "Shot Cloud Dispersion Profile",
+                        ["gaussian", "core_flyer_mixture", "choke_annular_mixture"],
+                        format_func=lambda k: {
+                            "gaussian": "Standard Gaussian (Nominal)",
+                            "core_flyer_mixture": "Core-Flyer Mixture (Heavy Peripheral Drag)",
+                            "choke_annular_mixture": "Choke Annular Ring Mixture (Tight Chokes)",
+                        }.get(k, k),
+                        key="cuas_pattern_dist",
+                    )
+                    cuas_flyer_frac = st.slider(
+                        "Flyer / Non-Gaussian Fraction",
+                        0.05,
+                        0.35,
+                        0.12,
+                        0.01,
+                        key="cuas_flyer_frac",
+                    )
+
             parsed_custom = None
             if cuas_layout == "custom":
                 parsed_custom = []
@@ -2051,6 +2125,11 @@ def tab_cuas_and_small_arms() -> None:
                     propellant_type=str(cuas_prop_type),
                     drag_model=str(cuas_drag_model),
                     pellets_per_shot=cuas_pellet_ovr if not custom_shell_spec else None,
+                    use_rotor_solidity=bool(cuas_hf_rotor_solidity),
+                    use_v50_ballistic_limit=bool(cuas_hf_v50_limit),
+                    enable_ray_shielding=bool(cuas_hf_ray_shield),
+                    pattern_distribution=str(cuas_pattern_dist),
+                    flyer_fraction=float(cuas_flyer_frac),
                 )
 
             cu_sm = cuas_sim["summary"]
@@ -2213,6 +2292,11 @@ def tab_cuas_and_small_arms() -> None:
                 propellant_type=str(cuas_prop_type),
                 drag_model=str(cuas_drag_model),
                 pellets_per_shot=cuas_pellet_ovr if not custom_shell_spec else None,
+                use_rotor_solidity=bool(cuas_hf_rotor_solidity),
+                use_v50_ballistic_limit=bool(cuas_hf_v50_limit),
+                enable_ray_shielding=bool(cuas_hf_ray_shield),
+                pattern_distribution=str(cuas_pattern_dist),
+                flyer_fraction=float(cuas_flyer_frac),
                 annex_c_sample={
                     "n_pellets": cu_sm["total_pellets_per_volley"],
                     "vulnerable_area_m2": cu_sm["presented_area_m2"],
@@ -2278,6 +2362,11 @@ def tab_cuas_and_small_arms() -> None:
                                 propellant_type=str(cuas_prop_type),
                                 drag_model=str(cuas_drag_model),
                                 pellets_per_shot=cuas_pellet_ovr if not custom_shell_spec else None,
+                                use_rotor_solidity=bool(cuas_hf_rotor_solidity),
+                                use_v50_ballistic_limit=bool(cuas_hf_v50_limit),
+                                enable_ray_shielding=bool(cuas_hf_ray_shield),
+                                pattern_distribution=str(cuas_pattern_dist),
+                                flyer_fraction=float(cuas_flyer_frac),
                             )
                             for d_sl in (25.0, 50.0, 75.0)
                         ]
@@ -2426,6 +2515,11 @@ def tab_cuas_and_small_arms() -> None:
                                 propellant_type=str(cuas_prop_type),
                                 drag_model=str(cuas_drag_model),
                                 pellets_per_shot=cuas_pellet_ovr if not custom_shell_spec else None,
+                                use_rotor_solidity=bool(cuas_hf_rotor_solidity),
+                                use_v50_ballistic_limit=bool(cuas_hf_v50_limit),
+                                enable_ray_shielding=bool(cuas_hf_ray_shield),
+                                pattern_distribution=str(cuas_pattern_dist),
+                                flyer_fraction=float(cuas_flyer_frac),
                             )
                             for d_sl in (25.0, 50.0, 75.0)
                         ]
@@ -4266,7 +4360,7 @@ def tab_cuas_and_small_arms() -> None:
                 "Ingest single-range CSVs, multi-range tables, target-board photos, chronograph logs, recorded flight tracks, "
                 "live-fire drone shoot-down results, and hardware/tracker bench measurements — then sync into the global Calibrated Digital Twin."
             )
-            cal_t1, cal_t2, cal_t3, cal_t4, cal_t5, cal_t6, cal_t7 = st.tabs([
+            cal_t1, cal_t2, cal_t3, cal_t4, cal_t5, cal_t6, cal_t7, cal_t8, cal_t9 = st.tabs([
                 "🎯 Patterning (CSV / Multi-Range / Photo)",
                 "📏 Chronograph MV & Temp",
                 "🚀 Exterior Drag Form-Factor",
@@ -4274,6 +4368,8 @@ def tab_cuas_and_small_arms() -> None:
                 "💥 Live-Fire Drone Lethality",
                 "🔧 Hardware Bench & Tracker",
                 "🧬 Twin Manager, Drift & Test Planner",
+                "📡 Doppler Radar & Shot-String",
+                "🔬 Scientific V&V, UQ & Range DOE",
             ])
 
             with cal_t1:
@@ -4380,14 +4476,57 @@ def tab_cuas_and_small_arms() -> None:
                     with ph3:
                         bd_sig = st.slider("Hole Threshold (σ MAD)", 1.6, 4.5, 2.6, 0.2, key="cal_ph_sig")
                     ph_up = st.file_uploader("Upload Patterning Target Photo (.png / .jpg)", type=["png", "jpg", "jpeg"], key="cal_ph_up")
-                    if st.button("📸 Load Built-In Synthetic Target-Board Photo", key="cal_ph_sample_btn"):
-                        st.session_state["_cal_ph_bytes"] = generate_synthetic_pattern_board_png(
-                            range_m=float(pat_rng),
-                            nominal_choke=str(pat_choke),
-                            board_width_m=float(bd_w_m),
-                            board_height_m=float(bd_h_m),
-                            seed=42,
-                        )
+
+                    sp_b1, sp_b2 = st.columns(2)
+                    with sp_b1:
+                        if st.button("📸 Load Built-In Orthogonal Photo", key="cal_ph_sample_btn"):
+                            st.session_state["_cal_ph_bytes"] = generate_synthetic_pattern_board_png(
+                                range_m=float(pat_rng),
+                                nominal_choke=str(pat_choke),
+                                board_width_m=float(bd_w_m),
+                                board_height_m=float(bd_h_m),
+                                seed=42,
+                            )
+                            st.session_state["cal_ph_use_homo"] = False
+                    with sp_b2:
+                        if st.button("📐 Load Skewed Photo with 4 Corner Points", key="cal_ph_skewed_sample_btn"):
+                            sk_img, sk_c = generate_skewed_pattern_board_png_with_corners(
+                                range_m=float(pat_rng),
+                                nominal_choke=str(pat_choke),
+                                board_width_m=float(bd_w_m),
+                                board_height_m=float(bd_h_m),
+                                seed=42,
+                            )
+                            st.session_state["_cal_ph_bytes"] = sk_img
+                            st.session_state["cal_ph_use_homo"] = True
+                            st.session_state["cal_ph_c1x"] = float(sk_c[0][0])
+                            st.session_state["cal_ph_c1y"] = float(sk_c[0][1])
+                            st.session_state["cal_ph_c2x"] = float(sk_c[1][0])
+                            st.session_state["cal_ph_c2y"] = float(sk_c[1][1])
+                            st.session_state["cal_ph_c3x"] = float(sk_c[2][0])
+                            st.session_state["cal_ph_c3y"] = float(sk_c[2][1])
+                            st.session_state["cal_ph_c4x"] = float(sk_c[3][0])
+                            st.session_state["cal_ph_c4y"] = float(sk_c[3][1])
+
+                    use_homo = st.checkbox("Enable 4-Corner DLT Homography Rectification", value=st.session_state.get("cal_ph_use_homo", False), key="cal_ph_use_homo")
+                    corner_pts = None
+                    if use_homo:
+                        st.caption("Specify pixel coordinates of the 4 target-board corners (Top-Left, Top-Right, Bottom-Right, Bottom-Left) to rectify camera skew.")
+                        hc1, hc2, hc3, hc4 = st.columns(4)
+                        with hc1:
+                            c1_x = st.number_input("C1 (TL) X (px)", 0.0, 4000.0, float(st.session_state.get("cal_ph_c1x", 120.0)), 1.0, key="cal_ph_c1x")
+                            c1_y = st.number_input("C1 (TL) Y (px)", 0.0, 4000.0, float(st.session_state.get("cal_ph_c1y", 110.0)), 1.0, key="cal_ph_c1y")
+                        with hc2:
+                            c2_x = st.number_input("C2 (TR) X (px)", 0.0, 4000.0, float(st.session_state.get("cal_ph_c2x", 710.0)), 1.0, key="cal_ph_c2x")
+                            c2_y = st.number_input("C2 (TR) Y (px)", 0.0, 4000.0, float(st.session_state.get("cal_ph_c2y", 140.0)), 1.0, key="cal_ph_c2y")
+                        with hc3:
+                            c3_x = st.number_input("C3 (BR) X (px)", 0.0, 4000.0, float(st.session_state.get("cal_ph_c3x", 730.0)), 1.0, key="cal_ph_c3x")
+                            c3_y = st.number_input("C3 (BR) Y (px)", 0.0, 4000.0, float(st.session_state.get("cal_ph_c3y", 730.0)), 1.0, key="cal_ph_c3y")
+                        with hc4:
+                            c4_x = st.number_input("C4 (BL) X (px)", 0.0, 4000.0, float(st.session_state.get("cal_ph_c4x", 90.0)), 1.0, key="cal_ph_c4x")
+                            c4_y = st.number_input("C4 (BL) Y (px)", 0.0, 4000.0, float(st.session_state.get("cal_ph_c4y", 700.0)), 1.0, key="cal_ph_c4y")
+                        corner_pts = [(c1_x, c1_y), (c2_x, c2_y), (c3_x, c3_y), (c4_x, c4_y)]
+
                     img_bytes = ph_up.getvalue() if ph_up is not None else st.session_state.get("_cal_ph_bytes") or generate_synthetic_pattern_board_png(
                         range_m=float(pat_rng),
                         nominal_choke=str(pat_choke),
@@ -4404,6 +4543,7 @@ def tab_cuas_and_small_arms() -> None:
                             nominal_choke=str(pat_choke),
                             ammunition_preset=str(pat_ammo),
                             threshold_sigma=float(bd_sig),
+                            corner_points_px=corner_pts,
                         )
                         d_pat = dig_res["pattern_calibration"]
                         dp1, dp2, dp3, dp4 = st.columns(4)
@@ -4863,6 +5003,173 @@ def tab_cuas_and_small_arms() -> None:
                     key="cal_mgr_testcard_dl",
                     width="stretch",
                 )
+
+            with cal_t8:
+                st.markdown("##### 📡 Doppler Radar Pellet Drag Regression & Shot-String Analysis")
+                st.caption(
+                    "Regress projectile velocity decay $v(R)$ from radar track CSVs to calibrate in-flight $C_d$ scale, "
+                    "and analyze temporal shot-string spatial elongation and moist-air density."
+                )
+                r_ref_ammo = str(st.session_state.get("cal_pat_ammo", list(sg_presets_18.keys())[0]))
+                r_c1, r_c2 = st.columns(2)
+                with r_c1:
+                    st.markdown("**Doppler Radar Track $v(R)$ Fit**")
+                    dop_up = st.file_uploader("Upload Doppler Radar Track CSV (`range_m, velocity_mps`)", type=["csv"], key="cal_dop_up")
+                    if st.button("📋 Load Sample Doppler Radar Track CSV", key="cal_dop_sample_btn"):
+                        st.session_state["_cal_dop_csv"] = generate_sample_doppler_radar_csv(ammunition_preset=r_ref_ammo)
+                    dop_csv = dop_up.getvalue().decode("utf-8", errors="replace") if dop_up is not None else st.session_state.get("_cal_dop_csv") or generate_sample_doppler_radar_csv(ammunition_preset=r_ref_ammo)
+                    try:
+                        dop_res = calibrate_doppler_radar_drag(dop_csv, ammunition_preset=r_ref_ammo)
+                        dm1, dm2, dm3, dm4 = st.columns(4)
+                        dm1.metric("Fitted V0", f"{dop_res['fitted_v0_mps']:.1f} m/s", delta=f"Nom: {dop_res['nominal_v0_mps']:.1f} m/s")
+                        dm2.metric("Drag Cd Scale", f"{dop_res['calibrated_cd_scale']:.2f}×", delta=f"± {dop_res['cd_scale_se']:.2f} SE")
+                        dm3.metric("Velocity RMSE", f"{dop_res['rmse_velocity_mps']:.2f} m/s", delta=f"{dop_res['n_track_points']} points")
+                        dm4.metric("Fit Status", "CONVERGED" if dop_res["success"] else "FAILED")
+                        st.plotly_chart(create_doppler_drag_fit_figure(dop_res), width="stretch", key="cal_dop_fig")
+                        if st.button("✅ Apply Doppler Drag Cd Scale to Digital Twin", type="primary", key="cal_dop_apply_btn"):
+                            st.session_state["_calibrated_digital_twin"] = merge_twin_updates(
+                                st.session_state.get("_calibrated_digital_twin"),
+                                dop_res["twin_patch"],
+                                domain="Doppler Radar Drag",
+                                summary=f"Fitted Cd scale {dop_res['calibrated_cd_scale']:.2f}x (RMSE {dop_res['rmse_velocity_mps']:.2f} m/s)",
+                            )
+                            st.session_state["_digital_twin_pending_enable"] = True
+                            st.success(f"Applied Cd scale {dop_res['calibrated_cd_scale']:.2f}x to Calibrated Digital Twin!")
+                    except Exception as exc:
+                        st.error(f"Doppler calibration error: {exc}")
+
+                with r_c2:
+                    st.markdown("**Environmental Met & Acoustic Shot-String**")
+                    ss_up = st.file_uploader("Upload Acoustic / Optical Shot-String CSV (`arrival_time_ms` or `velocity_mps`)", type=["csv"], key="cal_ss_up")
+                    ss_rng = st.number_input("Shot-String Target Range (m)", 15.0, 100.0, 50.0, 5.0, key="cal_ss_rng")
+                    if st.button("📋 Load Sample Shot-String & Met CSV", key="cal_ss_sample_btn"):
+                        st.session_state["_cal_ss_csv"] = generate_sample_shotstring_csv(range_m=float(ss_rng))
+                    ss_csv = ss_up.getvalue().decode("utf-8", errors="replace") if ss_up is not None else st.session_state.get("_cal_ss_csv") or generate_sample_shotstring_csv(range_m=float(ss_rng))
+                    try:
+                        ss_res = parse_weather_and_shotstring_csv(ss_csv, range_m=float(ss_rng))
+                        sm1, sm2, sm3, sm4 = st.columns(4)
+                        sm1.metric("Air Density (ρ)", f"{ss_res['air_density_kg_m3']:.3f} kg/m³", delta=f"{ss_res['ambient_temp_c']:.1f}°C, {ss_res['relative_humidity_pct']:.0f}% RH")
+                        sm2.metric("Shot-String Length", f"{ss_res['string_length_m']:.2f} m", delta=f"Duration: {ss_res['string_duration_ms']:.2f} ms")
+                        sm3.metric("Pellets Arrived", f"{ss_res['n_pellets_recorded']}", delta=f"Spread SD: {ss_res['arrival_time_sd_ms']:.2f} ms")
+                        sm4.metric("Sound Speed", f"{ss_res['speed_of_sound_mps']:.1f} m/s", delta=f"P_amb: {ss_res['ambient_pressure_hpa']:.0f} hPa")
+                        st.json({
+                            "range_m": ss_res["range_m"],
+                            "string_length_5_95_pct_m": ss_res["string_length_m"],
+                            "string_duration_ms": ss_res["string_duration_ms"],
+                            "air_density_kg_m3": ss_res["air_density_kg_m3"],
+                            "virtual_temperature_k": ss_res["virtual_temp_k"],
+                        })
+                    except Exception as exc:
+                        st.error(f"Shot-string analysis error: {exc}")
+
+            with cal_t9:
+                st.markdown("##### 🔬 Scientific V&V, Uncertainty Quantification & Range DOE Suite")
+                st.caption(
+                    "Rigorous verification & validation tools conforming to ASME V&V 20 guidelines, Ferson-Oberkampf Area Validation Metrics (AVM), "
+                    "Wald Sequential Probability Ratio Tests (SPRT) early-stopping boundaries, and Latin Hypercube epistemic uncertainty propagation."
+                )
+
+                vv_tab1, vv_tab2, vv_tab3, vv_tab4, vv_tab5 = st.tabs([
+                    "🎯 Blind Holdout Cross-Validation",
+                    "📊 Epistemic + Aleatory UQ P-Boxes",
+                    "🎲 Pre-Test Range DOE & Wald SPRT",
+                    "🧪 Published C-UAS Benchmarks (E-01..E-06)",
+                    "📦 FAIR Validation Dossier & SHA-256 Bundle",
+                ])
+
+                with vv_tab1:
+                    st.markdown("###### Blind Out-of-Sample Holdout Cross-Validation")
+                    st.caption("Train the Digital Twin strictly on near-range stations and evaluate true predictive error on distant holdout stations.")
+                    ref_choke_val = str(st.session_state.get("cal_pat_choke", "Modified"))
+                    if st.button("🚀 Run Blind Holdout Cross-Validation", key="cal_vv_holdout_btn", type="primary"):
+                        sample_ds = generate_sample_blind_holdout_dataset()
+                        st.session_state["_cal_holdout_res"] = run_blind_holdout_validation(
+                            sample_ds["pattern_rows"],
+                            livefire_rows=sample_ds["livefire_rows"],
+                            holdout_ranges_m=(65.0, 75.0),
+                            nominal_choke=ref_choke_val,
+                            ammunition_preset=r_ref_ammo,
+                        )
+                    if "_cal_holdout_res" in st.session_state:
+                        h_res = st.session_state["_cal_holdout_res"]
+                        h1, h2, h3, h4 = st.columns(4)
+                        h1.metric("Calibrated Holdout RMSE", f"{h_res['holdout_rmse_calibrated_m']:.3f} m", delta=f"{h_res['error_reduction_pct']:+.1f}% vs Nominal")
+                        h2.metric("Nominal Holdout RMSE", f"{h_res['holdout_rmse_nominal_m']:.3f} m", delta="Untuned model")
+                        asme = h_res.get("asme_vv20_sigma", {})
+                        h3.metric("ASME V&V 20 Error |E|", f"{asme.get('mean_comparison_error_e', 0.0):.3f} m", delta=f"u_val: {asme.get('u_val', 0.0):.3f} m")
+                        h4.metric("Area Validation Metric", f"{asme.get('area_validation_metric_avm', 0.0):.3f} m", delta=f"Passed: {asme.get('validated', False)}")
+                        st.plotly_chart(create_blind_holdout_validation_figure(h_res), width="stretch", key="cal_vv_holdout_fig")
+                        st.dataframe(pd.DataFrame(h_res["holdout_pattern_rows"]), width="stretch", hide_index=True)
+
+                with vv_tab2:
+                    st.markdown("###### 95% Epistemic + Aleatory Uncertainty P-Box Envelope")
+                    st.caption("Propagate digital twin parameter estimation errors (epistemic uncertainty via Latin Hypercube) together with shot-cloud stochastic dispersion (aleatory uncertainty).")
+                    active_twin_val = st.session_state.get("_calibrated_digital_twin") or get_default_nominal_twin()
+                    if st.button("📊 Compute Epistemic UQ Envelope", key="cal_vv_uq_btn", type="primary"):
+                        with st.spinner("Propagating nested epistemic x aleatory Latin Hypercube samples..."):
+                            st.session_state["_cal_uq_res"] = compute_epistemic_aleatory_uq_envelope(
+                                twin_profile=active_twin_val,
+                                distance_stations_m=(20.0, 35.0, 50.0, 65.0, 75.0),
+                                n_epistemic_draws=10,
+                                n_volleys_per_draw=8,
+                                seed=42,
+                            )
+                    if "_cal_uq_res" in st.session_state:
+                        uq_r = st.session_state["_cal_uq_res"]
+                        u1, u2, u3 = st.columns(3)
+                        u1.metric("R80 Median", f"{uq_r['r80_median_m']:.1f} m", delta=f"P05–P95: {uq_r['r80_p05_m']:.1f}–{uq_r['r80_p95_m']:.1f} m")
+                        u2.metric("Mean Band Width", f"{uq_r['mean_band_width_pp']:.1f} pp", delta="90% UQ Spread")
+                        u3.metric("Latin Hypercube Draws", f"{uq_r['n_epistemic_draws']} draws", delta="5D parameter space")
+                        st.plotly_chart(create_epistemic_uq_envelope_figure(uq_r), width="stretch", key="cal_vv_uq_fig")
+                        st.dataframe(pd.DataFrame(uq_r["band_rows"]), width="stretch", hide_index=True)
+
+                with vv_tab3:
+                    st.markdown("###### Pre-Test Design of Experiments (DOE) & Wald SPRT Early-Stopping Boundaries")
+                    st.caption("Plan optimal live-fire test matrix across ranges and utilize Wald Sequential Probability Ratio Test boundaries to halt trials as soon as lethality is proven.")
+                    doe_target_r = float(st.session_state.get("cal_drift_rng", 45.0))
+                    doe_p = plan_range_validation_doe(target_range_m=doe_target_r)
+                    st.plotly_chart(create_sprt_stopping_boundaries_figure(doe_p), width="stretch", key="cal_vv_sprt_fig")
+                    st.dataframe(pd.DataFrame(doe_p["doe_matrix"]), width="stretch", hide_index=True)
+                    st.download_button(
+                        "📋 Download Range DOE Test Card (.csv)",
+                        data=export_doe_test_card_csv(doe_p).encode("utf-8"),
+                        file_name="cuas_range_doe_plan.csv",
+                        mime="text/csv",
+                        key="cal_vv_doe_dl",
+                        width="stretch",
+                    )
+
+                with vv_tab4:
+                    st.markdown("###### Published Aeroballistic, Patterning, Shot-String, V50 & Rotor Kinematics Benchmarks")
+                    st.caption("Verify against published external benchmarks (E-01..E-06): Bailey & Hiatt (1972) sphere drag, Compton (1996) RK2 transonic decay, 40-yd choke pattern %, shot-string transit, Recht-Ipson V50 limit, and rotor solidity.")
+                    if "cuas_exp_benchmarks_s4" not in st.session_state or st.button("🔄 Run E-01..E-06 Benchmarks", key="cal_vv_exp_btn"):
+                        st.session_state["cuas_exp_benchmarks_s4"] = run_experimental_validation_benchmarks()
+                    e_b_res = st.session_state["cuas_exp_benchmarks_s4"]
+                    st.plotly_chart(create_experimental_benchmarks_figure(e_b_res), width="stretch", key="cal_vv_exp_fig")
+                    st.dataframe(pd.DataFrame(e_b_res["benchmarks"]), width="stretch", hide_index=True)
+
+                with vv_tab5:
+                    st.markdown("###### FAIR Reproducible Validation Dossier & SHA-256 Bundle")
+                    st.caption("Compile a complete, cryptographically signed FAIR research artifact bundling digital twin parameters, benchmark reports, and calibration logs.")
+                    active_twin_bun = st.session_state.get("_calibrated_digital_twin") or get_default_nominal_twin()
+                    if st.button("📦 Build Reproducible Validation Bundle", key="cal_vv_bundle_btn", type="primary"):
+                        st.session_state["_cal_bundle"] = build_reproducible_validation_bundle(
+                            twin=active_twin_bun,
+                            livefire_dataset=st.session_state.get("_cal_last_lethality"),
+                            blind_holdout_results=st.session_state.get("_cal_holdout_res"),
+                            uq_results=st.session_state.get("_cal_uq_res"),
+                            target_range_m=float(st.session_state.get("cal_drift_rng", 45.0)),
+                        )
+                    if "_cal_bundle" in st.session_state:
+                        bun = st.session_state["_cal_bundle"]
+                        st.success(f"Generated FAIR Validation Bundle! SHA-256 Digest: `{bun['manifest_sha256']}`")
+                        b_html = generate_scientific_vv_dossier_html(bun)
+                        b_md = generate_scientific_vv_dossier_markdown(bun)
+                        b_json = json.dumps(bun, indent=2)
+                        bd1, bd2, bd3 = st.columns(3)
+                        bd1.download_button("📜 Download HTML Dossier", b_html.encode("utf-8"), "cuas_scientific_validation_dossier.html", "text/html", width="stretch", key="cal_vv_html_dl")
+                        bd2.download_button("📝 Download Markdown Dossier", b_md.encode("utf-8"), "cuas_scientific_validation_dossier.md", "text/markdown", width="stretch", key="cal_vv_md_dl")
+                        bd3.download_button("🧾 Download JSON Bundle", b_json.encode("utf-8"), "cuas_validation_bundle.json", "application/json", width="stretch", key="cal_vv_json_dl")
 
         # --- TAB 18.14: ADVERSARIAL RED-VS-BLUE COMPETING MONTE CARLO & GP ML OPTIMIZER ---
         elif active_cuas_mod == _CUAS18_MODULES[13]:

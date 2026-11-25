@@ -552,6 +552,111 @@ def generate_synthetic_pattern_board_png(
     return buf.getvalue()
 
 
+def _compute_homography_matrix(
+    src_pts: list[tuple[float, float]] | np.ndarray,
+    dst_pts: list[tuple[float, float]] | np.ndarray,
+) -> np.ndarray:
+    """Compute 3x3 projective homography H (dst ~ H @ src) from 4+ point pairs via normalized DLT."""
+    src = np.asarray(src_pts, dtype=np.float64)
+    dst = np.asarray(dst_pts, dtype=np.float64)
+    if src.shape != dst.shape or src.shape[0] < 4 or src.shape[1] != 2:
+        raise ValueError("Homography requires at least 4 matching (x, y) point pairs.")
+
+    def _norm_mat(pts: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        mu = np.mean(pts, axis=0)
+        d = np.mean(np.hypot(pts[:, 0] - mu[0], pts[:, 1] - mu[1]))
+        s = math.sqrt(2.0) / max(float(d), 1e-6)
+        T = np.array([[s, 0.0, -s * mu[0]], [0.0, s, -s * mu[1]], [0.0, 0.0, 1.0]], dtype=np.float64)
+        pts_h = np.column_stack([pts, np.ones(len(pts), dtype=np.float64)])
+        return (T @ pts_h.T).T, T
+
+    sn, Ts = _norm_mat(src)
+    dn, Td = _norm_mat(dst)
+    A = np.zeros((2 * len(src), 9), dtype=np.float64)
+    for i in range(len(src)):
+        xs, ys = sn[i, 0], sn[i, 1]
+        xd, yd = dn[i, 0], dn[i, 1]
+        A[2 * i] = [0.0, 0.0, 0.0, -xs, -ys, -1.0, yd * xs, yd * ys, yd]
+        A[2 * i + 1] = [xs, ys, 1.0, 0.0, 0.0, 0.0, -xd * xs, -xd * ys, -xd]
+    _, _, vt = np.linalg.svd(A)
+    Hn = vt[-1].reshape(3, 3)
+    H = np.linalg.inv(Td) @ Hn @ Ts
+    if abs(float(H[2, 2])) > 1e-12:
+        H = H / float(H[2, 2])
+    return H
+
+
+def _apply_homography(H: np.ndarray, pts: list[tuple[float, float]] | np.ndarray) -> np.ndarray:
+    """Project 2D points through a 3x3 homography matrix H."""
+    p = np.asarray(pts, dtype=np.float64)
+    ph = np.column_stack([p, np.ones(len(p), dtype=np.float64)])
+    proj = (H @ ph.T).T
+    w = np.where(np.abs(proj[:, 2]) < 1e-12, 1e-12, proj[:, 2])
+    return np.column_stack([proj[:, 0] / w, proj[:, 1] / w])
+
+
+def generate_skewed_pattern_board_png_with_corners(
+    range_m: float = 36.58,
+    nominal_choke: str = "Modified",
+    true_spread_factor: float = 1.18,
+    n_pellets: int = 36,
+    board_width_m: float = 1.0,
+    board_height_m: float = 1.0,
+    seed: int = 42,
+) -> tuple[bytes, list[tuple[float, float]], np.ndarray]:
+    """Generate a perspective-skewed target-board PNG plus exact 4 board corner pixels & ground-truth (y, z)."""
+    rng = np.random.default_rng(seed)
+    w_px, h_px = 640, 640
+    # Perspective trapezoid (simulates off-axis camera ~25 deg oblique view)
+    corners_px = [(95.0, 72.0), (545.0, 96.0), (595.0, 565.0), (50.0, 538.0)]
+    dst_m = [
+        (-0.5 * board_width_m, +0.5 * board_height_m),
+        (+0.5 * board_width_m, +0.5 * board_height_m),
+        (+0.5 * board_width_m, -0.5 * board_height_m),
+        (-0.5 * board_width_m, -0.5 * board_height_m),
+    ]
+    H_m_to_px = _compute_homography_matrix(dst_m, corners_px)
+
+    img = rng.normal(0.92, 0.012, size=(h_px, w_px)).astype(np.float64)
+    sigma_nom = _choke_sigma_at_40yd(nominal_choke) * ((float(range_m) / 36.58) ** 1.15)
+    sigma_true = sigma_nom * float(true_spread_factor)
+
+    yy, xx = np.ogrid[:h_px, :w_px]
+    gt_pts: list[tuple[float, float]] = []
+    placed_px: list[tuple[float, float]] = []
+    attempts = 0
+    while len(gt_pts) < int(n_pellets) and attempts < int(n_pellets) * 35:
+        attempts += 1
+        y_m = float(rng.normal(0.03, sigma_true))
+        z_m = float(rng.normal(-0.02, sigma_true))
+        if abs(y_m) > 0.42 * board_width_m or abs(z_m) > 0.42 * board_height_m:
+            continue
+        px_pt = _apply_homography(H_m_to_px, [(y_m, z_m)])[0]
+        px_x, px_y = float(px_pt[0]), float(px_pt[1])
+        if not (32.0 <= px_x <= w_px - 32.0 and 32.0 <= px_y <= h_px - 32.0):
+            continue
+        if any(math.hypot(px_x - ox, px_y - oy) < 16.0 for ox, oy in placed_px):
+            continue
+        gt_pts.append((y_m, z_m))
+        placed_px.append((px_x, px_y))
+        rad = float(rng.uniform(4.2, 5.2))
+        dist2 = (xx - px_x) ** 2 + (yy - px_y) ** 2
+        mask = dist2 <= (rad ** 2)
+        img[mask] = np.minimum(img[mask], 0.14 + 0.12 * (dist2[mask] / max(rad ** 2, 1.0)))
+
+    img_u8 = np.clip(img * 255.0, 0, 255).astype(np.uint8)
+    buf = io.BytesIO()
+    try:
+        from PIL import Image
+
+        Image.fromarray(img_u8, mode="L").convert("RGB").save(buf, format="PNG")
+    except Exception:
+        from matplotlib import image as mpimg
+
+        mpimg.imsave(buf, img_u8, cmap="gray", format="png")
+    return buf.getvalue(), corners_px, np.asarray(gt_pts, dtype=np.float64)
+
+
 def digitize_pattern_board_image(
     image_bytes: bytes,
     board_width_m: float = 1.0,
@@ -563,8 +668,9 @@ def digitize_pattern_board_image(
     min_blob_px: int = 4,
     max_blob_px: int = 550,
     roi_margin_frac: float = 0.04,
+    corner_points_px: list[tuple[float, float]] | None = None,
 ) -> dict[str, Any]:
-    """Detect pellet puncture holes in a target-board image and fit calibrated Rayleigh dispersion."""
+    """Detect pellet puncture holes in a target-board image with optional 4-corner homography rectification."""
     if not image_bytes:
         raise ValueError("Uploaded image bytes are empty.")
 
@@ -630,11 +736,28 @@ def digitize_pattern_board_image(
             f"Only {len(centroids)} circular pellet holes detected (need >= 5). Lower threshold or check image contrast."
         )
 
-    csv_lines = ["pellet_id,y_m,z_m"]
-    for idx, (cx_px, cy_px) in enumerate(centroids, start=1):
-        y_m = ((cx_px / w_px) - 0.5) * float(board_width_m)
-        z_m = (0.5 - (cy_px / h_px)) * float(board_height_m)
-        csv_lines.append(f"{idx},{y_m:.4f},{z_m:.4f}")
+    homography_applied = False
+    homography_mat: list[list[float]] | None = None
+    if corner_points_px is not None and len(corner_points_px) == 4:
+        dst_corners_m = [
+            (-0.5 * float(board_width_m), +0.5 * float(board_height_m)),
+            (+0.5 * float(board_width_m), +0.5 * float(board_height_m)),
+            (+0.5 * float(board_width_m), -0.5 * float(board_height_m)),
+            (-0.5 * float(board_width_m), -0.5 * float(board_height_m)),
+        ]
+        H_px_to_m = _compute_homography_matrix(corner_points_px, dst_corners_m)
+        rectified = _apply_homography(H_px_to_m, centroids)
+        homography_applied = True
+        homography_mat = H_px_to_m.tolist()
+        csv_lines = ["pellet_id,y_m,z_m"]
+        for idx, (y_m, z_m) in enumerate(rectified, start=1):
+            csv_lines.append(f"{idx},{float(y_m):.4f},{float(z_m):.4f}")
+    else:
+        csv_lines = ["pellet_id,y_m,z_m"]
+        for idx, (cx_px, cy_px) in enumerate(centroids, start=1):
+            y_m = ((cx_px / w_px) - 0.5) * float(board_width_m)
+            z_m = (0.5 - (cy_px / h_px)) * float(board_height_m)
+            csv_lines.append(f"{idx},{y_m:.4f},{z_m:.4f}")
     extracted_csv = "\n".join(csv_lines) + "\n"
 
     pat_res = calibrate_shotgun_pattern_from_csv(
@@ -647,6 +770,8 @@ def digitize_pattern_board_image(
         "n_detected_holes": len(centroids),
         "image_shape": [int(h_px), int(w_px)],
         "pixel_centroids": [[round(cx_v, 1), round(cy_v, 1)] for cx_v, cy_v in centroids],
+        "homography_applied": homography_applied,
+        "homography_matrix": homography_mat,
         "extracted_csv": extracted_csv,
         "pattern_calibration": pat_res,
         "twin_patch": {

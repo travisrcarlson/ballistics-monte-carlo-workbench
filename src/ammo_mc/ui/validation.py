@@ -17,7 +17,8 @@ from plotly.subplots import make_subplots
 from scipy import stats as sp_stats
 import streamlit as st
 
-
+from ammo_mc.cuas_scientific_vv import run_experimental_validation_benchmarks
+from ammo_mc.vis_cuas_vv import create_experimental_benchmarks_figure
 from ammo_mc.auth import verify_app_password
 from ammo_mc.data import get_kb
 from ammo_mc.battery import (
@@ -396,11 +397,12 @@ def tab_validation() -> None:
         delta=f"{summary['total_checks']} Total Checks",
     )
 
-    tab_score, tab_phys, tab_wb = st.tabs(
+    tab_score, tab_phys, tab_wb, tab_cuas_exp = st.tabs(
         [
             "📊 Executive Scorecard & Tolerance Margins",
             "🔬 Extended Physics Benchmarks (B-01..B-18)",
             "📋 Knowledge Base Workbook Suite (V-01a..V-12)",
+            "🧪 Experimental C-UAS Benchmarks (E-01..E-06)",
         ]
     )
 
@@ -495,3 +497,17 @@ def tab_validation() -> None:
                 ],
                 width="stretch",
             )
+
+    with tab_cuas_exp:
+        st.subheader("🧪 Published Aeroballistic, Patterning, Shot-String, V50 & Rotor Solidity Benchmarks (E-01..E-06)")
+        st.caption(
+            "Empirical cross-validation against published wind-tunnel sphere drag (Bailey & Hiatt 1972), "
+            "RK2 transonic pellet integration (Compton 1996 UCL), 12-gauge 40-yd 30-inch choke patterning, "
+            "temporal shot-string elongation, Recht-Ipson V50 limit perforation, and rotor blade solidity kinematics."
+        )
+        if "cuas_exp_benchmarks" not in st.session_state or st.button("🔄 Re-run Experimental Benchmarks", key="val_rerun_exp_btn"):
+            with st.spinner("Evaluating Experimental C-UAS Benchmarks E-01..E-06..."):
+                st.session_state["cuas_exp_benchmarks"] = run_experimental_validation_benchmarks()
+        exp_res = st.session_state["cuas_exp_benchmarks"]
+        st.plotly_chart(create_experimental_benchmarks_figure(exp_res), width="stretch", key="val_exp_bench_fig")
+        st.dataframe(pd.DataFrame(exp_res["benchmarks"]), width="stretch", hide_index=True)

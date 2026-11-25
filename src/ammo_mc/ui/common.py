@@ -349,6 +349,11 @@ def _cached_antidrone_array_mc(
     propellant_type: str = "double_base",
     drag_model: str = "compressible_re_m",
     pellets_per_shot: int | None = None,
+    use_rotor_solidity: bool = False,
+    use_v50_ballistic_limit: bool = False,
+    enable_ray_shielding: bool = False,
+    pattern_distribution: str = "gaussian",
+    flyer_fraction: float = 0.12,
 ) -> dict[str, Any]:
     custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
     custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
@@ -393,6 +398,11 @@ def _cached_antidrone_array_mc(
         ambient_temp_c=ambient_temp_c,
         propellant_type=propellant_type,
         drag_model=drag_model,
+        use_rotor_solidity=use_rotor_solidity,
+        use_v50_ballistic_limit=use_v50_ballistic_limit,
+        enable_ray_shielding=enable_ray_shielding,
+        pattern_distribution=pattern_distribution,
+        flyer_fraction=flyer_fraction,
     )
 
 
@@ -437,6 +447,11 @@ def _cached_antidrone_range_envelope(
     propellant_type: str = "double_base",
     drag_model: str = "compressible_re_m",
     pellets_per_shot: int | None = None,
+    use_rotor_solidity: bool = False,
+    use_v50_ballistic_limit: bool = False,
+    enable_ray_shielding: bool = False,
+    pattern_distribution: str = "gaussian",
+    flyer_fraction: float = 0.12,
 ) -> dict[str, Any]:
     custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
     custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
@@ -482,6 +497,11 @@ def _cached_antidrone_range_envelope(
         propellant_type=propellant_type,
         drag_model=drag_model,
         pellets_per_shot=pellets_per_shot,
+        use_rotor_solidity=use_rotor_solidity,
+        use_v50_ballistic_limit=use_v50_ballistic_limit,
+        enable_ray_shielding=enable_ray_shielding,
+        pattern_distribution=pattern_distribution,
+        flyer_fraction=flyer_fraction,
     )
 
 
@@ -525,6 +545,11 @@ def _cached_antidrone_range_speed_heatmap(
     propellant_type: str = "double_base",
     drag_model: str = "compressible_re_m",
     pellets_per_shot: int | None = None,
+    use_rotor_solidity: bool = False,
+    use_v50_ballistic_limit: bool = False,
+    enable_ray_shielding: bool = False,
+    pattern_distribution: str = "gaussian",
+    flyer_fraction: float = 0.12,
 ) -> dict[str, Any]:
     custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
     custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
@@ -569,6 +594,11 @@ def _cached_antidrone_range_speed_heatmap(
         propellant_type=propellant_type,
         drag_model=drag_model,
         pellets_per_shot=pellets_per_shot,
+        use_rotor_solidity=use_rotor_solidity,
+        use_v50_ballistic_limit=use_v50_ballistic_limit,
+        enable_ray_shielding=enable_ray_shielding,
+        pattern_distribution=pattern_distribution,
+        flyer_fraction=flyer_fraction,
     )
 
 

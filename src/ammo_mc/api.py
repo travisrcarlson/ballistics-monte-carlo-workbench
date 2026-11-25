@@ -64,6 +64,17 @@ from ammo_mc.small_arms import (
     get_drone_aspect_presets,
     get_drone_target_specs,
 )
+from ammo_mc.cuas_scientific_vv import (
+    calibrate_doppler_radar_drag,
+    compute_epistemic_aleatory_uq_envelope,
+    generate_sample_blind_holdout_dataset,
+    generate_sample_doppler_radar_csv,
+    generate_sample_shotstring_csv,
+    parse_weather_and_shotstring_csv,
+    plan_range_validation_doe,
+    run_blind_holdout_validation,
+    run_experimental_validation_benchmarks,
+)
 from ammo_mc.validation import (
     generate_vv_certificate_html,
     generate_vv_certificate_markdown,
@@ -338,6 +349,11 @@ class CuasArrayRequest(BaseModel):
     ambient_temp_c: float = 15.0
     propellant_type: str = "double_base"
     drag_model: str = "compressible_re_m"
+    use_rotor_solidity: bool = False
+    use_v50_ballistic_limit: bool = False
+    enable_ray_shielding: bool = False
+    pattern_distribution: str = "gaussian"
+    flyer_fraction: float = 0.12
     n_volleys: int = 20
     seed: int = 42
 
@@ -963,6 +979,7 @@ class CalibratePhotoPatternRequest(BaseModel):
     nominal_choke: str = "Modified"
     ammunition_preset: str = "12G_NO4_BUCK_C_UAS"
     threshold_sigma: float = 2.6
+    corner_points_px: Optional[list[tuple[float, float]]] = None
 
 
 class CalibrateLethalityRequest(BaseModel):
@@ -1037,6 +1054,7 @@ def post_calibrate_pattern_photo(req: CalibratePhotoPatternRequest) -> dict[str,
                 nominal_choke=req.nominal_choke,
                 ammunition_preset=req.ammunition_preset,
                 threshold_sigma=req.threshold_sigma,
+                corner_points_px=req.corner_points_px,
             )
         )
     except ValueError as exc:
@@ -1117,6 +1135,128 @@ def post_calibration_profile(req: CalibrationProfileSaveRequest) -> dict[str, An
     from ammo_mc.cuas_calibration_twin import CalibrationProfileStore
 
     return _to_json_safe(CalibrationProfileStore().save_profile(**req.model_dump()))
+
+
+class CuasBlindHoldoutRequest(BaseModel):
+    pattern_rows: Optional[list[dict[str, Any]]] = None
+    livefire_rows: Optional[list[dict[str, Any]]] = None
+    holdout_ranges_m: tuple[float, ...] = (65.0, 75.0)
+    nominal_choke: str = "Modified"
+    ammunition_preset: str = "12G_NO4_BUCK_C_UAS"
+    drone_model: str = "fpv_14in_36cm_pg7m"
+    seed: int = 42
+
+
+class CuasUqEnvelopeRequest(BaseModel):
+    distance_stations_m: tuple[float, ...] = (20.0, 35.0, 50.0, 65.0, 75.0)
+    twin_profile: Optional[dict[str, Any]] = None
+    layout_type: str = "quincunx"
+    n_barrels: int = 5
+    mount_radius_m: float = 0.30
+    ammunition_preset: str = "ALDA_BUCKSHOT_12_76_COPPER_32G"
+    default_choke: str = "Modified"
+    drone_model: str = "fpv_14in_36cm_pg7m"
+    n_epistemic_draws: int = 8
+    n_volleys_per_draw: int = 8
+    seed: int = 42
+
+
+class CuasDoePlanRequest(BaseModel):
+    target_range_m: float = 50.0
+    p0: float = 0.50
+    p1: float = 0.80
+    alpha: float = 0.05
+    beta: float = 0.10
+
+
+class CuasDopplerDragRequest(BaseModel):
+    csv_data: Optional[str] = None
+    nominal_v0_mps: float = 415.0
+    ammunition_preset: str = "ALDA_BUCKSHOT_12_76_COPPER_32G"
+
+
+class CuasShotStringRequest(BaseModel):
+    csv_data: Optional[str] = None
+    range_m: float = 50.0
+
+
+@app.get("/cuas/vv/experimental-benchmarks", tags=["Scientific V&V"], dependencies=[Depends(_verify_api_auth)])
+def get_experimental_benchmarks() -> dict[str, Any]:
+    """Run published aerodynamic, patterning, shot-string, V50 & rotor-solidity benchmarks (E-01..E-06)."""
+    return _to_json_safe(run_experimental_validation_benchmarks())
+
+
+@app.post("/cuas/vv/blind-holdout", tags=["Scientific V&V"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_blind_holdout(req: CuasBlindHoldoutRequest) -> dict[str, Any]:
+    """Train Digital Twin on training ranges and evaluate blind holdout predictive error against ASME V&V 20."""
+    pat_rows = req.pattern_rows
+    lf_rows = req.livefire_rows
+    if not pat_rows:
+        sample_ds = generate_sample_blind_holdout_dataset(nominal_choke=req.nominal_choke, ammunition_preset=req.ammunition_preset)
+        pat_rows = sample_ds["pattern_rows"]
+        lf_rows = sample_ds["livefire_rows"]
+    res = run_blind_holdout_validation(
+        pattern_rows=pat_rows,
+        livefire_rows=lf_rows,
+        holdout_ranges_m=req.holdout_ranges_m,
+        nominal_choke=req.nominal_choke,
+        ammunition_preset=req.ammunition_preset,
+        drone_model=req.drone_model,
+        seed=req.seed,
+    )
+    return _to_json_safe(res)
+
+
+@app.post("/cuas/vv/uq-envelope", tags=["Scientific V&V"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_uq_envelope(req: CuasUqEnvelopeRequest) -> dict[str, Any]:
+    """Propagate nested epistemic (twin posterior SE) x aleatory (MC shot cloud) UQ P-box envelope."""
+    res = compute_epistemic_aleatory_uq_envelope(
+        distance_stations_m=req.distance_stations_m,
+        twin_profile=req.twin_profile,
+        layout_type=req.layout_type,
+        n_barrels=req.n_barrels,
+        mount_radius_m=req.mount_radius_m,
+        ammunition_preset=req.ammunition_preset,
+        default_choke=req.default_choke,
+        drone_model=req.drone_model,
+        n_epistemic_draws=req.n_epistemic_draws,
+        n_volleys_per_draw=req.n_volleys_per_draw,
+        seed=req.seed,
+    )
+    return _to_json_safe(res)
+
+
+@app.post("/cuas/vv/doe-plan", tags=["Scientific V&V"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_doe_plan(req: CuasDoePlanRequest) -> dict[str, Any]:
+    """Generate pre-test Design of Experiments sample size, range stations, and Wald SPRT stopping boundaries."""
+    res = plan_range_validation_doe(
+        target_range_m=req.target_range_m,
+        p0=req.p0,
+        p1=req.p1,
+        alpha=req.alpha,
+        beta=req.beta,
+    )
+    return _to_json_safe(res)
+
+
+@app.post("/cuas/calibrate/doppler-drag", tags=["Calibration"], dependencies=[Depends(_verify_api_auth)])
+def post_calibrate_doppler_drag(req: CuasDopplerDragRequest) -> dict[str, Any]:
+    """Calibrate in-flight pellet drag Cd scale and initial velocity from Doppler radar track CSV."""
+    csv_text = req.csv_data or generate_sample_doppler_radar_csv(ammunition_preset=req.ammunition_preset)
+    res = calibrate_doppler_radar_drag(
+        csv_text,
+        nominal_v0_mps=req.nominal_v0_mps,
+        ammunition_preset=req.ammunition_preset,
+    )
+    return _to_json_safe(res)
+
+
+@app.post("/cuas/calibrate/shotstring", tags=["Calibration"], dependencies=[Depends(_verify_api_auth)])
+def post_calibrate_shotstring(req: CuasShotStringRequest) -> dict[str, Any]:
+    """Parse weather met conditions and acoustic/optical shot-string temporal elongation."""
+    csv_text = req.csv_data or generate_sample_shotstring_csv(range_m=req.range_m)
+    res = parse_weather_and_shotstring_csv(csv_text, range_m=req.range_m)
+    return _to_json_safe(res)
 
 
 @app.post("/export/calibration-certificate", tags=["Calibration", "Export"], dependencies=[Depends(_verify_api_auth)])

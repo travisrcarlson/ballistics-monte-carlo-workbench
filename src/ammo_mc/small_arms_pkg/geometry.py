@@ -168,6 +168,7 @@ def compute_drone_projected_geometry(
     # Underslung Warhead Payload 3D Axisymmetric Hull (e.g. PG-7M)
     warhead_hull = np.empty((0, 2), dtype=float)
     area_warhead = 0.0
+    warhead_depth_x = 0.0
     if drone_spec.get("has_warhead"):
         l_wh = float(drone_spec.get("warhead_length_m", 0.290))
         d_wh = float(drone_spec.get("warhead_diam_m", 0.070))
@@ -191,6 +192,7 @@ def compute_drone_projected_geometry(
         wh_proj = wh_verts_los[:, [1, 2]]
         warhead_hull = _convex_hull_2d(wh_proj)
         area_warhead = polygon_area(warhead_hull)
+        warhead_depth_x = float(np.mean(wh_verts_los[:, 0]))
 
     # Rotors & Motor Pods
     rotors_spec = drone_spec.get("rotors", [])
@@ -236,6 +238,8 @@ def compute_drone_projected_geometry(
             "id": r.get("id", f"R{r_idx+1}"),
             "y_m": cy,
             "z_m": cz,
+            "depth_x": float(c_hub_los[0]),
+            "rotor_radius_m": r_rad,
             "semi_major_m": a,
             "semi_minor_m": b,
             "major_axis_m": a,
@@ -251,6 +255,7 @@ def compute_drone_projected_geometry(
             "id": r.get("id", f"M{r_idx+1}"),
             "y_m": cy,
             "z_m": cz,
+            "depth_x": float(c_hub_los[0]),
             "w_m": d_motor,
             "h_m": h_motor,
             "area_m2": area_mot,
@@ -349,6 +354,12 @@ def compute_drone_projected_geometry(
         "planform_area_m2": round(planform_area, 6),
         "cross_section_ratio_pct": round(cross_section_ratio_pct, 1),
         "planform_ratio_pct": round(cross_section_ratio_pct, 1),
+        "component_depths_x": {
+            "fuselage_core": float(np.mean(verts_los[:, 0])),
+            "battery_payload": float(np.mean(b_verts_los[:, 0])),
+            "warhead_pg7m": warhead_depth_x,
+        },
+        "rotor_disc_obliquity_deg": round(math.degrees(math.acos(min(1.0, abs(nx)))), 2),
     }
 
 
@@ -394,23 +405,317 @@ def check_target_hit(
     return float(y_m**2 + z_m**2) <= (0.381**2)
 
 
+_COMPONENT_ARMOR_PROFILES: dict[str, dict[str, float]] = {
+    "fuselage_core": {"ref_v50_mps": 135.0, "plug_areal_kg_m2": 2.4, "hardness_sens": 0.25},
+    "battery_payload": {"ref_v50_mps": 118.0, "plug_areal_kg_m2": 2.0, "hardness_sens": 0.28},
+    "warhead_pg7m": {"ref_v50_mps": 152.0, "plug_areal_kg_m2": 2.9, "hardness_sens": 0.30},
+    "motor": {"ref_v50_mps": 145.0, "plug_areal_kg_m2": 2.6, "hardness_sens": 0.32},
+    "rotor": {"ref_v50_mps": 72.0, "plug_areal_kg_m2": 0.75, "hardness_sens": 0.15},
+    "structural_arm": {"ref_v50_mps": 165.0, "plug_areal_kg_m2": 2.2, "hardness_sens": 0.22},
+    "wing_spar": {"ref_v50_mps": 110.0, "plug_areal_kg_m2": 1.3, "hardness_sens": 0.18},
+}
+
+
+def compute_rotor_blade_strike_probability(
+    radial_frac: float,
+    n_blades: int = 3,
+    mean_chord_m: float = 0.022,
+    rotor_radius_m: float = 0.12,
+    rpm: float = 12000.0,
+    blade_thickness_m: float = 0.0025,
+    pellet_diameter_m: float = 0.004,
+    pellet_velocity_mps: float = 250.0,
+) -> float:
+    """Compute geometric + rotational sweeping probability of striking a spinning rotor blade.
+
+    Combines instantaneous blade planform solidity (N_b * c / (2*pi*r)) with swept rotor
+    volume during pellet axial transit time across blade thickness.
+    """
+    r_tot = max(float(rotor_radius_m), 0.02)
+    r_frac = max(0.0, min(1.0, float(radial_frac)))
+    r_abs = r_frac * r_tot
+    if r_abs <= max(0.012, 0.14 * r_tot):
+        return 1.0  # Direct rotor hub / shaft collar hit
+
+    n_b = max(2, int(n_blades))
+    chord = max(0.006, float(mean_chord_m) * (1.15 - 0.35 * r_frac))
+    p_static = (n_b * chord) / (2.0 * math.pi * r_abs)
+    omega = (max(0.0, float(rpm)) * 2.0 * math.pi) / 60.0
+    v_eff = max(10.0, float(pellet_velocity_mps))
+    p_swept = (n_b * omega * (max(0.001, float(blade_thickness_m)) + max(0.001, float(pellet_diameter_m)))) / (2.0 * math.pi * v_eff)
+    return float(max(0.02, min(1.0, p_static + p_swept)))
+
+
+def compute_component_v50_perforation(
+    component: str,
+    pellet_velocity_mps: float,
+    pellet_mass_kg: float,
+    pellet_diameter_m: float,
+    pellet_density_g_cm3: float = 11.3,
+    obliquity_deg: float = 0.0,
+) -> dict[str, Any]:
+    """Evaluate sectional-density & obliquity-dependent V50 perforation and Recht-Ipson residual speed."""
+    ck = str(component)
+    if ck.startswith("motor_"):
+        prof = _COMPONENT_ARMOR_PROFILES["motor"]
+    elif ck.startswith("rotor_"):
+        prof = _COMPONENT_ARMOR_PROFILES["rotor"]
+    else:
+        prof = _COMPONENT_ARMOR_PROFILES.get(ck, _COMPONENT_ARMOR_PROFILES["fuselage_core"])
+
+    d_m = max(0.001, float(pellet_diameter_m))
+    m_kg = max(1e-5, float(pellet_mass_kg))
+    rho = max(2.0, float(pellet_density_g_cm3))
+    area_p = math.pi * 0.25 * (d_m ** 2)
+    sd_kg_m2 = m_kg / area_p
+    # Reference sphere: 6.1mm #4 Buck hardened lead (1.34g -> SD ~ 45.85 kg/m^2, rho=11.3)
+    sd_ratio = max(0.25, sd_kg_m2 / 45.85)
+    # Harder dense tungsten / steel resists mushrooming vs soft lead at equivalent KE
+    mat_hardness_factor = (11.3 / rho) ** float(prof["hardness_sens"])
+    if rho >= 16.0:
+        mat_hardness_factor *= 0.86
+    elif 7.4 <= rho <= 8.4:
+        mat_hardness_factor *= 0.94
+
+    theta_rad = math.radians(max(0.0, min(70.0, abs(float(obliquity_deg)))))
+    obliq_factor = (1.0 / max(math.cos(theta_rad), 0.34)) ** 0.75
+
+    v50 = float(prof["ref_v50_mps"]) * (sd_ratio ** -0.45) * mat_hardness_factor * obliq_factor
+    v_cur = max(0.0, float(pellet_velocity_mps))
+    slope = max(0.12 * v50, 8.0)
+    z_log = max(-40.0, min(40.0, (v_cur - v50) / slope))
+    p_perf = 1.0 / (1.0 + math.exp(-z_log))
+
+    m_plug = float(prof["plug_areal_kg_m2"]) * area_p * (1.0 / max(math.cos(theta_rad), 0.34))
+    a_r = m_kg / max(m_kg + m_plug, 1e-6)
+    v_res = a_r * math.sqrt(max(0.0, v_cur ** 2 - v50 ** 2)) if v_cur > v50 else 0.0
+    return {
+        "v50_mps": round(v50, 2),
+        "p_perforation": float(p_perf),
+        "residual_velocity_mps": float(v_res),
+        "sectional_density_kg_m2": round(sd_kg_m2, 2),
+    }
+
+
 def evaluate_drone_impact(
     y_rel_m: float,
     z_rel_m: float,
     drone_spec: dict[str, Any],
     striking_energy_j: float,
     aspect_geometry: dict[str, Any] | None = None,
+    *,
+    pellet_velocity_mps: float | None = None,
+    pellet_mass_kg: float | None = None,
+    pellet_diameter_m: float | None = None,
+    pellet_density_g_cm3: float = 11.3,
+    use_rotor_solidity: bool = False,
+    use_v50_ballistic_limit: bool = False,
+    enable_ray_shielding: bool = False,
+    rng: Any | None = None,
 ) -> dict[str, Any]:
     """Evaluate whether an impact point (y, z) hits a drone component and whether it is lethal.
 
     Supports both:
       1. 3D Projected Cross-Section (when aspect_geometry is provided)
       2. Planform Top-Down / Overhead fallback (when aspect_geometry is None)
+    Optional high-fidelity modes model spinning rotor blade solidity, sectional-density
+    V50 perforation curves, and front-to-back ray shielding with Recht-Ipson residual velocity.
     """
     e_rotor_lethal = float(drone_spec.get("lethal_energy_rotor_j", 8.0))
     e_core_lethal = float(drone_spec.get("lethal_energy_core_j", 20.0))
     e_arm_lethal = float(drone_spec.get("lethal_energy_arm_j", 30.0))
     e_warhead_lethal = float(drone_spec.get("lethal_energy_warhead_j", e_core_lethal * 0.85))
+
+    if aspect_geometry is not None and (use_rotor_solidity or use_v50_ballistic_limit or enable_ray_shielding):
+        depths = aspect_geometry.get("component_depths_x", {})
+        candidates: list[dict[str, Any]] = []
+
+        fuse_poly = aspect_geometry.get("fuselage_polygon")
+        if fuse_poly and len(fuse_poly) >= 3 and point_in_convex_polygon(y_rel_m, z_rel_m, np.array(fuse_poly)):
+            candidates.append({
+                "component": "fuselage_core",
+                "depth_x": float(depths.get("fuselage_core", 0.0)),
+                "e_req": e_core_lethal,
+                "critical": True,
+                "opaque": True,
+                "obliquity_deg": min(55.0, abs(float(aspect_geometry.get("pitch_deg", 0.0)))),
+            })
+
+        batt_poly = aspect_geometry.get("battery_polygon")
+        if batt_poly and len(batt_poly) >= 3 and point_in_convex_polygon(y_rel_m, z_rel_m, np.array(batt_poly)):
+            candidates.append({
+                "component": "battery_payload",
+                "depth_x": float(depths.get("battery_payload", 0.0)),
+                "e_req": e_core_lethal * 0.75,
+                "critical": True,
+                "opaque": True,
+                "obliquity_deg": min(55.0, abs(float(aspect_geometry.get("pitch_deg", 0.0)))),
+            })
+
+        wh_poly = aspect_geometry.get("warhead_polygon")
+        if wh_poly and len(wh_poly) >= 3 and point_in_convex_polygon(y_rel_m, z_rel_m, np.array(wh_poly)):
+            candidates.append({
+                "component": "warhead_pg7m",
+                "depth_x": float(depths.get("warhead_pg7m", 0.0)),
+                "e_req": e_warhead_lethal,
+                "critical": True,
+                "opaque": True,
+                "obliquity_deg": 25.0,
+            })
+
+        for m in aspect_geometry.get("motors", []):
+            my, mz = float(m["y_m"]), float(m["z_m"])
+            if abs(y_rel_m - my) <= float(m["w_m"]) / 2.0 and abs(z_rel_m - mz) <= float(m["h_m"]) / 2.0:
+                candidates.append({
+                    "component": f"motor_{m.get('id', 'M')}",
+                    "depth_x": float(m.get("depth_x", 0.0)),
+                    "e_req": e_rotor_lethal,
+                    "critical": True,
+                    "opaque": True,
+                    "obliquity_deg": 20.0,
+                })
+
+        for r in aspect_geometry.get("rotors", []):
+            ry, rz = float(r["y_m"]), float(r["z_m"])
+            a, b = float(r["semi_major_m"]), float(r["semi_minor_m"])
+            u_maj, u_min = r.get("u_maj", [1.0, 0.0]), r.get("u_min", [0.0, 1.0])
+            dy, dz = y_rel_m - ry, z_rel_m - rz
+            u = dy * u_maj[0] + dz * u_maj[1]
+            v = dy * u_min[0] + dz * u_min[1]
+            norm_ell = (u / max(a, 1e-6)) ** 2 + (v / max(b, 1e-6)) ** 2
+            if norm_ell <= 1.0:
+                candidates.append({
+                    "component": f"rotor_{r.get('id', 'R')}",
+                    "depth_x": float(r.get("depth_x", 0.0)),
+                    "e_req": e_rotor_lethal,
+                    "critical": True,
+                    "opaque": False,
+                    "radial_frac": math.sqrt(max(0.0, norm_ell)),
+                    "rotor_radius_m": float(r.get("rotor_radius_m", a)),
+                    "obliquity_deg": float(aspect_geometry.get("rotor_disc_obliquity_deg", 15.0)),
+                })
+
+        for w_poly in aspect_geometry.get("wings", []):
+            if w_poly and len(w_poly) >= 3 and point_in_convex_polygon(y_rel_m, z_rel_m, np.array(w_poly)):
+                candidates.append({
+                    "component": "wing_spar",
+                    "depth_x": 0.05,
+                    "e_req": e_arm_lethal,
+                    "critical": False,
+                    "opaque": True,
+                    "obliquity_deg": 35.0,
+                })
+
+        for arm in aspect_geometry.get("arms", []):
+            p1, p2 = arm.get("p1", [0.0, 0.0]), arm.get("p2", [0.0, 0.0])
+            arm_r = float(arm.get("diameter_m", 0.020)) / 2.0
+            seg_dy, seg_dz = float(p2[0]) - float(p1[0]), float(p2[1]) - float(p1[1])
+            seg_len_sq = seg_dy ** 2 + seg_dz ** 2
+            if seg_len_sq > 1e-6:
+                t_p = max(0.0, min(1.0, ((y_rel_m - float(p1[0])) * seg_dy + (z_rel_m - float(p1[1])) * seg_dz) / seg_len_sq))
+                if math.hypot(y_rel_m - (float(p1[0]) + t_p * seg_dy), z_rel_m - (float(p1[1]) + t_p * seg_dz)) <= arm_r:
+                    candidates.append({
+                        "component": "structural_arm",
+                        "depth_x": 0.02,
+                        "e_req": e_arm_lethal,
+                        "critical": False,
+                        "opaque": True,
+                        "obliquity_deg": 25.0,
+                    })
+
+        if candidates:
+            if enable_ray_shielding:
+                candidates.sort(key=lambda c: float(c["depth_x"]))
+
+            m_eff = float(pellet_mass_kg) if (pellet_mass_kg and pellet_mass_kg > 0) else 0.00134
+            d_eff = float(pellet_diameter_m) if (pellet_diameter_m and pellet_diameter_m > 0) else 0.0061
+            v_cur = float(pellet_velocity_mps) if (pellet_velocity_mps is not None and pellet_velocity_mps > 0) else math.sqrt(2.0 * max(striking_energy_j, 0.0) / m_eff)
+            ke_cur = 0.5 * m_eff * (v_cur ** 2)
+            blade_passed_any = False
+            n_blades_spec = int(drone_spec.get("rotor_blade_count", 3))
+            rpm_spec = float(drone_spec.get("rotor_rpm", 11500.0))
+
+            first_hit: dict[str, Any] | None = None
+            best_lethal: dict[str, Any] | None = None
+            last_v50: float | None = None
+
+            for cand in candidates:
+                comp = str(cand["component"])
+                if comp.startswith("rotor_") and use_rotor_solidity:
+                    p_blade = compute_rotor_blade_strike_probability(
+                        radial_frac=float(cand.get("radial_frac", 0.5)),
+                        n_blades=n_blades_spec,
+                        rotor_radius_m=float(cand.get("rotor_radius_m", 0.12)),
+                        rpm=rpm_spec,
+                        pellet_diameter_m=d_eff,
+                        pellet_velocity_mps=v_cur,
+                    )
+                    u_draw = float(rng.random()) if rng is not None else 0.5
+                    if u_draw >= p_blade:
+                        blade_passed_any = True
+                        continue
+
+                v50_info: dict[str, Any] | None = None
+                if use_v50_ballistic_limit:
+                    v50_info = compute_component_v50_perforation(
+                        comp,
+                        pellet_velocity_mps=v_cur,
+                        pellet_mass_kg=m_eff,
+                        pellet_diameter_m=d_eff,
+                        pellet_density_g_cm3=pellet_density_g_cm3,
+                        obliquity_deg=float(cand.get("obliquity_deg", 0.0)),
+                    )
+                    last_v50 = float(v50_info["v50_mps"])
+                    u_perf = float(rng.random()) if rng is not None else 0.5
+                    is_perf = bool((u_perf < float(v50_info["p_perforation"])) and (ke_cur >= 0.45 * float(cand["e_req"])))
+                    is_lethal = is_perf
+                else:
+                    is_lethal = bool(ke_cur >= float(cand["e_req"]))
+                    is_perf = is_lethal
+
+                hit_rec = {
+                    "is_hit": True,
+                    "component": comp,
+                    "is_lethal": is_lethal,
+                    "critical_system": bool(cand["critical"]),
+                    "striking_energy_j": ke_cur,
+                    "v50_mps": last_v50,
+                    "blade_pass_through": blade_passed_any,
+                }
+                if first_hit is None:
+                    first_hit = hit_rec
+                if is_lethal and best_lethal is None:
+                    best_lethal = hit_rec
+                    if not enable_ray_shielding:
+                        return best_lethal
+
+                if not enable_ray_shielding:
+                    return hit_rec
+
+                # Ray shielding propagation front-to-back
+                if is_perf and v50_info is not None:
+                    v_cur = float(v50_info["residual_velocity_mps"])
+                elif is_perf:
+                    v_cur = math.sqrt(max(0.0, (2.0 * max(ke_cur - float(cand["e_req"]), 0.0)) / m_eff))
+                else:
+                    v_cur = 0.0
+                ke_cur = 0.5 * m_eff * (v_cur ** 2)
+                if cand["opaque"] and v_cur < 15.0:
+                    break
+
+            if best_lethal is not None:
+                return best_lethal
+            if first_hit is not None:
+                return first_hit
+            return {
+                "is_hit": False,
+                "component": "miss",
+                "is_lethal": False,
+                "critical_system": False,
+                "striking_energy_j": striking_energy_j,
+                "v50_mps": last_v50,
+                "blade_pass_through": blade_passed_any,
+            }
 
     if aspect_geometry is not None:
         # 1. Fuselage 3D Box Projected Polygon (Flight Controller, Avionics, IMU)
