@@ -50,6 +50,9 @@ def evaluate_cuas_collateral_safety_envelope(
     calibration_profile: dict[str, Any] | None = None,
     n_sample_pellets: int = 240,
     seed: int = 42,
+    drone_mass_kg: float = 1.5,
+    drone_altitude_m: float = 35.0,
+    drone_frontal_area_m2: float = 0.06,
 ) -> dict[str, Any]:
     """Compute directional 12-ga muzzle-blast dB contours, friendly danger cone, & falling-pellet KE tiers."""
     cp = dict(calibration_profile or {})
@@ -150,6 +153,49 @@ def evaluate_cuas_collateral_safety_envelope(
     n_tot = max(1, len(e_arr))
     lethal_pct = round(100.0 * n_lethal / n_tot, 1)
     injury_pct = round(100.0 * (n_lethal + n_injury) / n_tot, 1)
+
+    # Dual-Criterion Energy + Sectional Energy Density (RCC 321-23 & Kneubuehl 2022)
+    d_cm = max(0.05, float(ammo.get("pellet_diameter_mm", 6.10)) / 10.0)
+    area_cm2 = math.pi * 0.25 * (d_cm ** 2)
+    sed_arr = e_arr / max(area_cm2, 1e-6)
+    rcc_blunt_cas_pct = round(float(np.mean(e_arr >= 14.91)) * 100.0, 1)
+    rcc_prone_fat_pct = round(float(np.mean(e_arr >= 18.98)) * 100.0, 1)
+    rcc_stand_fat_pct = round(float(np.mean(e_arr >= 33.89)) * 100.0, 1)
+    rcc_pen_cas_pct = round(float(np.mean(sed_arr >= 7.145)) * 100.0, 1)
+    kneubuehl_skin_pct = round(float(np.mean(sed_arr >= 10.0)) * 100.0, 1)
+    kneubuehl_eye_pct = round(float(np.mean(sed_arr >= 3.0)) * 100.0, 1)
+
+    # Falling Drone Debris Impact Energy (SE-F04) vs FAA Cat 2/3, ASTM, EASA
+    m_dr = max(0.1, float(drone_mass_kg))
+    h_dr = max(1.0, float(drone_altitude_m))
+    a_dr = max(0.005, float(drone_frontal_area_m2))
+    rho_sl = 1.225
+    cd_dr = 0.30
+    k_dr = (cd_dr * rho_sl * a_dr) / (2.0 * m_dr)
+    v_term_mps = math.sqrt((2.0 * m_dr * 9.80665) / max(cd_dr * rho_sl * a_dr, 1e-6))
+    v_imp_dr_mps = v_term_mps * math.sqrt(max(0.0, 1.0 - math.exp(-2.0 * k_dr * h_dr)))
+    e_imp_dr_j = 0.5 * m_dr * (v_imp_dr_mps ** 2)
+    debris_tier = (
+        "Exceeds EASA (>=80 J)" if e_imp_dr_j >= 80.0
+        else ("Exceeds ASTM (>=73 J)" if e_imp_dr_j >= 73.0
+              else ("Exceeds FAA Cat 3 (>=34 J)" if e_imp_dr_j >= 34.0
+                    else ("Exceeds FAA Cat 2 (>=15 J)" if e_imp_dr_j >= 15.0 else "Below 15 J")))
+    )
+
+    shot_num_est = float(ammo.get("pellet_diameter_mm", 6.10))
+    ar_dist_x_m = 1073.0 if shot_num_est > 2.45 else 275.0  # AR 385-63 Table 5-1: >7.5 shot -> 1073 m, 7.5-9 -> 275 m
+    doctrine_reference_overlays = {
+        "ar_385_63_table_5_1": {
+            "dist_x_m": ar_dist_x_m,
+            "class_note": "Shot > #7.5 / Buckshot / Slug (Dist X = 1,073 m)" if ar_dist_x_m > 500.0 else "Shot #7.5-#9 Trap/Skeet (Dist X = 275 m)",
+        },
+        "uk_jsp_403_vol2_ch2_table3": {
+            "lateral_cone_mils": 80.0,
+            "vertical_cone_mils": 200.0,
+            "note": "UK JSP 403 Vol 2 Ch 2 Table 3 Cone of Fire: +80 mils lateral (azimuth), +200 mils vertical (elevation).",
+        },
+    }
+
     max_rng_99 = float(fallout["summary"]["max_fallout_range_99_m"])
     mean_imp_j = float(fallout["summary"]["mean_impact_energy_j"])
     r_140 = float(db_contours["db_140"]["max_downrange_m"])
@@ -212,4 +258,31 @@ def evaluate_cuas_collateral_safety_envelope(
             {"tier": "Property/Glass (0.5-2 J)", "count": n_glass, "share_pct": round(100.0 * n_glass / n_tot, 1)},
             {"tier": "Safe (<0.5 J)", "count": n_safe, "share_pct": round(100.0 * n_safe / n_tot, 1)},
         ],
+        "dual_criterion_hazards": {
+            "pellet_area_cm2": round(area_cm2, 4),
+            "mean_specific_energy_j_cm2": round(float(np.mean(sed_arr)), 2),
+            "rcc_321_23_blunt_casualty_14_91j_pct": rcc_blunt_cas_pct,
+            "rcc_321_23_fatality_prone_18_98j_pct": rcc_prone_fat_pct,
+            "rcc_321_23_fatality_standing_33_89j_pct": rcc_stand_fat_pct,
+            "rcc_321_23_penetration_casualty_7_145j_cm2_pct": rcc_pen_cas_pct,
+            "kneubuehl_skin_10j_cm2_pct": kneubuehl_skin_pct,
+            "kneubuehl_eye_3j_cm2_pct": kneubuehl_eye_pct,
+        },
+        "falling_drone_debris": {
+            "drone_mass_kg": m_dr,
+            "drone_altitude_m": h_dr,
+            "terminal_velocity_mps": round(v_term_mps, 2),
+            "impact_velocity_mps": round(v_imp_dr_mps, 2),
+            "impact_energy_j": round(e_imp_dr_j, 1),
+            "threshold_status": debris_tier,
+            "uxo_post_kill_notice": (
+                "SE-C20 UXO caution: downed strike drones retain unexploded payload and thermal-runaway "
+                "LiPo/Li-Ion risk downrange until EOD clearance."
+            ),
+        },
+        "doctrine_reference_overlays": doctrine_reference_overlays,
+        "scope_notice": (
+            "Engineering analysis aid only; does not replace official Range Safety Officer approvals "
+            "or governing standards (AR 385-63, UK JSP 403, RCC 321-23)."
+        ),
     }

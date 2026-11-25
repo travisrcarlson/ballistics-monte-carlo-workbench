@@ -267,3 +267,109 @@ def create_pattern_board_corners_overlay_figure(
         margin=dict(l=30, r=25, t=48, b=30),
     )
     return fig
+
+
+def create_salvo_brackets_and_window_figure(window_res: dict[str, Any]) -> go.Figure:
+    """Plot closing-target Usable Window [R_min_safe, R_max], Salvo Brackets, and Ogive P_eff(R)."""
+    from plotly.subplots import make_subplots
+
+    st_rows = window_res.get("stations", [])
+    sm = window_res.get("summary", {})
+    rs = [r["range_m"] for r in st_rows]
+    pk_s = [r["pk_shared_lower_pct"] for r in st_rows]
+    pk_i = [r["pk_indep_upper_pct"] for r in st_rows]
+    pk_1 = [r["pk_single_pct"] for r in st_rows]
+    vs = [r["v_retained_mps"] for r in st_rows]
+    peffs = [r["p_eff"] * 100.0 for r in st_rows]
+
+    r_safe = float(sm.get("r_min_safe_m", 0.0))
+    r_max_s = float(sm.get("r_max_shared_m", 0.0))
+
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        subplot_titles=(
+            f"Salvo Brackets (WB-F01/F02) & Usable Window [{r_safe:.0f}–{r_max_s:.0f} m]",
+            f"Pellet Velocity & Ogive P_eff(v) (V50={sm.get('v50_mps', 0.0):.0f} m/s)",
+        ),
+        horizontal_spacing=0.11,
+    )
+    if rs:
+        fig.add_trace(
+            go.Scatter(
+                x=rs + rs[::-1],
+                y=pk_i + pk_s[::-1],
+                fill="toself",
+                fillcolor="rgba(59, 130, 246, 0.20)",
+                line=dict(color="rgba(0,0,0,0)"),
+                name="Correlation Bracket (Shared..Indep)",
+                hoverinfo="skip",
+            ),
+            row=1,
+            col=1,
+        )
+        fig.add_trace(go.Scatter(x=rs, y=pk_i, mode="lines", name="Upper Bound: Independent Aim", line=dict(dash="dash", color="#60a5fa")), row=1, col=1)
+        fig.add_trace(go.Scatter(x=rs, y=pk_s, mode="lines+markers", name="Lower Bound: Shared Aim (WB-F02)", line=dict(width=3, color="#2563eb")), row=1, col=1)
+        fig.add_trace(go.Scatter(x=rs, y=pk_1, mode="lines", name="Single-Shot Pk (WB-F01)", line=dict(dash="dot", color="#94a3b8")), row=1, col=1)
+
+        if r_safe > 0.0:
+            fig.add_vrect(x0=min(rs), x1=min(max(rs), r_safe), fillcolor="rgba(239, 68, 68, 0.14)", line_width=1, line_color="#ef4444", annotation_text="Wreck Keep-Out", row=1, col=1)
+        if not sm.get("window_collapsed") and r_max_s > r_safe:
+            fig.add_vrect(x0=r_safe, x1=r_max_s, fillcolor="rgba(16, 185, 129, 0.12)", line_width=1, line_color="#10b981", annotation_text="Usable Window", row=1, col=1)
+
+        fig.add_trace(go.Scatter(x=rs, y=peffs, mode="lines+markers", name="Ogive P_eff(v) (%)", line=dict(width=2.5, color="#f59e0b")), row=1, col=2)
+        fig.add_trace(go.Scatter(x=rs, y=vs, mode="lines", name="Retained Velocity (m/s)", line=dict(dash="dash", color="#14b8a6")), row=1, col=2)
+
+    fig.update_xaxes(title_text="Slant Range R (m)", row=1, col=1)
+    fig.update_yaxes(title_text="Kill Probability (%)", range=[0, 105], row=1, col=1)
+    fig.update_xaxes(title_text="Slant Range R (m)", row=1, col=2)
+    fig.update_yaxes(title_text="Ogive (%) / Velocity (m/s)", row=1, col=2)
+    fig.update_layout(height=380, margin=dict(l=45, r=25, t=55, b=40))
+    return fig
+
+
+def create_dead_time_waterfall_figure(budget: dict[str, Any]) -> go.Figure:
+    """Plot serial fire-control dead-time chain breakdown (`FC-T04`) + ballistic TOF."""
+    stages = budget.get("stages_ms", {})
+    labels = [k.replace("_ms", "").replace("_", " ").title() for k in stages.keys()] + ["Pellet TOF"]
+    vals = [float(v) for v in stages.values()] + [float(budget.get("tof_s", 0.0)) * 1000.0]
+    colors = ["#38bdf8"] * len(stages) + ["#f59e0b"]
+
+    fig = go.Figure(
+        go.Bar(
+            x=vals,
+            y=labels,
+            orientation="h",
+            marker_color=colors,
+            text=[f"{v:.1f} ms" for v in vals],
+            textposition="auto",
+        )
+    )
+    fig.update_layout(
+        title=f"Serial Latency Chain: Dead Time = {budget.get('t_dead_ms', 0.0):.1f} ms + TOF = {budget.get('t_total_s', 0.0)*1000.0:.1f} ms (Miss ~ {budget.get('quadratic_maneuver_miss_m', 0.0):.3f} m)",
+        xaxis_title="Latency Contribution (ms)",
+        height=320,
+        margin=dict(l=140, r=30, t=50, b=35),
+    )
+    return fig
+
+
+def create_workbook_vv_matrix_figure(wb_vv: dict[str, Any]) -> go.Figure:
+    """Plot pass-rate breakdown across deterministic workbook V&V oracle groups."""
+    groups = wb_vv.get("summary", {}).get("groups", [])
+    names = [g["group"] for g in groups]
+    passed = [g["passed"] for g in groups]
+    failed = [max(0, g["total"] - g["passed"]) for g in groups]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(name="Passed", x=names, y=passed, marker_color="#16a34a"))
+    fig.add_trace(go.Bar(name="Failed", x=names, y=failed, marker_color="#dc2626"))
+    fig.update_layout(
+        barmode="stack",
+        title=f"C-UAS Workbook Oracle Matrix ({wb_vv.get('summary', {}).get('passed', 0)}/{wb_vv.get('summary', {}).get('total', 0)} PASS)",
+        xaxis_title="Verification Domain",
+        yaxis_title="Oracle Test Count",
+        height=340,
+        margin=dict(l=45, r=25, t=48, b=60),
+    )
+    return fig

@@ -13,7 +13,8 @@ A physics-grounded stochastic Monte Carlo simulation engine and Streamlit workbe
 
 ### 1. Consolidated 6-Domain Focus Mode UX & Counter-UAS 4-Stage Workflow
 - **Task-First Navigation, 3-Click Turret Sizing Wizard, Focus Mode & URL Deep-Linking**: Streamlined 6-domain workbench switcher (`Home`, `C-UAS & Multi-Barrel`, `Ballistics & 3D Sim`, `Physics & Aero Labs`, `Safety & IATG`, `Audit & Sources`), instant **3-Click C-UAS Turret Sizing Wizard** on Home (outputs Top-3 feasible builds + 1-click PDF spec sheet & `.dxf` muzzle CAD), and global **Standard / Expert Mode (`Focus Mode`)** toggle. Supports shareable URL query parameters (`?wb=home`, `?wb=cuas&mod=array`, `?wb=cuas&mod=raid`, `?wb=cuas&mod=adversarial`, `?wb=validation`, `?wb=literature`).
-- **Scientific Literature, V&V Certificates & Model Provenance (`Audit & Sources`)**: Full module-by-module traceability mapping **87 verified primary sources (`S01`–`S87`)**, **96 governed equations**, empirical catalogs, and **40 automated V&V checks** with exportable V&V audit certificates and BibTeX/CSV/JSON exports (`GET /literature`, `ammo-mc literature`).
+- **Scientific Literature, V&V Certificates & Model Provenance (`Audit & Sources`)**: Full module-by-module traceability mapping **100 verified primary sources (`S01`–`S100`)**, **96 governed equations**, empirical catalogs, **44 core V&V checks (`B-01..B-22` + `V-01a..V-12`)**, and **46 deterministic C-UAS workbook oracles** (`WB-F01`/`WB-F02` salvo brackets, Walsh/NOL/CIPM-2007, Wen/FAA/THOR, SAAMI recoil, Wilson/Clopper-Pearson/Agresti-Coull CIs) with exportable V&V audit certificates (`GET /literature`, `ammo-mc cuas workbook-vv`).
+- **v2.0 Scientific Rigor & Epistemic Transparency**: Every C-UAS stage carries **`V1`–`V4` weakest-link verification depth grading**, inline contextual **Counter-Evidence & Open Gaps** disclosures, **SE-F14** pellet-count physical consistency audits, **closing-target Usable Engagement Windows `[R_min_safe, R_max]`** with wreck carry-on inertia, explicit **`FC-T04` serial vision/actuator dead-time chains (~141 ms)**, **dual RCC 321-23 / Kneubuehl / AR 385-63 / UK JSP 403** safety overlays, and **Common Random Numbers (CRN)** paired A/B comparisons.
 - **Stage 1 — Multi-Shotgun Array Designer, Hardware SWaP-C/OTM, 3D `.stl` CAD Ray-Cast & Muzzle-Plate CAD (`?wb=cuas&mod=array`)**:
   - Flexible muzzle mount geometries (`circular`, `grid`, `concentric`, `honeycomb`, `fan_horizontal`, `fan_vertical`, `v_shape`, and custom `(Y, Z, choke)` coordinates), homogeneous or **hybrid dual-ring mixed-load barrels**, convergent/parallel/splay/staggered pointing, ripple schedules, 3-axis Euler drone cross-section projection ($\psi, \theta, \phi$), **vectorized batch pellet impact kinematics**, **Recht-Ipson oblique ricochet $V_{50}(\theta)$ cutoff**, **short-range shot-cup/wad separation**, **watertight ASCII/binary `.stl` drone CAD mesh ray-casting**, and a **global High-Fidelity Physics Mode sidebar toggle** synced across Stages 1–4.
   - **Custom Drone & Custom Shell Builders**: Define custom quadcopter, hexacopter, octocopter, or fixed-wing threat geometries/lethality thresholds and custom pellet materials/diameters/charges/40-yd pattern percentages with JSON preset round-tripping.
@@ -81,6 +82,10 @@ ammo-mc cuas wizard --drone fpv_quad_small --range-m 45 --mount light_ugv
 ammo-mc cuas calibrate-twin --drone fpv_quad_small --range-m 45 --save-name Proto-V2
 ammo-mc cuas safety-envelope --barrels 6 --elevation 35 --env urban_permissive
 ammo-mc cuas hil-trace --scenario evasive_fpv_dive --dt-ms 100
+ammo-mc cuas salvo-brackets --n-shots 4
+ammo-mc cuas engagement-window --speed 25 --altitude 15 --drone-class fpv_cfrp
+ammo-mc cuas rigor-check --ammo 12G_NO4_BUCK_C_UAS --barrels 6
+ammo-mc cuas workbook-vv
 ammo-mc literature --workbench cuas
 
 # FastAPI REST server (/cuas/calibrate/*, /cuas/cad/stl, /cuas/hardware/fea, /cuas/safety-envelope, /cuas/hil-trace, /export/calibration-certificate)
@@ -114,7 +119,7 @@ GitHub Actions (`.github/workflows/ci.yml`) runs syntax verification and `pytest
 ├── pyproject.toml              # Package metadata and dependencies
 ├── Ammunition Monte Carlo Knowledge Base.xlsx
 ├── src/ammo_mc/
-│   ├── data_tables/            # Knowledge Base JSON tables (87 sources, 96 formulas, provenance map)
+│   ├── data_tables/            # Knowledge Base JSON tables (100 sources, 96 formulas, provenance map)
 │   ├── auth.py                 # Rate-limited password verification (Secrets / Env / PBKDF2)
 │   ├── literature.py           # Scientific Literature Catalog, Provenance & BibTeX/CSV Engine
 │   ├── terrain_dem.py          # DEM Terrain Grids, 3D Ridge LOS Masking & Slope Fallout SDZ

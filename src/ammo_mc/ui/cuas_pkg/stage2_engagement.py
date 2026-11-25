@@ -28,9 +28,11 @@ from ammo_mc.vis_cuas import (
     create_swarm_doctrine_tradeoff_figure,
     create_turret_recoil_dynamics_figure,
 )
+from ammo_mc.vis_cuas_vv import create_dead_time_waterfall_figure
 from ammo_mc.ui.cuas_pkg.helpers import (
     _render_cuas_profile_sync_bar,
     render_high_fidelity_active_banner,
+    render_verification_and_counter_evidence,
 )
 
 
@@ -86,11 +88,12 @@ def render_stage2_engagement(active_cuas_mod: str, expert: bool, sg_presets_18: 
             )
             fcs_maneuver = st.selectbox(
                 "Evasive Maneuver Profile",
-                ["sinusoidal_weave", "corkscrew_spiral", "terminal_popup_jink", "linear_cruise"],
+                ["sinusoidal_weave", "corkscrew_spiral", "terminal_popup_jink", "singer_correlated", "linear_cruise"],
                 format_func=lambda k: {
                     "sinusoidal_weave": "〰️ Sinusoidal Horizontal + Vertical Weave",
                     "corkscrew_spiral": "🌀 Barrel / Corkscrew Spiral",
                     "terminal_popup_jink": "⚡ Late Terminal Pop-Up Jink",
+                    "singer_correlated": "🎲 Singer Exponentially Correlated Evasion (FC-F09)",
                     "linear_cruise": "➡️ Constant-Velocity Linear Cruise",
                 }.get(k, k),
                 index=0,
@@ -124,6 +127,14 @@ def render_stage2_engagement(active_cuas_mod: str, expert: bool, sg_presets_18: 
                 fcs_point = st.selectbox("Pointing Mode", ["divergent_curtain", "convergent", "staggered_tiling", "parallel"], index=0, key="cuas18_fcs_pt")
                 fcs_splay = st.slider("Curtain Splay Angle (mrad)", 0.0, 12.0, 4.5, 0.5, key="cuas18_fcs_sp")
                 fcs_fire = st.selectbox("Firing Sequence", ["balanced_pair_ripple", "simultaneous_volley", "sequential_ripple"], index=0, key="cuas18_fcs_fire")
+            fd1, fd2, fd3 = st.columns(3)
+            with fd1:
+                fcs_use_dead = st.checkbox("Use Explicit Serial Dead-Time Chain (~141 ms, FC-T04)", value=False, key="cuas18_fcs_dead")
+                fcs_dead_preset = st.selectbox("Latency Pipeline Profile", ["eo_60hz_1stream", "eo_60hz_3stream", "radar_10hz_fused"], key="cuas18_fcs_dead_p")
+            with fd2:
+                fcs_heavy_atr = st.checkbox("Heavy-Tailed AI ATR Centroid Noise (FC-P12)", value=False, key="cuas18_fcs_atr")
+            with fd3:
+                fcs_rcs_nulls = st.checkbox("Aspect-Dependent Radar RCS Nulls (25-35 dB)", value=False, key="cuas18_fcs_rcs")
 
         with st.spinner("Running Closed-Loop FCS & Evasive Intercept Monte Carlo..."):
             fcs_res = _cached_closed_loop_fcs(
@@ -145,6 +156,10 @@ def render_stage2_engagement(active_cuas_mod: str, expert: bool, sg_presets_18: 
                 aspect_mode=str(fcs_aspect),
                 n_volleys=25,
                 seed=42,
+                use_serial_dead_time_chain=bool(fcs_use_dead),
+                dead_time_preset=str(fcs_dead_preset),
+                use_heavy_tailed_atr=bool(fcs_heavy_atr),
+                enable_aspect_rcs_nulls=bool(fcs_rcs_nulls),
             )
         fsm = fcs_res["summary"]
         fk1, fk2, fk3, fk4 = st.columns(4)
@@ -156,6 +171,16 @@ def render_stage2_engagement(active_cuas_mod: str, expert: bool, sg_presets_18: 
         st.plotly_chart(create_fcs_tracking_and_evasion_figure(fcs_res), width="stretch")
         if fcs_res.get("architecture_comparison"):
             st.dataframe(pd.DataFrame(fcs_res["architecture_comparison"]), width="stretch")
+        with st.expander("⏱️ Serial Dead-Time Chain Breakdown (FC-T04) & Counter-Evidence", expanded=bool(fcs_use_dead)):
+            if fsm.get("dead_time_budget"):
+                st.plotly_chart(create_dead_time_waterfall_figure(fsm["dead_time_budget"]), width="stretch", key="cuas18_fcs_dt_fig")
+            from ammo_mc.cuas_rigor import get_contextual_counter_evidence
+
+            render_verification_and_counter_evidence(
+                fsm.get("verification_grade"),
+                get_contextual_counter_evidence(stage="fcs", range_m=float(fcs_dist), n_barrels=int(fcs_n_b), splay_mrad=float(fcs_splay)),
+                key_prefix="stage2_fcs",
+            )
 
     # --- TAB 18.2: MULTI-DRONE SWARM SATURATION ---
     elif active_cuas_mod == _CUAS18_MODULES[1]:
@@ -363,6 +388,13 @@ def render_stage2_engagement(active_cuas_mod: str, expert: bool, sg_presets_18: 
                 rec_mass = st.slider("Recoiling Assembly Mass (kg)", 15.0, 150.0, 45.0, 5.0, key="cuas18_rec_mass")
                 rec_stiff = st.slider("Buffer Spring Stiffness (kN/m)", 40.0, 400.0, 120.0, 10.0, key="cuas18_rec_k") * 1000.0
                 rec_ztr = st.slider("Vertical Trunnion Offset (m)", 0.05, 0.45, 0.18, 0.01, key="cuas18_rec_ztr")
+                rec_gas_model = st.selectbox(
+                    "Propellant Gas Recoil Model",
+                    ["legacy_1275", "saami_proportional"],
+                    format_func=lambda k: "SAAMI Proportional (fg=1.50 * V0 + 2.79g wad, AM-F03)" if k == "saami_proportional" else "Fixed Gas Jet Velocity (1275 m/s)",
+                    key="cuas18_rec_gas",
+                )
+                rec_fg = st.slider("SAAMI Gas Factor f_g", 1.25, 1.50, 1.50, 0.05, key="cuas18_rec_fg") if rec_gas_model == "saami_proportional" else 1.50
 
         with st.spinner("Solving 2-Axis Gimbal ODEs & Constrained Pareto Array Optimizer..."):
             rec_barrels = generate_multishotgun_array_layout(
@@ -383,6 +415,8 @@ def render_stage2_engagement(active_cuas_mod: str, expert: bool, sg_presets_18: 
                 mount_stiffness_n_per_m=float(rec_stiff),
                 mount_load_limit_kn=float(rec_limit),
                 gimbal_trunnion_offset_z_m=float(rec_ztr),
+                recoil_gas_model=str(rec_gas_model),
+                saami_gas_factor_fg=float(rec_fg),
             )
             rec_sweep = sweep_recoil_vs_ripple_delay(
                 barrels=rec_barrels,

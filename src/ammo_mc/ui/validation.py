@@ -18,7 +18,8 @@ from scipy import stats as sp_stats
 import streamlit as st
 
 from ammo_mc.cuas_scientific_vv import run_experimental_validation_benchmarks
-from ammo_mc.vis_cuas_vv import create_experimental_benchmarks_figure
+from ammo_mc.cuas_rigor import run_workbook_validation_cases
+from ammo_mc.vis_cuas_vv import create_experimental_benchmarks_figure, create_workbook_vv_matrix_figure
 from ammo_mc.auth import verify_app_password
 from ammo_mc.data import get_kb
 from ammo_mc.battery import (
@@ -272,13 +273,13 @@ def tab_validation() -> None:
     st.header("✅ Verification & Validation Benchmark Dashboard & Audit Certificates")
     st.markdown(
         "Automated V&V audit harness combining the 22-case `Ammunition Monte Carlo Knowledge Base.xlsx` regression suite "
-        "(`V-01a..V-12`) with 18 independent physical, analytical, and standards benchmarks (`B-01..B-18`) across "
-        "80 linked literature sources."
+        "(`V-01a..V-12`), 22 independent physical, analytical, and standards benchmarks (`B-01..B-22`), and 46 C-UAS workbook "
+        "oracles across 100 linked literature sources."
     )
 
     with st.sidebar:
-        _render_sidebar_header("✅ Validation Suite", "40-check V&V harness & audit certificates")
-        run_val_btn = st.button("🔄 Run Full 40-Check V&V Suite", type="primary", width="stretch", key="val_run_btn")
+        _render_sidebar_header("✅ Validation Suite", "44-check V&V harness & audit certificates")
+        run_val_btn = st.button("🔄 Run Full 44-Check V&V Suite", type="primary", width="stretch", key="val_run_btn")
         val_n_mc = st.select_slider(
             "V-08 Monte Carlo Samples",
             options=[10_000, 25_000, 50_000, 100_000],
@@ -397,12 +398,13 @@ def tab_validation() -> None:
         delta=f"{summary['total_checks']} Total Checks",
     )
 
-    tab_score, tab_phys, tab_wb, tab_cuas_exp = st.tabs(
+    tab_score, tab_phys, tab_wb, tab_cuas_exp, tab_wb_vv = st.tabs(
         [
             "📊 Executive Scorecard & Tolerance Margins",
-            "🔬 Extended Physics Benchmarks (B-01..B-18)",
+            "🔬 Extended Physics Benchmarks (B-01..B-22)",
             "📋 Knowledge Base Workbook Suite (V-01a..V-12)",
             "🧪 Experimental C-UAS Benchmarks (E-01..E-06)",
+            "📐 C-UAS Workbook V&V Matrix (46 Oracles)",
         ]
     )
 
@@ -511,3 +513,25 @@ def tab_validation() -> None:
         exp_res = st.session_state["cuas_exp_benchmarks"]
         st.plotly_chart(create_experimental_benchmarks_figure(exp_res), width="stretch", key="val_exp_bench_fig")
         st.dataframe(pd.DataFrame(exp_res["benchmarks"]), width="stretch", hide_index=True)
+
+    with tab_wb_vv:
+        st.subheader("📐 Deterministic C-UAS Workbook Oracles & Statistical Unit Tests")
+        st.caption(
+            "Reproduces Walsh (1976) / NOL / KPY / WB-F05 trajectory integration, WB-F01/F02 closed-form salvo brackets vs. "
+            "quadrature (CK-A1..A6 & CK-C1..C12), Thomas-Gemmill, Whistler SAS, Wilkening, SAAMI recoil, Wen CFRP, "
+            "and Wilson / Clopper-Pearson / Agresti-Coull / alpha-spending intervals."
+        )
+        if "cuas_wb_vv_matrix" not in st.session_state or st.button("🔄 Re-run C-UAS Workbook Matrix", key="val_rerun_wb_vv_btn"):
+            with st.spinner("Running 46 C-UAS Workbook Regression Oracles..."):
+                st.session_state["cuas_wb_vv_matrix"] = run_workbook_validation_cases()
+        wb_vv = st.session_state["cuas_wb_vv_matrix"]
+        st.plotly_chart(create_workbook_vv_matrix_figure(wb_vv), width="stretch", key="val_wb_vv_fig")
+        wb_cases_df = pd.DataFrame(wb_vv["cases"])
+        st.dataframe(wb_cases_df, width="stretch", hide_index=True)
+        st.download_button(
+            "📥 Download C-UAS Workbook V&V Matrix (.csv)",
+            wb_cases_df.to_csv(index=False).encode("utf-8"),
+            "cuas_workbook_vv_matrix.csv",
+            "text/csv",
+            key="val_dl_wb_vv_csv",
+        )

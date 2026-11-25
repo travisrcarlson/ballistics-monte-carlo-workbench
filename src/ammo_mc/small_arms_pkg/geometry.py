@@ -555,6 +555,8 @@ def evaluate_drone_impact(
     enable_ray_shielding: bool = False,
     use_oblique_ricochet: bool = False,
     rng: Any | None = None,
+    penetration_model: str = "energy",
+    ogive_spread_sv: float = 0.10,
 ) -> dict[str, Any]:
     """Evaluate whether an impact point (y, z) hits a drone component and whether it is lethal.
 
@@ -569,7 +571,8 @@ def evaluate_drone_impact(
     e_arm_lethal = float(drone_spec.get("lethal_energy_arm_j", 30.0))
     e_warhead_lethal = float(drone_spec.get("lethal_energy_warhead_j", e_core_lethal * 0.85))
 
-    if aspect_geometry is not None and (use_rotor_solidity or use_v50_ballistic_limit or enable_ray_shielding):
+    p_mode = str(penetration_model or "energy").lower().strip()
+    if aspect_geometry is not None and (use_rotor_solidity or use_v50_ballistic_limit or enable_ray_shielding or p_mode != "energy"):
         depths = aspect_geometry.get("component_depths_x", {})
         candidates: list[dict[str, Any]] = []
 
@@ -700,7 +703,34 @@ def evaluate_drone_impact(
                         continue
 
                 v50_info: dict[str, Any] | None = None
-                if use_v50_ballistic_limit:
+                if p_mode in {"wen_cfrp", "faa_cs", "thor_metal", "velocity_ogive"}:
+                    from ammo_mc.cuas_ballistics_v2 import (
+                        faa_shear_plugging_v50,
+                        thor_tr47_metallic_penetration,
+                        velocity_ogive_peff,
+                        wen_2000_frp_ballistic_limit,
+                    )
+
+                    t_mm = float(drone_spec.get("shell_thickness_mm", 3.0))
+                    if p_mode == "wen_cfrp":
+                        wen = wen_2000_frp_ballistic_limit(m_eff, d_eff, max(0.001, t_mm / 1000.0))
+                        v50_c = float(wen["v_bl_mps"])
+                    elif p_mode == "faa_cs":
+                        faa = faa_shear_plugging_v50(m_eff, d_eff, max(0.001, t_mm / 1000.0), obliquity_deg=float(cand.get("obliquity_deg", 0.0)))
+                        v50_c = float(faa["v50_mps"])
+                    elif p_mode == "thor_metal":
+                        mat_p = "Lead" if pellet_density_g_cm3 > 10.0 and pellet_density_g_cm3 < 13.0 else "Steel"
+                        th = thor_tr47_metallic_penetration(m_eff * 1000.0, d_eff * 1000.0, v_cur, t_mm, float(cand.get("obliquity_deg", 0.0)), pellet_material=mat_p)
+                        v50_c = float(th["v_limit_mps"])
+                    else:
+                        v50_c = math.sqrt(2.0 * float(cand["e_req"]) / m_eff)
+                    p_og = velocity_ogive_peff(v_cur, v50_c, spread_s_v=float(ogive_spread_sv))
+                    last_v50 = v50_c
+                    u_perf = float(rng.random()) if rng is not None else 0.5
+                    is_perf = bool(u_perf < p_og)
+                    is_lethal = is_perf
+                    v50_info = {"v50_mps": v50_c, "p_perforation": p_og, "residual_velocity_mps": math.sqrt(max(0.0, v_cur ** 2 - v50_c ** 2)) if v_cur > v50_c else 0.0}
+                elif use_v50_ballistic_limit:
                     v50_info = compute_component_v50_perforation(
                         comp,
                         pellet_velocity_mps=v_cur,
@@ -1014,6 +1044,8 @@ def evaluate_drone_impact_batch(
     enable_ray_shielding: bool = False,
     use_oblique_ricochet: bool = False,
     rng: Any | None = None,
+    penetration_model: str = "energy",
+    ogive_spread_sv: float = 0.10,
 ) -> dict[str, Any]:
     """Vectorized batch evaluation of pellet impacts against a drone silhouette."""
     y = np.asarray(y_rel_arr, dtype=np.float64)
@@ -1055,7 +1087,8 @@ def evaluate_drone_impact_batch(
             "v50_samples": v50_samples,
         }
 
-    use_hf = bool(use_rotor_solidity or use_v50_ballistic_limit or enable_ray_shielding)
+    p_mode = str(penetration_model or "energy").lower().strip()
+    use_hf = bool(use_rotor_solidity or use_v50_ballistic_limit or enable_ray_shielding or p_mode != "energy")
     if aspect_geometry is not None and not use_hf:
         e_rotor_lethal = float(drone_spec.get("lethal_energy_rotor_j", 8.0))
         e_core_lethal = float(drone_spec.get("lethal_energy_core_j", 20.0))
@@ -1149,6 +1182,8 @@ def evaluate_drone_impact_batch(
             enable_ray_shielding=enable_ray_shielding,
             use_oblique_ricochet=use_oblique_ricochet,
             rng=rng,
+            penetration_model=p_mode,
+            ogive_spread_sv=ogive_spread_sv,
         )
         if hit_info.get("blade_pass_through"):
             blade_pass_through_count += 1

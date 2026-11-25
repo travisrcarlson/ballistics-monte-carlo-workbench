@@ -1072,6 +1072,112 @@ def cmd_cuas_stl_vuln(
     typer.echo(f"STL Projection ({aspect}): {out['n_triangles']} tris, A_pres={out['presented_area_cm2']:.1f} cm2")
 
 
+@cuas_app.command("salvo-brackets")
+def cmd_cuas_salvo_brackets(
+    lambda0: float = typer.Option(1.529181, "--lambda0", help="Expected effective hits on target at perfect aim."),
+    sigma_m: float = typer.Option(0.3078, "--sigma-m", help="Pattern radial dispersion sigma (m)."),
+    sigma_a_m: float = typer.Option(0.2087, "--sigma-a-m", help="Aim error sigma_a (m)."),
+    n_shots: int = typer.Option(4, "--n-shots", "-n", help="Shots / barrels in salvo."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON salvo brackets."),
+) -> None:
+    """Compute exact WB-F01 / WB-F02 shared-error lower vs independent-error upper salvo brackets."""
+    from ammo_mc.cuas_rigor import pk_salvo_brackets
+
+    res = pk_salvo_brackets(lambda0=lambda0, sigma_m=sigma_m, sigma_a_m=sigma_a_m, n_shots=n_shots)
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    typer.echo(
+        f"Salvo Brackets (n={n_shots}): Pk1={res['pk_single']*100:.2f}% | "
+        f"Shared Lower={res['pk_shared_lower']*100:.2f}% | Indep Upper={res['pk_independent_upper']*100:.2f}% "
+        f"(Optimism Gap={res['optimism_gap_pct']:+.2f}%)"
+    )
+
+
+@cuas_app.command("engagement-window")
+def cmd_cuas_engagement_window(
+    speed: float = typer.Option(25.0, "--speed", help="Closing drone speed (m/s)."),
+    altitude: float = typer.Option(15.0, "--altitude", help="Approach altitude (m)."),
+    ammo: str = typer.Option("12G_NO4_BUCK_C_UAS", "--ammo", help="Shotgun preset."),
+    choke: str = typer.Option("Modified", "--choke", help="Choke constriction."),
+    barrels: int = typer.Option(4, "--barrels", "-b", help="Salvo barrel count."),
+    drone_class: str = typer.Option("fpv_cfrp", "--drone-class", help="Target class (fpv_cfrp|plastic_shell)."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON engagement window."),
+) -> None:
+    """Evaluate closing-target Usable Engagement Window [R_min_safe, R_max] with wreck carry-on inertia."""
+    from ammo_mc.cuas_rigor import evaluate_closing_engagement_window
+
+    res = evaluate_closing_engagement_window(
+        drone_speed_mps=speed,
+        drone_altitude_m=altitude,
+        ammo_preset=ammo,
+        choke=choke,
+        n_barrels=barrels,
+        drone_class=drone_class,
+    )
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    sm = res["summary"]
+    typer.echo(
+        f"Usable Window [{sm['r_min_safe_m']:.1f}m .. {sm['r_max_shared_m']:.1f}m]: "
+        f"Width={sm['usable_window_m']:.1f}m ({sm['usable_window_time_s']:.2f}s, {sm['n_salvos_available']} salvos) | "
+        f"Cum Shared Pk={sm['cum_pk_shared_pct']:.1f}% | Collapsed={sm['window_collapsed']}"
+    )
+
+
+@cuas_app.command("rigor-check")
+def cmd_cuas_rigor_check(
+    ammo: str = typer.Option("12G_NO4_BUCK_C_UAS", "--ammo", help="Shotgun preset."),
+    barrels: int = typer.Option(6, "--barrels", "-b", help="Barrel count."),
+    range_m: float = typer.Option(40.0, "--range-m", help="Intercept range (m)."),
+    splay_mrad: float = typer.Option(0.0, "--splay-mrad", help="Curtain splay (mrad)."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON rigor audit."),
+) -> None:
+    """Run SE-F14 pellet-count consistency check, V1-V4 weakest-link grade, and contextual counter-evidence."""
+    from ammo_mc.cuas_rigor import (
+        check_pellet_count_consistency,
+        get_contextual_counter_evidence,
+        resolve_verification_grade,
+    )
+    from ammo_mc.small_arms import PELLET_MATERIAL_DENSITIES_G_CM3, get_shotgun_presets
+
+    presets = get_shotgun_presets()
+    p = presets.get(ammo, presets["12G_NO4_BUCK_C_UAS"])
+    rho_kg = float(PELLET_MATERIAL_DENSITIES_G_CM3.get(str(p.get("material", "Hardened Lead")), 11.3)) * 1000.0
+    pel_chk = check_pellet_count_consistency(
+        float(p["pellets_per_shot"]) * float(p["pellet_mass_g"]),
+        float(p["pellet_diameter_mm"]),
+        rho_kg,
+        int(p["pellets_per_shot"]),
+    )
+    grade = resolve_verification_grade({"drag": "V1", "dispersion": "V3", "vulnerability": "V4"})
+    ce = get_contextual_counter_evidence("array", range_m=range_m, n_barrels=barrels, splay_mrad=splay_mrad)
+    payload = {"pellet_consistency": pel_chk, "verification_grade": grade, "counter_evidence": ce}
+    if as_json:
+        typer.echo(json.dumps(payload, indent=2))
+        return
+    typer.echo(
+        f"Rigor Check [{grade['grade']}]: Consistent={pel_chk['consistent']} "
+        f"({pel_chk['discrepancy_pct']:.1f}% diff) | Active Counter-Evidence={len(ce)}"
+    )
+
+
+@cuas_app.command("workbook-vv")
+def cmd_cuas_workbook_vv(
+    as_json: bool = typer.Option(False, "--json", help="Output JSON workbook oracle matrix."),
+) -> None:
+    """Execute deterministic C-UAS workbook Validation_Cases & Calc_Checks regression matrix."""
+    from ammo_mc.cuas_rigor import run_workbook_validation_cases
+
+    res = run_workbook_validation_cases()
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    sm = res["summary"]
+    typer.echo(f"C-UAS Workbook V&V Matrix: {sm['passed']}/{sm['total']} PASS ({sm['pass_rate_pct']:.1f}%)")
+
+
 @app.command("literature")
 def cmd_literature(
     query: str = typer.Option("", "--query", "-q", help="Filter sources by keyword, author, DOI, or formula."),

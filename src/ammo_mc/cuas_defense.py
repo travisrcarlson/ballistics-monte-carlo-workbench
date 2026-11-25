@@ -131,6 +131,22 @@ def evaluate_evasive_drone_state(
         vz_m = az_j * dt_j
         ay_m = ay_j * mask_j
         az_m = az_j * mask_j
+    elif maneuver_profile == "singer_correlated":
+        from ammo_mc.cuas_ballistics_v2 import generate_singer_evasive_trajectory
+
+        rng_s = np.random.default_rng(int(abs(phase_rad) * 1000) + 7)
+        s_traj = generate_singer_evasive_trajectory(
+            t_arr if np.ndim(t_arr) > 0 else np.array([float(t_arr)]),
+            target_distance_m=target_distance_m,
+            velocity_mps=velocity_mps,
+            heading_deg=heading_deg,
+            sigma_a_mps2=max(1.0, a_amp),
+            tau_m_s=1.2,
+            rng=rng_s,
+        )
+        if np.ndim(t_arr) == 0:
+            return {k: float(v[0]) for k, v in s_traj.items()}
+        return s_traj
     else:  # "sinusoidal_weave"
         amp = a_amp / (w ** 2)
         dy_m = amp * (np.sin(w * t_arr + phase_rad) - np.sin(phase_rad))
@@ -274,6 +290,11 @@ def simulate_closed_loop_fcs_engagement_mc(
     n_volleys: int = 30,
     seed: int = 42,
     include_comparison: bool = True,
+    use_serial_dead_time_chain: bool = False,
+    dead_time_preset: str = "eo_60hz_1stream",
+    dead_time_override_ms: float | None = None,
+    use_heavy_tailed_atr: bool = False,
+    enable_aspect_rcs_nulls: bool = False,
 ) -> dict[str, Any]:
     """Simulate closed-loop sensor tracking, Kalman lead prediction, servo limits & evasive drone intercept."""
     rng = np.random.default_rng(seed)
@@ -306,9 +327,27 @@ def simulate_closed_loop_fcs_engagement_mc(
 
     update_hz = float(sensor["update_rate_hz"])
     dt_track = 1.0 / update_hz
-    t_lat = float(sensor["fcs_latency_ms"]) / 1000.0
-    sigma_y_meas = target_distance_m * (float(sensor["sigma_az_mrad"]) / 1000.0)
-    sigma_z_meas = target_distance_m * (float(sensor["sigma_el_mrad"]) / 1000.0)
+    from ammo_mc.cuas_ballistics_v2 import (
+        compute_aspect_dependent_rcs_dbsm,
+        compute_serial_dead_time_budget,
+        sample_heavy_tailed_atr_error_mrad,
+    )
+    from ammo_mc.cuas_rigor import resolve_verification_grade
+
+    ov_dt = {"edge_gpu_vision_ms": float(dead_time_override_ms)} if dead_time_override_ms is not None else None
+    dead_budget = compute_serial_dead_time_budget(
+        preset=dead_time_preset,
+        overrides_ms=ov_dt,
+        tof_s=t_tof_nom,
+        a_unmod_mps2=max(0.0, float(max_maneuver_g) * 9.80665 * 0.5),
+    )
+    t_lat = float(dead_budget["t_dead_s"]) if use_serial_dead_time_chain else (float(sensor["fcs_latency_ms"]) / 1000.0)
+    rcs_null_scale = 1.0
+    if enable_aspect_rcs_nulls:
+        rcs_db = compute_aspect_dependent_rcs_dbsm(-20.0, aspect_deg=float(drone_yaw_deg) if abs(float(drone_yaw_deg)) > 1e-3 else 35.0)
+        rcs_null_scale = 1.0 + max(0.0, (-20.0 - rcs_db) / 20.0) * 1.4
+    sigma_y_meas = target_distance_m * (float(sensor["sigma_az_mrad"]) / 1000.0) * rcs_null_scale
+    sigma_z_meas = target_distance_m * (float(sensor["sigma_el_mrad"]) / 1000.0) * rcs_null_scale
 
     # Barrels setup
     barrels_raw = generate_multishotgun_array_layout(
@@ -354,8 +393,14 @@ def simulate_closed_loop_fcs_engagement_mc(
         true_track = evaluate_evasive_drone_state(
             t_track_grid, target_distance_m, drone_velocity_mps, drone_heading_deg, maneuver_profile, max_maneuver_g, weave_freq_rad_s, phase
         )
-        y_meas = np.asarray(true_track["y"]) + rng.normal(0.0, sigma_y_meas, size=len(t_track_grid))
-        z_meas = np.asarray(true_track["z"]) + rng.normal(0.0, sigma_z_meas, size=len(t_track_grid))
+        if use_heavy_tailed_atr:
+            y_atr_noise = target_distance_m * (sample_heavy_tailed_atr_error_mrad(rng, len(t_track_grid)) / 1000.0) * rcs_null_scale
+            z_atr_noise = target_distance_m * (sample_heavy_tailed_atr_error_mrad(rng, len(t_track_grid)) / 1000.0) * rcs_null_scale
+            y_meas = np.asarray(true_track["y"]) + y_atr_noise
+            z_meas = np.asarray(true_track["z"]) + z_atr_noise
+        else:
+            y_meas = np.asarray(true_track["y"]) + rng.normal(0.0, sigma_y_meas, size=len(t_track_grid))
+            z_meas = np.asarray(true_track["z"]) + rng.normal(0.0, sigma_z_meas, size=len(t_track_grid))
 
         # True state at nominal flight arrival time
         true_at_fire = evaluate_evasive_drone_state(0.0, target_distance_m, drone_velocity_mps, drone_heading_deg, maneuver_profile, max_maneuver_g, weave_freq_rad_s, phase)
@@ -543,6 +588,19 @@ def simulate_closed_loop_fcs_engagement_mc(
             "planform_ratio_pct": round(float(aspect_geom.get("planform_ratio_pct", aspect_geom.get("cross_section_ratio_pct", 100.0))), 1),
             "cross_section_ratio_pct": round(float(aspect_geom.get("cross_section_ratio_pct", 100.0)), 1),
             "n_barrels": len(barrels),
+            "use_serial_dead_time_chain": bool(use_serial_dead_time_chain),
+            "dead_time_budget": dead_budget,
+            "quadratic_maneuver_miss_m": dead_budget["quadratic_maneuver_miss_m"],
+            "use_heavy_tailed_atr": bool(use_heavy_tailed_atr),
+            "enable_aspect_rcs_nulls": bool(enable_aspect_rcs_nulls),
+            "verification_grade": resolve_verification_grade(
+                {
+                    "sensor_noise": "V1" if use_heavy_tailed_atr else "V2",
+                    "dead_time": "V1" if use_serial_dead_time_chain else "V3",
+                    "maneuver_model": "V1" if maneuver_profile == "singer_correlated" else "V3",
+                    "target_vulnerability": "V3",
+                }
+            ),
         },
         "drone_spec": drone_spec,
         "aspect_geometry": aspect_geom,
@@ -1350,6 +1408,8 @@ def simulate_turret_recoil_and_gimbal_loads(
     gimbal_torsional_stiffness_nm_per_rad: float = 8500.0,
     gimbal_damping_ratio: float = 0.30,
     in_bore_duration_ms: float = 3.0,
+    recoil_gas_model: str = "legacy_1275",
+    saami_gas_factor_fg: float = 1.50,
 ) -> dict[str, Any]:
     """Solve 2nd-order buffered mount & 2-axis gimbal pitch/yaw ODEs via RK4 under salvo impulse pulses."""
     presets = get_shotgun_presets()
@@ -1364,12 +1424,15 @@ def simulate_turret_recoil_and_gimbal_loads(
         b_ammo_key = str(b.get("ammunition_preset", default_ammunition_preset))
         ammo = presets.get(b_ammo_key, presets["12G_NO4_BUCK_C_UAS"])
         m_shot_kg = (int(ammo["pellets_per_shot"]) * float(ammo["pellet_mass_g"])) / 1000.0
-        m_wad_kg = float(ammo.get("wad_mass_g", 2.6)) / 1000.0
+        m_wad_kg = float(ammo.get("wad_mass_g", 2.79)) / 1000.0
         m_prop_kg = float(ammo.get("propellant_mass_g", 2.2)) / 1000.0
         b_len = float(b.get("barrel_length_in", 24.0))
         v0_b = float(ammo["v0_mps"]) + 2.2 * (b_len - 28.0)
 
-        j_i = (m_shot_kg + m_wad_kg) * v0_b + m_prop_kg * 1275.0
+        if str(recoil_gas_model).lower().strip() == "saami_proportional":
+            j_i = (m_shot_kg + m_wad_kg + m_prop_kg * max(1.0, float(saami_gas_factor_fg))) * v0_b
+        else:
+            j_i = (m_shot_kg + m_wad_kg) * v0_b + m_prop_kg * 1275.0
         impulses_ns.append(j_i)
         moments_pitch_ns_m.append(j_i * (gimbal_trunnion_offset_z_m + float(b["z_m"])))
         moments_yaw_ns_m.append(+j_i * float(b["y_m"]))
@@ -1467,6 +1530,18 @@ def simulate_turret_recoil_and_gimbal_loads(
     peak_trans_kn = float(np.max(np.abs(f_trans_arr)))
     margin_pct = ((mount_load_limit_kn - peak_trans_kn) / max(mount_load_limit_kn, 0.1)) * 100.0
 
+    from ammo_mc.cuas_ballistics_v2 import compute_saami_recoil_impulse
+
+    ref_ammo = presets.get(default_ammunition_preset, presets["12G_NO4_BUCK_C_UAS"])
+    saami_ref = compute_saami_recoil_impulse(
+        shot_mass_g=int(ref_ammo["pellets_per_shot"]) * float(ref_ammo["pellet_mass_g"]) * len(barrels),
+        wad_mass_g=float(ref_ammo.get("wad_mass_g", 2.79)) * len(barrels),
+        propellant_mass_g=float(ref_ammo.get("propellant_mass_g", 2.2)) * len(barrels),
+        v0_mps=float(ref_ammo["v0_mps"]),
+        gun_mass_kg=max(mount_mass_kg, 1.0),
+        gas_factor_fg=float(saami_gas_factor_fg),
+    )
+
     return {
         "summary": {
             "total_impulse_ns": round(total_impulse, 2),
@@ -1485,6 +1560,9 @@ def simulate_turret_recoil_and_gimbal_loads(
             "salvo_duration_ms": round((max(fire_times_s) if fire_times_s else 0.0) * 1000.0 + in_bore_duration_ms, 1),
             "firing_mode": firing_mode,
             "ripple_delay_ms": ripple_delay_ms,
+            "recoil_gas_model": str(recoil_gas_model),
+            "saami_gas_factor_fg": float(saami_gas_factor_fg),
+            "saami_recoil_reference": saami_ref,
         },
         "time_history": {
             "t_ms": [round(float(x * 1000.0), 2) for x in t_vals[::stride]],

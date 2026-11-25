@@ -660,6 +660,12 @@ def simulate_anti_drone_multishotgun_mc(
     flyer_fraction: float = 0.12,
     shot_cup_separation_m: float = 0.0,
     use_oblique_ricochet: bool = False,
+    drag_multiplier_kd: float = 1.0,
+    relative_humidity_pct: float = 0.0,
+    shot_sigma_cv: float = 0.0,
+    nb_clumping_kappa: float | None = None,
+    penetration_model: str = "energy",
+    use_markov_kill_tree: bool = False,
 ) -> dict[str, Any]:
     """Execute Monte Carlo simulation of an anti-drone defense volley using a multi-shotgun array."""
     rng = np.random.default_rng(seed)
@@ -807,11 +813,50 @@ def simulate_anti_drone_multishotgun_mc(
     n_act_barrels = len(barrels)
     fire_times_s = compute_balanced_pair_fire_times(barrels, firing_mode=firing_mode, ripple_delay_ms=ripple_delay_ms)
 
-    # 4. Aerodynamic Integration Helper (Compton Mach-Only vs Compressible Re+M + Head/Tailwind)
-    rho_air = float(cp["air_density_kg_m3"]) if cp.get("air_density_kg_m3") is not None else float(temp_fx["air_density_kg_m3"])
+    # 4. Aerodynamic Integration Helper (Walsh/NOL/Compton/Mach-Only/Compressible Re+M + CIPM-2007 Moist Air)
+    from ammo_mc.cuas_ballistics_v2 import (
+        cipm_2007_air_density,
+        evaluate_markov_redundant_kill_tree,
+        sphere_drag_compton_1996_array,
+        sphere_drag_nol_1972_array,
+        sphere_drag_walsh_1976_array,
+    )
+    from ammo_mc.cuas_rigor import (
+        check_pellet_count_consistency,
+        optimal_pattern_radius_closed_form,
+        pk_salvo_brackets,
+        resolve_verification_grade,
+    )
+
+    rh_frac = max(0.0, min(1.0, float(relative_humidity_pct) / 100.0))
+    if cp.get("air_density_kg_m3") is not None:
+        rho_air = float(cp["air_density_kg_m3"])
+        a_sound = float(temp_fx["speed_of_sound_mps"])
+    elif rh_frac > 0.0 or str(drag_model).lower().strip() in {"walsh_1976", "nol_1972", "compton_1996"}:
+        atm_cipm = cipm_2007_air_density(temp_c=float(ambient_temp_c), pressure_pa=101325.0, rh_fraction=rh_frac)
+        rho_air = atm_cipm["rho_kg_m3"]
+        a_sound = atm_cipm["a_mps"]
+    else:
+        rho_air = float(temp_fx["air_density_kg_m3"])
+        a_sound = float(temp_fx["speed_of_sound_mps"])
+
     mu_air = float(temp_fx["air_viscosity_pa_s"])
-    a_sound = float(temp_fx["speed_of_sound_mps"])
-    use_mach_only = str(drag_model).lower().strip() == "mach_only_smooth_sphere"
+    d_law = str(drag_model).lower().strip()
+    kd_mult = max(0.5, min(2.0, float(drag_multiplier_kd)))
+
+    def _cd_array(v_rel: np.ndarray, re_scale: float, base_cd_ov: float, is_fixed_low: bool) -> np.ndarray:
+        if is_fixed_low:
+            return np.full_like(v_rel, base_cd_ov)
+        mach_arr = v_rel / max(a_sound, 100.0)
+        if d_law == "walsh_1976":
+            return sphere_drag_walsh_1976_array(mach_arr)
+        if d_law == "nol_1972":
+            return sphere_drag_nol_1972_array(mach_arr)
+        if d_law == "compton_1996":
+            return sphere_drag_compton_1996_array(mach_arr, trailing_lead=(kd_mult >= 1.15))
+        if d_law == "mach_only_smooth_sphere":
+            return sphere_drag_mach_only_array(mach_arr, base_cd_ov)
+        return sphere_drag_compressible_array(v_rel * re_scale, mach_arr)
 
     def _integrate_pellets_path(
         v0_vec: np.ndarray,
@@ -829,24 +874,14 @@ def simulate_anti_drone_multishotgun_mc(
         hw = float(headwind_mps)
         is_fixed_low = base_cd_ov < 0.25
         re_scale = diam_m * rho_air / mu_air
+        eff_cd_mult = cd_mult_vec * (kd_mult if d_law != "compton_1996" else 1.0)
         for _ in range(n_q):
             v_rel = np.maximum(5.0, v_cur + hw)
-            if is_fixed_low:
-                cd_arr = np.full_like(v_cur, base_cd_ov)
-            elif use_mach_only:
-                cd_arr = sphere_drag_mach_only_array(v_rel / a_sound, base_cd_ov)
-            else:
-                cd_arr = sphere_drag_compressible_array(v_rel * re_scale, v_rel / a_sound)
-            cd_arr = cd_arr * cd_mult_vec
+            cd_arr = _cd_array(v_rel, re_scale, base_cd_ov, is_fixed_low) * eff_cd_mult
             dv_dx_1 = -(0.5 * rho_air * cd_arr * area_p * (v_rel ** 2)) / (max(mass_kg, 1e-6) * np.maximum(v_cur, 5.0))
             v_mid = np.maximum(5.0, v_cur + 0.5 * dx * dv_dx_1)
             v_rel_mid = np.maximum(5.0, v_mid + hw)
-            if is_fixed_low:
-                cd_mid = cd_arr
-            elif use_mach_only:
-                cd_mid = sphere_drag_mach_only_array(v_rel_mid / a_sound, base_cd_ov) * cd_mult_vec
-            else:
-                cd_mid = sphere_drag_compressible_array(v_rel_mid * re_scale, v_rel_mid / a_sound) * cd_mult_vec
+            cd_mid = cd_arr if is_fixed_low else _cd_array(v_rel_mid, re_scale, base_cd_ov, is_fixed_low) * eff_cd_mult
             dv_dx_2 = -(0.5 * rho_air * cd_mid * area_p * (v_rel_mid ** 2)) / (max(mass_kg, 1e-6) * np.maximum(v_mid, 5.0))
             v_next = np.maximum(5.0, v_cur + dx * dv_dx_2)
             tof += dx / np.maximum(0.5 * (v_cur + v_next), 5.0)
@@ -1016,17 +1051,25 @@ def simulate_anti_drone_multishotgun_mc(
             # Sample velocity & drag variances for this barrel's pellets (Annex B) and integrate trajectories
             v0_vec = np.clip(rng.normal(v0_barrel, b_temp_fx["v0_sd_mps"], size=b_pellets), 100.0, 900.0)
             cd_mult_vec = rng.uniform(0.94, b_temp_fx["cd_upper_mult"], size=b_pellets) * cal_cd_scale
+            # Shot-to-shot sigma CV & optional Negative Binomial overdispersed spatial clumping (PD-C03 / PD-F11)
+            sigma_shot = sigma_radial * (
+                float(np.clip(rng.normal(1.0, float(shot_sigma_cv)), 0.4, 2.2)) if float(shot_sigma_cv) > 0.0 else 1.0
+            )
+            if nb_clumping_kappa is not None and float(nb_clumping_kappa) > 0.0:
+                kap = float(nb_clumping_kappa)
+                sigma_shot = sigma_shot * math.sqrt(float(rng.gamma(shape=kap, scale=1.0 / kap)))
+
             if str(pattern_distribution or "gaussian").lower().strip() == "gaussian":
                 t_flight_vec, v_impact_vec = _integrate_pellets_path(
                     v0_vec, b_d_m, b_m_kg, target_distance_m, b_cd_base, cd_mult_vec
                 )
-                dy_vec = rng.normal(0.0, sigma_radial, size=b_pellets)
-                dz_vec = rng.normal(0.0, sigma_radial, size=b_pellets)
+                dy_vec = rng.normal(0.0, sigma_shot, size=b_pellets)
+                dz_vec = rng.normal(0.0, sigma_shot, size=b_pellets)
             else:
                 dy_vec, dz_vec, cd_fly_mult = sample_shotcloud_dispersion(
                     rng,
                     b_pellets,
-                    sigma_radial,
+                    sigma_shot,
                     pattern_distribution=pattern_distribution,
                     flyer_fraction=flyer_fraction,
                     material=bk["b_material"],
@@ -1036,7 +1079,8 @@ def simulate_anti_drone_multishotgun_mc(
                     v0_vec, b_d_m, b_m_kg, target_distance_m, b_cd_base, cd_mult_vec * cd_fly_mult
                 )
 
-            use_hf_impact = bool(use_rotor_solidity or use_v50_ballistic_limit or enable_ray_shielding)
+            p_mode_eff = str(penetration_model or "energy").lower().strip()
+            use_hf_impact = bool(use_rotor_solidity or use_v50_ballistic_limit or enable_ray_shielding or p_mode_eff != "energy")
 
             # Vectorized impact kinematics & batch component evaluation per barrel
             wind_lag_vec = float(crosswind_mps) * np.maximum(
@@ -1067,6 +1111,7 @@ def simulate_anti_drone_multishotgun_mc(
                 enable_ray_shielding=enable_ray_shielding,
                 use_oblique_ricochet=use_oblique_ricochet,
                 rng=rng,
+                penetration_model=p_mode_eff,
             )
             blade_pass_through_count += int(batch_res["blade_pass_through_count"])
             ricochet_count_total += int(batch_res["ricochet_count"])
@@ -1198,6 +1243,44 @@ def simulate_anti_drone_multishotgun_mc(
         n_shots=n_shots_per_barrel,
     )
 
+    # v2.0 Rigor: WB-F01/F02 Salvo Brackets, HP-F33 Optimal Pattern Guardrail, SE-F14 Consistency, Markov Kill Tree, V1-V4 Grade
+    sigma_p_est = max(1e-3, theta_p_eff * max(1.0, float(target_distance_m)))
+    a_v_est = float(aspect_geom["presented_area_m2"]) * cal_avuln_scale * pk_given_hit_est
+    lam0_shot = (eff_pellets / (2.0 * math.pi * (sigma_p_est ** 2))) * a_v_est
+    salvo_brackets = pk_salvo_brackets(lam0_shot, sigma_p_est, max(1e-4, aim_sigma_m), n_act_barrels * max(1, int(n_shots_per_barrel)))
+    opt_guard = optimal_pattern_radius_closed_form(
+        eff_pellets, max(1e-5, a_v_est), max(1e-3, aim_sigma_m),
+        current_sigma_p_m=sigma_p_est, splay_angle_mrad=float(splay_angle_mrad),
+    )
+    rho_mat_g = float(PELLET_MATERIAL_DENSITIES_G_CM3.get(str(nom_ammo["material"]), 11.3))
+    pellet_check = check_pellet_count_consistency(
+        payload_mass_g=float(eff_pellets) * float(eff_m_g),
+        diam_mm=float(eff_d_mm),
+        density_kg_m3=rho_mat_g * 1000.0,
+        claimed_pellets=int(eff_pellets),
+    )
+    markov_pk_pct: float | None = None
+    if use_markov_kill_tree or len(drone_spec.get("rotors", [])) >= 6:
+        mk = evaluate_markov_redundant_kill_tree(
+            n_rotors=max(1, len(drone_spec.get("rotors", []))),
+            max_lost_rotors_survivable=int(drone_spec.get("max_lost_rotors_survivable", 1)),
+            expected_hits_lambda=max(0.0, float(mean_hits)),
+        )
+        markov_pk_pct = round(mk["p_kill"] * 100.0, 1)
+
+    drag_grade = "V1" if d_law in ("walsh_1976", "nol_1972", "compressible_re_m") else ("V2" if d_law == "compton_1996" else "V3")
+    term_grade = "V4" if str(penetration_model).lower() == "energy" else ("V1" if str(penetration_model).lower() in ("wen_cfrp", "thor_metal") else "V3")
+    if "plastic" in str(drone_spec.get("airframe_class", "")):
+        tgt_grade = "V4"
+    elif "cfrp" in str(drone_spec.get("airframe_class", "")):
+        tgt_grade = "V3"
+    else:
+        tgt_grade = "V4"
+    v_grade = resolve_verification_grade(
+        {"drag_aerodynamics": drag_grade, "dispersion": "V3", "muzzle_velocity": "V2", "terminal_penetration": term_grade, "target_vulnerability": tgt_grade},
+        calibrated=bool(cp),
+    )
+
     # Calculate per-barrel summary list
     barrel_stats_list: list[dict[str, Any]] = []
     tot_hits_all = sum(b["hits_on_drone"] for b in barrel_stats_map.values())
@@ -1288,6 +1371,14 @@ def simulate_anti_drone_multishotgun_mc(
             "ricochet_count": int(ricochet_count_total),
             "flyer_count": int(flyer_count_total),
             "mean_v50_mps": round(float(np.mean(v50_samples)), 1) if v50_samples else None,
+            "drag_multiplier_kd": round(kd_mult, 3),
+            "relative_humidity_pct": round(float(relative_humidity_pct), 1),
+            "penetration_model": str(penetration_model),
+            "salvo_brackets": salvo_brackets,
+            "optimal_pattern_guardrail": opt_guard,
+            "pellet_count_check": pellet_check,
+            "verification_grade": v_grade,
+            "markov_redundant_pk_pct": markov_pk_pct,
         },
         "drone_spec": drone_spec,
         "aspect_geometry": aspect_geom,
@@ -1561,6 +1652,12 @@ def evaluate_antidrone_effective_range_envelope(
     flyer_fraction: float = 0.12,
     shot_cup_separation_m: float = 0.0,
     use_oblique_ricochet: bool = False,
+    drag_multiplier_kd: float = 1.0,
+    relative_humidity_pct: float = 0.0,
+    shot_sigma_cv: float = 0.0,
+    nb_clumping_kappa: float | None = None,
+    penetration_model: str = "energy",
+    use_markov_kill_tree: bool = False,
 ) -> dict[str, Any]:
     """Sweep slant range for an anti-drone array to derive P_kill(R), R80, and R50 thresholds."""
     stations = sorted(float(d) for d in (distance_stations_m or [15.0, 25.0, 35.0, 45.0, 55.0, 65.0, 75.0, 85.0]))
@@ -1614,6 +1711,11 @@ def evaluate_antidrone_effective_range_envelope(
                 flyer_fraction=flyer_fraction,
                 shot_cup_separation_m=shot_cup_separation_m,
                 use_oblique_ricochet=use_oblique_ricochet,
+                drag_multiplier_kd=drag_multiplier_kd,
+                relative_humidity_pct=relative_humidity_pct,
+                shot_sigma_cv=shot_sigma_cv,
+                penetration_model=penetration_model,
+                use_markov_kill_tree=use_markov_kill_tree,
             )
             sm = sim["summary"]
             records.append({
@@ -1717,6 +1819,12 @@ def evaluate_antidrone_range_speed_heatmap(
     flyer_fraction: float = 0.12,
     shot_cup_separation_m: float = 0.0,
     use_oblique_ricochet: bool = False,
+    drag_multiplier_kd: float = 1.0,
+    relative_humidity_pct: float = 0.0,
+    shot_sigma_cv: float = 0.0,
+    nb_clumping_kappa: float | None = None,
+    penetration_model: str = "energy",
+    use_markov_kill_tree: bool = False,
 ) -> dict[str, Any]:
     """Compute a 2D Speed x Slant-Range P_kill engagement envelope heatmap."""
     d_stations = sorted(float(d) for d in (distance_stations_m or [15.0, 25.0, 35.0, 45.0, 60.0, 75.0]))
@@ -1779,6 +1887,11 @@ def evaluate_antidrone_range_speed_heatmap(
                 flyer_fraction=flyer_fraction,
                 shot_cup_separation_m=shot_cup_separation_m,
                 use_oblique_ricochet=use_oblique_ricochet,
+                drag_multiplier_kd=drag_multiplier_kd,
+                relative_humidity_pct=relative_humidity_pct,
+                shot_sigma_cv=shot_sigma_cv,
+                penetration_model=penetration_model,
+                use_markov_kill_tree=use_markov_kill_tree,
             )
             sm = sim["summary"]
             pk = float(sm["kill_probability_pct"])

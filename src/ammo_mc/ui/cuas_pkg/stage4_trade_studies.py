@@ -38,6 +38,7 @@ from ammo_mc.vis_cuas_analytics import (
     create_sensitivity_tornado_figure,
 )
 from ammo_mc.vis_cuas_mission import create_logistics_thermal_and_cost_figure
+from ammo_mc.ui.cuas_pkg.helpers import render_verification_and_counter_evidence
 
 
 def render_stage4_trade_studies(active_cuas_mod: str, expert: bool, sg_presets_18: dict[str, Any], drone_specs_18: dict[str, Any], aspect_presets_18: dict[str, Any]) -> None:
@@ -306,6 +307,7 @@ def render_stage4_trade_studies(active_cuas_mod: str, expert: bool, sg_presets_1
                 )
                 ab_fiber = st.checkbox("Fiber-Optic RF-Silent Threat", value=False, key="cuas18_ab_fo")
                 ab_swarm = st.slider("Swarm Wave Benchmark Size", 3, 12, 6, 1, key="cuas18_ab_sw")
+                ab_crn = st.checkbox("Use Common Random Numbers (CRN Paired Variance Reduction, MC-F09)", value=True, key="cuas18_ab_crn")
 
             chosen_cfgs = [avail_map[k] for k in sel_ab_keys[:4]]
             if len(chosen_cfgs) < 2:
@@ -324,6 +326,7 @@ def render_stage4_trade_studies(active_cuas_mod: str, expert: bool, sg_presets_1
                         n_waves=4,
                         drones_per_wave=3,
                         seed=42,
+                        use_common_random_numbers=bool(ab_crn),
                     )
                 ab_sm = ab_res["summary"]
                 ab_sc = ab_res["scorecard"]
@@ -341,6 +344,7 @@ def render_stage4_trade_studies(active_cuas_mod: str, expert: bool, sg_presets_1
                         "Architecture": r["label"],
                         "MEI Score": r["mei_score"],
                         "Kill-Chain Pk (%)": r["kill_chain_pk_pct"],
+                        "Pk 95% Wilson CI": f"[{r.get('kill_chain_pk_ci95_pct', [0, 0])[0]:.1f}, {r.get('kill_chain_pk_ci95_pct', [0, 0])[1]:.1f}]%",
                         "ΔPk vs A": f"{r['delta_pk_vs_a']:+.1f}%",
                         "Swarm Survival (%)": r["swarm_survival_pct"],
                         "Peak Recoil (kN)": r["peak_recoil_kn"],
@@ -359,6 +363,13 @@ def render_stage4_trade_studies(active_cuas_mod: str, expert: bool, sg_presets_1
                     "cuas_ab_scorecard.csv",
                     "text/csv",
                     key="cuas18_dl_ab_csv",
+                )
+                from ammo_mc.cuas_rigor import get_contextual_counter_evidence, resolve_verification_grade
+
+                render_verification_and_counter_evidence(
+                    resolve_verification_grade({"paired_crn": "V1" if ab_crn else "V2", "kill_chain": "V3", "vulnerability": "V3"}),
+                    get_contextual_counter_evidence(stage="comparator", range_m=float(ab_dist), n_mc_trials=45),
+                    key_prefix="stage4_ab",
                 )
 
         with comp_t2:

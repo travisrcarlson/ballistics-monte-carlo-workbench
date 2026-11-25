@@ -356,6 +356,11 @@ def _cached_antidrone_array_mc(
     flyer_fraction: float = 0.12,
     shot_cup_separation_m: float = 0.0,
     use_oblique_ricochet: bool = False,
+    drag_multiplier_kd: float = 1.0,
+    relative_humidity_pct: float = 0.0,
+    shot_sigma_cv: float = 0.0,
+    penetration_model: str = "energy",
+    use_markov_kill_tree: bool = False,
 ) -> dict[str, Any]:
     custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
     custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
@@ -407,6 +412,11 @@ def _cached_antidrone_array_mc(
         flyer_fraction=flyer_fraction,
         shot_cup_separation_m=shot_cup_separation_m,
         use_oblique_ricochet=use_oblique_ricochet,
+        drag_multiplier_kd=drag_multiplier_kd,
+        relative_humidity_pct=relative_humidity_pct,
+        shot_sigma_cv=shot_sigma_cv,
+        penetration_model=penetration_model,
+        use_markov_kill_tree=use_markov_kill_tree,
     )
 
 
@@ -458,6 +468,11 @@ def _cached_antidrone_range_envelope(
     flyer_fraction: float = 0.12,
     shot_cup_separation_m: float = 0.0,
     use_oblique_ricochet: bool = False,
+    drag_multiplier_kd: float = 1.0,
+    relative_humidity_pct: float = 0.0,
+    shot_sigma_cv: float = 0.0,
+    penetration_model: str = "energy",
+    use_markov_kill_tree: bool = False,
 ) -> dict[str, Any]:
     custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
     custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
@@ -510,6 +525,11 @@ def _cached_antidrone_range_envelope(
         flyer_fraction=flyer_fraction,
         shot_cup_separation_m=shot_cup_separation_m,
         use_oblique_ricochet=use_oblique_ricochet,
+        drag_multiplier_kd=drag_multiplier_kd,
+        relative_humidity_pct=relative_humidity_pct,
+        shot_sigma_cv=shot_sigma_cv,
+        penetration_model=penetration_model,
+        use_markov_kill_tree=use_markov_kill_tree,
     )
 
 
@@ -560,6 +580,11 @@ def _cached_antidrone_range_speed_heatmap(
     flyer_fraction: float = 0.12,
     shot_cup_separation_m: float = 0.0,
     use_oblique_ricochet: bool = False,
+    drag_multiplier_kd: float = 1.0,
+    relative_humidity_pct: float = 0.0,
+    shot_sigma_cv: float = 0.0,
+    penetration_model: str = "energy",
+    use_markov_kill_tree: bool = False,
 ) -> dict[str, Any]:
     custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
     custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
@@ -611,6 +636,11 @@ def _cached_antidrone_range_speed_heatmap(
         flyer_fraction=flyer_fraction,
         shot_cup_separation_m=shot_cup_separation_m,
         use_oblique_ricochet=use_oblique_ricochet,
+        drag_multiplier_kd=drag_multiplier_kd,
+        relative_humidity_pct=relative_humidity_pct,
+        shot_sigma_cv=shot_sigma_cv,
+        penetration_model=penetration_model,
+        use_markov_kill_tree=use_markov_kill_tree,
     )
 
 
@@ -634,6 +664,10 @@ def _cached_closed_loop_fcs(
     aspect_mode: str,
     n_volleys: int = 25,
     seed: int = 42,
+    use_serial_dead_time_chain: bool = False,
+    dead_time_preset: str = "eo_60hz_1stream",
+    use_heavy_tailed_atr: bool = False,
+    enable_aspect_rcs_nulls: bool = False,
 ) -> dict[str, Any]:
     return simulate_closed_loop_fcs_engagement_mc(
         sensor_preset=sensor_preset,
@@ -654,6 +688,10 @@ def _cached_closed_loop_fcs(
         aspect_mode=aspect_mode,
         n_volleys=n_volleys,
         seed=seed,
+        use_serial_dead_time_chain=use_serial_dead_time_chain,
+        dead_time_preset=dead_time_preset,
+        use_heavy_tailed_atr=use_heavy_tailed_atr,
+        enable_aspect_rcs_nulls=enable_aspect_rcs_nulls,
     )
 
 
@@ -1056,6 +1094,7 @@ def _cached_compare_ab(
     n_waves: int,
     drones_per_wave: int,
     seed: int = 42,
+    use_common_random_numbers: bool = True,
 ) -> dict[str, Any]:
     return compare_cuas_architectures_ab(
         configs=json.loads(configs_json) if configs_json else None,
@@ -1069,6 +1108,7 @@ def _cached_compare_ab(
         n_waves=n_waves,
         drones_per_wave=drones_per_wave,
         seed=seed,
+        use_common_random_numbers=use_common_random_numbers,
     )
 
 

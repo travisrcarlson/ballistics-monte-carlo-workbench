@@ -358,5 +358,25 @@ def test_ui_v18_global_hf_sidebar_stl_sprt_and_4pillar_calibration(tmp_path: Pat
     assert "_cal_live_sprt_res" in at_cal.session_state
 
 
+def test_ui_v20_rigor_badges_usable_window_and_workbook_vv_tab() -> None:
+    """Verify v2.0 verification badges, Counter-Evidence expanders, Usable Window & Workbook V&V Matrix tab."""
+    at_val = AppTest.from_file(ROOT_APP, default_timeout=60)
+    at_val.session_state["authenticated"] = True
+    at_val.query_params["wb"] = "validation"
+    at_val.run()
+    assert not at_val.exception
+    assert any("C-UAS Workbook" in t.label for t in at_val.tabs)
+    assert len(at_val.dataframe) >= 4
+
+    at_c1 = AppTest.from_file(ROOT_APP, default_timeout=60)
+    at_c1.session_state["authenticated"] = True
+    at_c1.query_params["wb"] = "cuas"
+    at_c1.query_params["mod"] = "array"
+    at_c1.run()
+    assert not at_c1.exception
+    assert any("Counter-Evidence" in e.label for e in at_c1.expander)
+    assert any("Usable Engagement Window" in e.label for e in at_c1.expander)
+
+
 
 

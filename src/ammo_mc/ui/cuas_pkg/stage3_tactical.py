@@ -63,6 +63,7 @@ from ammo_mc.ui.cuas_pkg.helpers import (
     _render_cuas_profile_sync_bar,
     _sanitize_site_editor_tables,
     render_high_fidelity_active_banner,
+    render_verification_and_counter_evidence,
 )
 
 
@@ -189,6 +190,46 @@ def render_stage3_tactical(active_cuas_mod: str, expert: bool, sg_presets_18: di
                 st.info(csm["verdict_note"])
             st.plotly_chart(create_collateral_safety_envelope_figure(collat_res), width="stretch", key="cuas18_sd_collat_fig")
             st.dataframe(pd.DataFrame(collat_res["tier_breakdown"]), width="stretch", hide_index=True)
+
+            dual_h = collat_res.get("dual_criterion_hazards") or {}
+            deb_h = collat_res.get("falling_drone_debris") or {}
+            doc_ov = collat_res.get("doctrine_reference_overlays") or {}
+            if dual_h or deb_h:
+                with st.expander("⚖️ Dual RCC 321-23 / Kneubuehl Criteria, Falling Debris & Doctrine Overlays", expanded=False):
+                    d_c1, d_c2 = st.columns(2)
+                    with d_c1:
+                        st.markdown("**Pellet Energy & Specific Energy Density Thresholds**")
+                        st.dataframe(
+                            pd.DataFrame([
+                                {"Standard / Criterion": "RCC 321-23 Blunt Casualty (>=14.91 J)", "Share (%)": dual_h.get("rcc_321_23_blunt_casualty_14_91j_pct", 0.0)},
+                                {"Standard / Criterion": "RCC 321-23 Fatality Standing (>=33.89 J)", "Share (%)": dual_h.get("rcc_321_23_fatality_standing_33_89j_pct", 0.0)},
+                                {"Standard / Criterion": "RCC 321-23 Penetration Casualty (>=7.145 J/cm²)", "Share (%)": dual_h.get("rcc_321_23_penetration_casualty_7_145j_cm2_pct", 0.0)},
+                                {"Standard / Criterion": "Kneubuehl Skin Penetration (>=10.0 J/cm²)", "Share (%)": dual_h.get("kneubuehl_skin_10j_cm2_pct", 0.0)},
+                                {"Standard / Criterion": "Kneubuehl Ocular Hazard (>=3.0 J/cm²)", "Share (%)": dual_h.get("kneubuehl_eye_3j_cm2_pct", 0.0)},
+                            ]),
+                            width="stretch",
+                            hide_index=True,
+                        )
+                    with d_c2:
+                        st.markdown("**Falling Drone Debris (SE-F04) & Doctrine Reference Angles**")
+                        st.metric("1.5 kg Drone Impact Energy (35 m)", f"{deb_h.get('impact_energy_j', 0.0):.1f} J", delta=deb_h.get("threshold_status", ""))
+                        ar_ov = doc_ov.get("ar_385_63_table_5_1", {})
+                        uk_ov = doc_ov.get("uk_jsp_403_vol2_ch2_table3", {})
+                        st.caption(
+                            f"**US Army AR 385-63 Table 5-1:** {ar_ov.get('class_note', '')} | "
+                            f"**UK JSP 403 Vol 2 Ch 2 Table 3:** +{uk_ov.get('lateral_cone_mils', 80):.0f} mils lateral azimuth, "
+                            f"+{uk_ov.get('vertical_cone_mils', 200):.0f} mils vertical elevation."
+                        )
+                        st.warning(deb_h.get("uxo_post_kill_notice", ""))
+                    st.caption(collat_res.get("scope_notice", "Engineering scoping aid only."))
+
+            from ammo_mc.cuas_rigor import get_contextual_counter_evidence, resolve_verification_grade
+
+            render_verification_and_counter_evidence(
+                resolve_verification_grade({"ballistic_fallout": "V1", "injury_thresholds": "V1", "post_kill_debris": "V2"}),
+                get_contextual_counter_evidence(stage="sdz"),
+                key_prefix="stage3_sdz",
+            )
 
     # --- TAB 18.6: MULTI-SENSOR DETECTION, CLASSIFICATION & KILL-CHAIN TIMELINE ---
     elif active_cuas_mod == _CUAS18_MODULES[5]:

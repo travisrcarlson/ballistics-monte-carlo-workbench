@@ -596,19 +596,100 @@ def _run_physics_benchmarks_b01_b18(seed: int = 42) -> tuple[list[dict[str, Any]
     rows.append(_make_benchmark_row(
         benchmark_id="B-18",
         domain="Literature Governance",
-        title="87-source provenance linkage & flagged formula registry integrity",
+        title="100-source provenance linkage & flagged formula registry integrity",
         module="ammo_mc.literature",
-        source_ids=["S01", "S87"],
+        source_ids=["S01", "S100"],
         unit="%",
         computed=float(lit_summary["linked_source_coverage_pct"]),
         reference=100.0,
         tolerance=1e-9,
         extra_passed=(
-            int(lit_summary["total_sources"]) == 87
+            int(lit_summary["total_sources"]) == 100
             and int(lit_summary["total_formulas"]) == 96
             and sorted(lit_summary["flagged_formula_ids"]) == ["TB-12", "TF-12", "TP-01"]
         ),
         notes=f"{lit_summary['total_sources']} sources, {lit_summary['mapped_modules']} modules, {lit_summary['total_formulas']} formulas",
+    ))
+
+    # B-19..B-22: v2.0 C-UAS Deep Physics & Statistical Oracles
+    from ammo_mc.cuas_ballistics_v2 import (
+        cipm_2007_air_density,
+        compute_saami_recoil_impulse,
+        sphere_drag_walsh_1976,
+    )
+    from ammo_mc.cuas_rigor import (
+        compute_wilson_ci,
+        pk_salvo_brackets,
+        pk_single_shot_closed_form,
+        run_workbook_validation_cases,
+    )
+
+    rho_isa = 101325.0 / (287.053 * 288.15)
+    a_isa = math.sqrt(1.4 * 287.053 * 288.15)
+    k_4 = (3.0 * rho_isa) / (4.0 * 11200.0 * 0.00330)
+    v_40 = 405.0
+    for _ in range(40):
+        q_s = k_4 * sphere_drag_walsh_1976(v_40 / a_isa)
+        v_40 *= math.exp(-q_s)
+    rows.append(_make_benchmark_row(
+        benchmark_id="B-19",
+        domain="C-UAS Exterior Ballistics",
+        title="Walsh (1976) NASA TN D-8120 continuum Cd & #4 lead 40 m retained velocity",
+        module="ammo_mc.cuas_ballistics_v2",
+        source_ids=["S88"],
+        unit="m/s",
+        computed=v_40,
+        reference=227.858844,
+        tolerance=1e-4,
+        notes="WB-F05 1 m exponential integrator on Walsh table EB-T01",
+    ))
+
+    pk_a1 = pk_single_shot_closed_form(0.5, 0.4, 0.3)
+    br_4 = pk_salvo_brackets(1.529181273, 0.307791848, 0.208673604, 4)
+    rows.append(_make_benchmark_row(
+        benchmark_id="B-20",
+        domain="C-UAS Salvo Theory",
+        title="WB-F01/WB-F02 exact closed-form single-shot & shared-error salvo brackets",
+        module="ammo_mc.cuas_rigor",
+        source_ids=["S94", "S95"],
+        unit="Pk",
+        computed=pk_a1,
+        reference=0.268190769393115,
+        tolerance=1e-9,
+        extra_passed=abs(br_4["pk_shared_lower"] - 0.954930612) < 1e-4 and abs(br_4["pk_independent_upper"] - 0.980413136) < 1e-4,
+        notes=f"4-gun shared={br_4['pk_shared_lower']:.6f} vs indep={br_4['pk_independent_upper']:.6f}",
+    ))
+
+    cipm_dry = cipm_2007_air_density(15.0, 101325.0, 0.0)
+    saami_7 = compute_saami_recoil_impulse(589.9 * 0.06479891, 0.0, 33.4 * 0.06479891, 1275.0 * 0.3048, 7.0 * 0.45359237, 1.50)
+    rows.append(_make_benchmark_row(
+        benchmark_id="B-21",
+        domain="Atmosphere & Recoil",
+        title="CIPM-2007 air density & SAAMI proportional propellant-gas recoil impulse",
+        module="ammo_mc.cuas_ballistics_v2",
+        source_ids=["S90", "S91"],
+        unit="N*s",
+        computed=saami_7["impulse_ns"],
+        reference=16.12,
+        tolerance=5e-3,
+        extra_passed=abs(cipm_dry["rho_kg_m3"] - 1.22552) < 1e-3,
+        notes=f"CIPM rho={cipm_dry['rho_kg_m3']:.5f} kg/m^3, FRE={saami_7['free_recoil_energy_j']:.2f} J",
+    ))
+
+    wb_vv = run_workbook_validation_cases()
+    w_lo, w_hi = compute_wilson_ci(4, 20, 0.10)
+    rows.append(_make_benchmark_row(
+        benchmark_id="B-22",
+        domain="C-UAS Workbook Oracles",
+        title=f"Deterministic C-UAS workbook matrix ({wb_vv['summary']['total']} oracles & binomial CIs)",
+        module="ammo_mc.cuas_rigor",
+        source_ids=["S94", "S100"],
+        unit="%",
+        computed=float(wb_vv["summary"]["pass_rate_pct"]),
+        reference=100.0,
+        tolerance=1e-9,
+        extra_passed=int(wb_vv["summary"]["failed"]) == 0 and abs(w_lo - 0.093118017) < 1e-7 and abs(w_hi - 0.378376686) < 1e-7,
+        notes=f"{wb_vv['summary']['passed']}/{wb_vv['summary']['total']} oracles pass",
     ))
 
     return rows, lit_summary
@@ -652,7 +733,7 @@ def run_extended_vv_benchmarks(seed: int = 42, n_mc_v08: int = 50_000) -> dict[s
     phys_total = len(physics_benchmarks)
 
     return {
-        "version": "1.3.0",
+        "version": "2.0.0",
         "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "seed": int(seed),
         "n_mc_v08": int(n_mc_v08),
@@ -687,7 +768,7 @@ def generate_vv_certificate_markdown(report: dict[str, Any]) -> str:
     summary = report["summary"]
     lit = summary["literature"]
     lines = [
-        f"# Ammunition Monte Carlo (`ammo-mc`) v{report.get('version', '1.3.0')} — Verification & Validation Audit Certificate",
+        f"# Ammunition Monte Carlo (`ammo-mc`) v{report.get('version', '2.0.0')} — Verification & Validation Audit Certificate",
         "",
         f"- **Generated (UTC):** `{report.get('generated_utc', '')}`",
         f"- **RNG Seed:** `{report.get('seed', 42)}` | **V-08 MC Samples:** `{report.get('n_mc_v08', 50_000):,}` | **Runtime:** `{report.get('elapsed_s', 0.0):.3f} s`",
@@ -803,7 +884,7 @@ def generate_vv_certificate_html(report: dict[str, Any]) -> str:
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>ammo-mc v{html.escape(str(report.get('version', '1.3.0')))} V&amp;V Audit Certificate</title>
+<title>ammo-mc v{html.escape(str(report.get('version', '2.0.0')))} V&amp;V Audit Certificate</title>
 <style>
   :root {{ --bg:#f8fafc; --card:#ffffff; --ink:#0f172a; --muted:#475569; --line:#e2e8f0; --accent:#0f4c81; }}
   body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--ink); margin:0; padding:28px; line-height:1.45; }}
@@ -836,7 +917,7 @@ def generate_vv_certificate_html(report: dict[str, Any]) -> str:
 <div class="wrap">
   <div class="hero">
     <div>
-      <h1>Ammunition Monte Carlo (ammo-mc) v{html.escape(str(report.get('version', '1.3.0')))} — V&amp;V Audit Certificate</h1>
+      <h1>Ammunition Monte Carlo (ammo-mc) v{html.escape(str(report.get('version', '2.0.0')))} — V&amp;V Audit Certificate</h1>
       <p>Generated UTC: {html.escape(str(report.get('generated_utc', '')))} &middot; Seed: {report.get('seed', 42)} &middot; V-08 MC: {report.get('n_mc_v08', 50000):,} &middot; Runtime: {report.get('elapsed_s', 0.0):.3f} s</p>
     </div>
     <div class="status-badge">{badge_txt}</div>

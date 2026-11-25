@@ -91,7 +91,7 @@ app = FastAPI(
         "Production REST API for stochastic ammunition effects, trajectory dispersion, "
         "fuze reliability, blast/fragmentation hazard modeling, and Counter-UAS trade studies."
     ),
-    version="1.8.0",
+    version="2.0.0",
 )
 
 app.add_middleware(
@@ -145,7 +145,7 @@ def _verify_api_auth(
 
 class HealthResponse(BaseModel):
     status: str = "ok"
-    version: str = "1.8.0"
+    version: str = "2.0.0"
     uptime_seconds: float
     use_limitation: str = USE_LIMITATION_NOTICE
 
@@ -176,7 +176,7 @@ def get_health() -> HealthResponse:
     """Return API health status, version, and official use limitation notice."""
     return HealthResponse(
         status="ok",
-        version="1.8.0",
+        version="2.0.0",
         uptime_seconds=round(time.time() - START_TIME, 2),
         use_limitation=USE_LIMITATION_NOTICE,
     )
@@ -1491,3 +1491,62 @@ def post_cuas_briefing_pptx(req: BriefingExportRequest) -> Response:
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         headers={"Content-Disposition": "attachment; filename=cuas_executive_briefing.pptx"},
     )
+
+
+class SalvoBracketsRequest(BaseModel):
+    lambda0: float = 1.529181
+    sigma_m: float = 0.3078
+    sigma_a_m: float = 0.2087
+    n_shots: int = 4
+
+
+class EngagementWindowRequest(BaseModel):
+    drone_speed_mps: float = 25.0
+    drone_altitude_m: float = 15.0
+    warhead_blast_radius_m: float = 8.0
+    n_barrels: int = 4
+    salvo_interval_s: float = 0.65
+    ammo_preset: str = "12G_NO4_BUCK_C_UAS"
+    choke: str = "Modified"
+    drone_class: str = "fpv_cfrp"
+    aim_error_mrad: float = 2.0
+
+
+class PelletConsistencyRequest(BaseModel):
+    payload_mass_g: float = 35.4
+    diam_mm: float = 3.30
+    density_kg_m3: float = 11200.0
+    claimed_pellets: int = 168
+    tol_pct: float = 12.0
+
+
+@app.post("/cuas/rigor/salvo-brackets", tags=["C-UAS", "Validation"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_salvo_brackets(req: SalvoBracketsRequest) -> dict[str, Any]:
+    """Compute exact WB-F01 / WB-F02 shared-error lower vs independent-error upper salvo brackets."""
+    from ammo_mc.cuas_rigor import pk_salvo_brackets
+
+    return _to_json_safe(pk_salvo_brackets(**req.model_dump()))
+
+
+@app.post("/cuas/rigor/engagement-window", tags=["C-UAS", "Validation"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_engagement_window(req: EngagementWindowRequest) -> dict[str, Any]:
+    """Evaluate closing-target Usable Engagement Window [R_min_safe, R_max] with wreck carry-on inertia."""
+    from ammo_mc.cuas_rigor import evaluate_closing_engagement_window
+
+    return _to_json_safe(evaluate_closing_engagement_window(**req.model_dump()))
+
+
+@app.post("/cuas/rigor/pellet-consistency", tags=["C-UAS", "Validation"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_pellet_consistency(req: PelletConsistencyRequest) -> dict[str, Any]:
+    """Check physical mass-count consistency between claimed pellet count, diameter, density, and load mass."""
+    from ammo_mc.cuas_rigor import check_pellet_count_consistency
+
+    return _to_json_safe(check_pellet_count_consistency(**req.model_dump()))
+
+
+@app.get("/cuas/vv/workbook-cases", tags=["Validation"], dependencies=[Depends(_verify_api_auth)])
+def get_cuas_workbook_cases() -> dict[str, Any]:
+    """Run deterministic C-UAS workbook Validation_Cases & Calc_Checks regression oracles."""
+    from ammo_mc.cuas_rigor import run_workbook_validation_cases
+
+    return _to_json_safe(run_workbook_validation_cases())

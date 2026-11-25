@@ -605,6 +605,22 @@
       "formula_ids": ["EB-04", "TV-04", "DA-01", "MC-02"],
       "data_tables": ["cuas_shotgun_presets.json", "cuas_drone_targets.json"],
       "assumptions_and_limits": "Single-stage pellet ballistic limits assume isotropic spherical or flechette impactor geometry with calibrated cosine obliquity scaling."
+    },
+    {
+      "entry_id": "cuas-v2-epistemic-rigor",
+      "workbench": "🛸 C-UAS & Multi-Barrel",
+      "workbench_slug": "cuas",
+      "module_name": "C-UAS v2.0 Scientific Rigor, Salvo Brackets, Usable Window & Dual Safety",
+      "code_files": [
+        "src/ammo_mc/cuas_ballistics_v2.py",
+        "src/ammo_mc/cuas_rigor.py",
+        "src/ammo_mc/cuas_safety_envelope.py"
+      ],
+      "description": "Walsh (1976) / NOL / Compton sphere drag, CIPM-2007 moist air, SAAMI instrumental velocity and recoil gas factor, Wen (2000) CFRP ballistic limit, FAA shear-plugging Cs, THOR TR-47 metallic perforation, Markov redundant kill tree, serial dead-time chain, closed-form WB-F01/WB-F02 salvo brackets, wreck-inertia usable engagement window [R_min_safe, R_max], dual RCC 321-23 / Kneubuehl safety, CRN paired comparison, and V1-V4 weakest-link epistemic grading.",
+      "source_ids": ["S88", "S89", "S90", "S91", "S92", "S93", "S94", "S95", "S96", "S97", "S98", "S99", "S100"],
+      "formula_ids": ["EB-04", "IB-06", "DA-01", "TV-03", "TV-04", "TF-04", "TF-12", "MC-02"],
+      "data_tables": ["sources.json", "validation_cases.json"],
+      "assumptions_and_limits": "Scoping engineering suite graded V1-V4 by weakest component link; verification against closed-form oracles does not establish live-fire empirical validity."
     }
   ],
   "data_tables": [

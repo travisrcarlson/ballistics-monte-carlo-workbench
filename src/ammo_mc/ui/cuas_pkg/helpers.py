@@ -37,6 +37,7 @@ from ammo_mc.vis_cuas import (
     create_antidrone_range_speed_heatmap_figure,
 )
 from ammo_mc.vis_cuas_advanced import create_swap_c_and_otm_figure
+from ammo_mc.vis_cuas_vv import create_salvo_brackets_and_window_figure
 
 
 def _get_cal_twin_json() -> str:
@@ -62,6 +63,35 @@ def render_high_fidelity_active_banner() -> None:
             "🔬 **Global High-Fidelity Physics Active:** Rotor solidity, $V_{50}(\\theta)$ oblique ricochet, "
             "ray shielding, shot-cup separation (`2.5 m`), and core-flyer dispersion synced across stages."
         )
+
+
+def render_verification_and_counter_evidence(
+    grade_info: dict[str, Any] | None,
+    counter_items: list[dict[str, Any]],
+    *,
+    key_prefix: str = "cuas",
+) -> None:
+    """Display weakest-link V1-V4 verification depth badge and contextual Counter-Evidence panel."""
+    if grade_info:
+        grade = str(grade_info.get("grade", "V4"))
+        label = str(grade_info.get("label", "V4 — Analyst Estimate"))
+        weakest = ", ".join(str(w) for w in grade_info.get("weakest_components", [])) or "target_vulnerability"
+        cal_tag = " | Range-Calibrated Twin" if grade_info.get("calibrated_twin_applied") else ""
+        msg = f"**Evidence Depth: `{label}`** (Weakest link: `{weakest}`{cal_tag}) — {grade_info.get('disclaimer', '')}"
+        if grade == "V1":
+            st.success(msg)
+        elif grade == "V2":
+            st.info(msg)
+        else:
+            st.warning(msg)
+    if counter_items:
+        with st.expander(f"⚠️ Counter-Evidence, Modeling Limits & Literature Gaps ({len(counter_items)} active)", expanded=False):
+            for item in counter_items:
+                st.markdown(
+                    f"- **`{item['id']}` [{item['grade']}] {item['title']}** — {item['detail']} "
+                    f"*Mitigation:* {item['mitigation']}"
+                )
+            st.caption(f"Diagnostics key: `{key_prefix}` | Grading never implies full live-fire empirical validation.")
 
 
 def _apply_stage1_fix_callback(patch: dict[str, Any], label: str = "Calibrated Design Fix") -> None:
@@ -193,6 +223,11 @@ def _render_effective_range_tab(
     shot_cup_separation_m: float = 0.0,
     pattern_distribution: str = "gaussian",
     flyer_fraction: float = 0.12,
+    drag_multiplier_kd: float = 1.0,
+    relative_humidity_pct: float = 0.0,
+    shot_sigma_cv: float = 0.0,
+    penetration_model: str = "energy",
+    use_markov_kill_tree: bool = False,
     annex_c_sample: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Render Stage 1 Effective Range Curve (R80 / R50), Annex C table, and optional Speed x Range Heatmap."""
@@ -269,6 +304,11 @@ def _render_effective_range_tab(
             shot_cup_separation_m=shot_cup_separation_m,
             pattern_distribution=pattern_distribution,
             flyer_fraction=flyer_fraction,
+            drag_multiplier_kd=drag_multiplier_kd,
+            relative_humidity_pct=relative_humidity_pct,
+            shot_sigma_cv=shot_sigma_cv,
+            penetration_model=penetration_model,
+            use_markov_kill_tree=use_markov_kill_tree,
         )
     st.session_state["_report_range_envelope"] = env_res
     esm = env_res["summary"]
@@ -303,6 +343,53 @@ def _render_effective_range_tab(
                     }
                 )
             st.dataframe(pd.DataFrame(ac_rows), width="stretch", hide_index=True)
+
+    # Usable Engagement Window [R_min_safe, R_max] with Wreck Carry-On Inertia & Salvo Brackets
+    with st.expander("🧭 Usable Engagement Window [R_min_safe, R_max] (Wreck Inertia) & Salvo Brackets", expanded=False):
+        from ammo_mc.cuas_rigor import evaluate_closing_engagement_window, optimal_pattern_radius_closed_form
+
+        uw_c1, uw_c2, uw_c3 = st.columns(3)
+        with uw_c1:
+            uw_alt = st.slider("Threat Approach Altitude h (m)", 3.0, 60.0, 15.0, 1.0, key="cuas_uw_alt")
+        with uw_c2:
+            uw_blast = st.slider("Warhead / Debris Blast Radius (m)", 2.0, 20.0, 8.0, 1.0, key="cuas_uw_blast")
+        with uw_c3:
+            uw_class = st.selectbox(
+                "Target Vulnerability Benchmark",
+                ["fpv_cfrp", "plastic_shell"],
+                format_func=lambda k: "3 mm CFRP FPV (Wen 2000, V3)" if k == "fpv_cfrp" else "Plastic-Shell Consumer Quad (5 J, V4)",
+                key="cuas_uw_class",
+            )
+        win_res = evaluate_closing_engagement_window(
+            drone_speed_mps=max(5.0, float(drone_velocity_mps)),
+            drone_altitude_m=float(uw_alt),
+            warhead_blast_radius_m=float(uw_blast),
+            n_barrels=int(n_barrels),
+            ammo_preset=str(ammunition_preset),
+            choke=str(default_choke),
+            drone_class=str(uw_class),
+            aim_error_mrad=max(0.5, float(aim_error_mrad)),
+            k_d=float(drag_multiplier_kd),
+        )
+        wsm = win_res["summary"]
+        wk1, wk2, wk3, wk4 = st.columns(4)
+        wk1.metric("Wreck Keep-Out Floor R_min_safe", f"{wsm['r_min_safe_m']:.1f} m", delta=f"Carry-on: {wsm['x_wreck_m']:.1f} m + blast {uw_blast:.0f} m")
+        wk2.metric("Shared-Error Max R_max", f"{wsm['r_max_shared_m']:.1f} m", delta=f"Indep R_max: {wsm['r_max_indep_m']:.1f} m")
+        wk3.metric("Usable Window Width", "COLLAPSED" if wsm["window_collapsed"] else f"{wsm['usable_window_m']:.1f} m", delta=f"{wsm['usable_window_time_s']:.2f} s ({wsm['n_salvos_available']} salvos)")
+        wk4.metric("Cumulative Window Pk", f"{wsm['cum_pk_shared_pct']:.1f} %", delta=f"Indep upper: {wsm['cum_pk_indep_pct']:.1f}%")
+        if wsm["window_collapsed"]:
+            st.error("DT-C06 Collapse: R_min_safe (wreck carry-on inertia) exceeds R_max (shared-error Pk>=50%). Lower dead time, increase standoff weapon reach, or engage earlier.")
+        st.plotly_chart(create_salvo_brackets_and_window_figure(win_res), width="stretch", key="cuas_uw_fig")
+
+        if annex_c_sample:
+            sa_est = max(0.05, float(annex_c_sample["theta_aim_rad"]) * 40.0)
+            av_est = max(1e-4, float(annex_c_sample["vulnerable_area_m2"]) * float(annex_c_sample["pk_given_hit"]))
+            opt_r = optimal_pattern_radius_closed_form(float(annex_c_sample["n_pellets"]), av_est, sa_est)
+            st.caption(
+                f"HP-F33 Optimal Uniform-Disc Pattern @ 40 m (sigma_a={sa_est:.2f} m): "
+                f"R_p* = **{opt_r['r_opt_disc_m']:.2f} m** (Peak Pk* = **{opt_r['pk_opt_disc']*100:.1f}%**) | "
+                f"Gaussian sigma* = **{opt_r['sigma_opt_gauss_m']:.2f} m**"
+            )
 
     st.divider()
     show_hm = st.checkbox(

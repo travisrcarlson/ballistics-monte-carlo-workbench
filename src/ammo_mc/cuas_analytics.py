@@ -149,6 +149,7 @@ def compare_cuas_architectures_ab(
     n_waves: int = 4,
     drones_per_wave: int = 3,
     seed: int = 42,
+    use_common_random_numbers: bool = True,
 ) -> dict[str, Any]:
     """Compare 2 to 4 turret architectures side by side across 6 operational metrics."""
     if not configs:
@@ -175,6 +176,8 @@ def compare_cuas_architectures_ab(
         max_range = float(cfg.get("max_weapon_range_m", 58.0))
         cycle_s = float(cfg.get("salvo_cycle_time_s", 0.85))
 
+        n_kc_trials = 45
+        cfg_seed_kc = seed if use_common_random_numbers else (seed + idx)
         kc_res = simulate_cuas_kill_chain_mc(
             drone_model=drone_model,
             aspect_mode=aspect_mode,
@@ -186,8 +189,8 @@ def compare_cuas_architectures_ab(
             choke=choke,
             max_weapon_range_m=max_range,
             salvo_cycle_time_s=cycle_s,
-            n_trials=45,
-            seed=seed + idx,
+            n_trials=n_kc_trials,
+            seed=cfg_seed_kc,
         )
         kc_sm = kc_res["summary"]
 
@@ -203,7 +206,7 @@ def compare_cuas_architectures_ab(
             aspect_mode=aspect_mode,
             max_engagement_range_m=max_range,
             n_waves=12,
-            seed=seed + 100 + idx,
+            seed=seed + 100 if use_common_random_numbers else (seed + 100 + idx),
             include_doctrine_sweep=False,
         )
         sw_sm = sw_res["summary"]
@@ -230,7 +233,7 @@ def compare_cuas_architectures_ab(
             default_choke=choke,
             intercept_slant_range_m=target_distance_m,
             n_sample_pellets=75,
-            seed=seed + 200 + idx,
+            seed=seed + 200 if use_common_random_numbers else (seed + 200 + idx),
         )
         fl_sm = fl_res["summary"]
 
@@ -244,7 +247,7 @@ def compare_cuas_architectures_ab(
             drone_model=drone_model,
             aspect_mode=aspect_mode,
             n_trials=20,
-            seed=seed + 300 + idx,
+            seed=seed + 300 if use_common_random_numbers else (seed + 300 + idx),
         )
         lg_sm = lg_res["summary"]
         peak_temp_c = float(lg_sm["peak_barrel_temp_c"])
@@ -281,7 +284,11 @@ def compare_cuas_architectures_ab(
     s_th = _minmax_score([r["cookoff_margin_c"] for r in raw_rows], True)
     s_cs = _minmax_score([r["cost_per_kill_usd"] for r in raw_rows], False)
 
+    from ammo_mc.cuas_rigor import compute_wilson_ci
+
     base = raw_rows[0]
+    n_kc_ref = 45
+    k_base = int(round((base["kill_chain_pk_pct"] / 100.0) * n_kc_ref))
     for i, r in enumerate(raw_rows):
         mei = round(
             0.30 * s_kc[i]
@@ -303,6 +310,14 @@ def compare_cuas_architectures_ab(
         }
         r["delta_pk_vs_a"] = round(r["kill_chain_pk_pct"] - base["kill_chain_pk_pct"], 1)
         r["delta_cost_vs_a_usd"] = round(r["cost_per_kill_usd"] - base["cost_per_kill_usd"], 2)
+        k_i = int(round((r["kill_chain_pk_pct"] / 100.0) * n_kc_ref))
+        w_lo, w_hi = compute_wilson_ci(k_i, n_kc_ref, alpha=0.05)
+        r["kill_chain_pk_ci95_pct"] = [round(w_lo * 100.0, 1), round(w_hi * 100.0, 1)]
+        p_i = k_i / n_kc_ref
+        p_a = k_base / n_kc_ref
+        # Paired SE scaled down under CRN (MC-F09)
+        se_diff = math.sqrt(max(0.0, p_i * (1 - p_i) + p_a * (1 - p_a)) / n_kc_ref) * (0.55 if use_common_random_numbers else 1.0)
+        r["delta_pk_vs_a_ci95_pct"] = [round((p_i - p_a - 1.96 * se_diff) * 100.0, 1), round((p_i - p_a + 1.96 * se_diff) * 100.0, 1)]
 
     winner = max(raw_rows, key=lambda x: x["mei_score"])
     return {
@@ -314,6 +329,7 @@ def compare_cuas_architectures_ab(
             "drone_model": drone_model,
             "weather": weather,
             "fiber_optic_autonomous": fiber_optic_autonomous,
+            "crn_active": bool(use_common_random_numbers),
         },
         "scorecard": raw_rows,
     }

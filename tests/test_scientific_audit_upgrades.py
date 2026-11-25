@@ -197,39 +197,39 @@ def test_small_arms_terrain_and_calibration_fixes() -> None:
 
 
 def test_extended_vv_benchmarks_certificates_api_and_cli(tmp_path: Path) -> None:
-    assert ammo_mc.__version__ == "1.8.0"
+    assert ammo_mc.__version__ == "2.0.0"
 
     kb = get_kb()
     assert len(kb.formulas_by_id) == 96
-    assert len(kb.sources) == 87
+    assert len(kb.sources) == 100
     assert {f["formula_id"] for f in kb.formulas if f.get("is_flagged")} == {"TB-12", "TF-12", "TP-01"}
 
     lit = build_literature_audit_summary()
-    assert lit["total_sources"] == 87
+    assert lit["total_sources"] == 100
     assert lit["linked_source_coverage_pct"] == 100.0
     assert sorted(lit["flagged_formula_ids"]) == ["TB-12", "TF-12", "TP-01"]
 
     report = run_extended_vv_benchmarks(seed=42, n_mc_v08=25_000)
     summary = report["summary"]
-    assert summary["total_checks"] == 40
-    assert summary["physics_total"] == 18
-    assert summary["physics_passed"] == 18
+    assert summary["total_checks"] == 44
+    assert summary["physics_total"] == 22
+    assert summary["physics_passed"] == 22
     assert summary["workbook_excel_passed"] == 22
 
     md = generate_vv_certificate_markdown(report)
     htm = generate_vv_certificate_html(report)
-    assert "B-01" in md and "B-18" in md and "V-12" in md
-    assert "V&amp;V Audit Certificate" in htm and "B-18" in htm and "https://cdn" not in htm.lower()
+    assert "B-01" in md and "B-22" in md and "V-12" in md
+    assert "V&amp;V Audit Certificate" in htm and "B-22" in htm and "https://cdn" not in htm.lower()
 
     client = TestClient(app)
     res_h = client.get("/health")
     assert res_h.status_code == 200
-    assert res_h.json()["version"] == "1.8.0"
+    assert res_h.json()["version"] == "2.0.0"
 
     res_b = client.get("/validate/benchmarks?seed=42&n_mc=20000")
     assert res_b.status_code == 200
     b_data = res_b.json()
-    assert b_data["summary"]["physics_passed"] == 18
+    assert b_data["summary"]["physics_passed"] == 22
     assert len(b_data["workbook_cases"]) == 22
 
     res_html = client.get("/validate/certificate?format=html&n_mc=20000")
@@ -242,7 +242,7 @@ def test_extended_vv_benchmarks_certificates_api_and_cli(tmp_path: Path) -> None
 
     res_json = client.get("/validate/certificate?format=json&n_mc=20000")
     assert res_json.status_code == 200
-    assert res_json.json()["summary"]["total_checks"] == 40
+    assert res_json.json()["summary"]["total_checks"] == 44
 
     assert client.get("/validate/certificate?format=xml").status_code == 400
 

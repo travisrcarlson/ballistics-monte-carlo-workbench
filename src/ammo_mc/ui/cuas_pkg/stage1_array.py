@@ -71,6 +71,7 @@ from ammo_mc.ui.cuas_pkg.helpers import (
     _render_effective_range_tab,
     _render_stage1_hardware_cad_tab,
     render_high_fidelity_active_banner,
+    render_verification_and_counter_evidence,
 )
 
 
@@ -941,13 +942,18 @@ def render_stage1_small_arms(arm_mode: str, expert: bool) -> None:
                 cuas_prop_type = st.selectbox("Propellant Temp Curve", ["double_base", "single_base"], key="cuas_prop_type")
                 cuas_drag_model = st.selectbox(
                     "Sphere Drag Model",
-                    ["compressible_re_m", "mach_only_smooth_sphere"],
+                    ["compressible_re_m", "walsh_1976", "nol_1972", "compton_1996", "mach_only_smooth_sphere"],
                     format_func=lambda k: {
                         "compressible_re_m": "Compressible Re + Mach (Morrison/Bailey-Hiatt)",
+                        "walsh_1976": "Walsh (1976) NASA TN D-8120 Continuum Table",
+                        "nol_1972": "Krumins (1972) NOLTR 72-34 Re=1e4 Table",
+                        "compton_1996": "Compton (1996) Piecewise Lead Drag",
                         "mach_only_smooth_sphere": "Compton (1996) Mach-Only Smooth Sphere",
                     }.get(k, k),
                     key="cuas_drag_model",
                 )
+                cuas_kd_mult = st.slider("Pellet Deformation Drag k_d", 1.00, 1.30, 1.00, 0.05, key="cuas_kd_mult", help="1.00 = smooth sphere; 1.15-1.30 = real deformed lead shot")
+                cuas_rh_pct = st.slider("Relative Humidity (%, CIPM-2007)", 0.0, 100.0, 0.0, 10.0, key="cuas_rh_pct")
 
         with st.expander("🔬 High-Fidelity Physics & Terminal Realism", expanded=False):
             hfc1, hfc2 = st.columns(2)
@@ -976,6 +982,11 @@ def render_stage1_small_arms(arm_mode: str, expert: bool) -> None:
                     key="cuas_hf_oblique_ricochet",
                     help="Models Recht-Ipson oblique armor perforation V50(θ) = V50 / cos^k(θ) and grazing ricochet.",
                 )
+                cuas_markov_tree = st.checkbox(
+                    "Markov Redundant Rotor Kill Tree (Hexa/Octo, TE-F16)",
+                    value=False,
+                    key="cuas_markov_tree",
+                )
             with hfc2:
                 cuas_pattern_dist = st.selectbox(
                     "Shot Cloud Dispersion Profile",
@@ -1003,6 +1014,19 @@ def render_stage1_small_arms(arm_mode: str, expert: bool) -> None:
                     0.5,
                     key="cuas_shot_cup_sep_m",
                     help="Delays full aerodynamic radial expansion until wad/shot-cup separation at this range.",
+                )
+                cuas_sigma_cv = st.slider("Shot-to-Shot Pattern σ CV (PD-C03)", 0.00, 0.30, 0.00, 0.05, key="cuas_sigma_cv")
+                cuas_pen_model = st.selectbox(
+                    "Terminal Perforation Physics Model",
+                    ["energy", "velocity_ogive", "wen_cfrp", "faa_cs", "thor_metal"],
+                    format_func=lambda k: {
+                        "energy": "Component Kinetic Energy Threshold (Default)",
+                        "velocity_ogive": "Normal Velocity Ogive P_eff(v) (WB-F04)",
+                        "wen_cfrp": "Wen (2000) FRP / CFRP Laminate V_bl (TE-F07)",
+                        "faa_cs": "FAA Shear-Plugging Cs (TE-F04, Caveat TE-C09)",
+                        "thor_metal": "Project THOR TR-47 Metallic (TE-F01, Warning TE-C01)",
+                    }.get(k, k),
+                    key="cuas_pen_model",
                 )
 
         _pf_global = get_active_physics_fidelity() or {}
@@ -1100,6 +1124,11 @@ def render_stage1_small_arms(arm_mode: str, expert: bool) -> None:
                 shot_cup_separation_m=_hf_shot_cup,
                 pattern_distribution=_hf_pat_dist,
                 flyer_fraction=_hf_flyer,
+                drag_multiplier_kd=float(cuas_kd_mult),
+                relative_humidity_pct=float(cuas_rh_pct),
+                shot_sigma_cv=float(cuas_sigma_cv),
+                penetration_model=str(cuas_pen_model),
+                use_markov_kill_tree=bool(cuas_markov_tree),
             )
 
         cu_sm = cuas_sim["summary"]
@@ -1231,6 +1260,38 @@ def render_stage1_small_arms(arm_mode: str, expert: bool) -> None:
                 f"Shot-cup separation: `{cu_sm.get('shot_cup_separation_m', 0.0):.1f} m` (`{_hf_pat_dist}`)"
             )
 
+        from ammo_mc.cuas_rigor import get_contextual_counter_evidence
+
+        _p_chk = cu_sm.get("pellet_count_check") or {}
+        if _p_chk.get("warning"):
+            st.warning(_p_chk["warning"])
+        _opt_g = cu_sm.get("optimal_pattern_guardrail") or {}
+        if _opt_g.get("splay_warning"):
+            st.warning(_opt_g["splay_warning"])
+        _sb = cu_sm.get("salvo_brackets") or {}
+        if _sb:
+            st.caption(
+                f"📊 **Closed-Form Salvo Brackets (WB-F01/F02):** Single-shot `{_sb.get('pk_single', 0.0)*100:.1f}%` | "
+                f"Shared-Error Lower `{_sb.get('pk_shared_lower', 0.0)*100:.1f}%` vs. "
+                f"Independent Upper `{_sb.get('pk_independent_upper', 0.0)*100:.1f}%` "
+                f"(Correlation gap `{_sb.get('optimism_gap_pct', 0.0):+.1f}%`)"
+                + (f" | Markov Redundant Pk: `{cu_sm['markov_redundant_pk_pct']:.1f}%`" if cu_sm.get("markov_redundant_pk_pct") is not None else "")
+            )
+        render_verification_and_counter_evidence(
+            cu_sm.get("verification_grade"),
+            get_contextual_counter_evidence(
+                stage="array",
+                range_m=float(cuas_dist),
+                drone_class=str(sel_drone.get("airframe_class", "cfrp_fpv")),
+                n_barrels=int(cuas_n_barrels),
+                splay_mrad=float(cuas_splay),
+                drag_law=str(cuas_drag_model),
+                calibrated=bool(_cal_twin_s1),
+                n_mc_trials=int(cuas_n_volleys),
+            ),
+            key_prefix="stage1_array",
+        )
+
         stage1_env_res: dict[str, Any] | None = None
         env_kwargs = dict(
             layout_type=str(cuas_layout),
@@ -1275,6 +1336,11 @@ def render_stage1_small_arms(arm_mode: str, expert: bool) -> None:
             shot_cup_separation_m=_hf_shot_cup,
             pattern_distribution=_hf_pat_dist,
             flyer_fraction=_hf_flyer,
+            drag_multiplier_kd=float(cuas_kd_mult),
+            relative_humidity_pct=float(cuas_rh_pct),
+            shot_sigma_cv=float(cuas_sigma_cv),
+            penetration_model=str(cuas_pen_model),
+            use_markov_kill_tree=bool(cuas_markov_tree),
             annex_c_sample={
                 "n_pellets": cu_sm["total_pellets_per_volley"],
                 "vulnerable_area_m2": cu_sm["presented_area_m2"],
