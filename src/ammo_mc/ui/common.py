@@ -1453,6 +1453,8 @@ def _cached_collateral_safety_envelope(
     calibration_profile_json: str = "",
     n_sample_pellets: int = 220,
     seed: int = 42,
+    drone_mass_kg: float = 1.5,
+    drone_altitude_m: float = 35.0,
 ) -> dict[str, Any]:
     from ammo_mc.cuas_safety_envelope import evaluate_cuas_collateral_safety_envelope
 
@@ -1471,6 +1473,8 @@ def _cached_collateral_safety_envelope(
         calibration_profile=json.loads(calibration_profile_json) if calibration_profile_json else None,
         n_sample_pellets=n_sample_pellets,
         seed=seed,
+        drone_mass_kg=drone_mass_kg,
+        drone_altitude_m=drone_altitude_m,
     )
 
 

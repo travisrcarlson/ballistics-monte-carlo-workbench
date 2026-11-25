@@ -251,6 +251,68 @@ def integrate_pellet_trajectory_rk4(
     }
 
 
+def integrate_pellet_trajectory_wb_f05(
+    v0_mps: float,
+    diam_mm: float,
+    density_kg_m3: float,
+    range_m: float,
+    *,
+    drag_law: str = "walsh_1976",
+    k_d: float = 1.0,
+    temp_c: float = 15.0,
+    pressure_pa: float = 101325.0,
+    rh_fraction: float = 0.0,
+    dx_m: float = 1.0,
+    pellet_mass_g: float | None = None,
+) -> dict[str, float]:
+    """Exact-per-step exponential integrator on a fixed dx grid (`WB-F05` / `EB-T01`)."""
+    d_m = max(1e-4, float(diam_mm) / 1000.0)
+    rho_p = max(100.0, float(density_kg_m3))
+    m_kg = (
+        float(pellet_mass_g) / 1000.0
+        if (pellet_mass_g is not None and float(pellet_mass_g) > 0.0)
+        else rho_p * math.pi * (d_m ** 3) / 6.0
+    )
+    if float(rh_fraction) > 0.0:
+        atm = cipm_2007_air_density(temp_c=temp_c, pressure_pa=pressure_pa, rh_fraction=rh_fraction)
+        rho_air = atm["rho_kg_m3"]
+        a_sound = atm["a_mps"]
+    else:
+        t_k = max(180.0, float(temp_c) + 273.15)
+        rho_air = max(1000.0, float(pressure_pa)) / (287.053 * t_k)
+        a_sound = math.sqrt(1.4 * 287.053 * t_k)
+
+    area_p = math.pi * 0.25 * (d_m ** 2)
+    k_fac = (0.5 * rho_air * area_p) / m_kg if (pellet_mass_g is not None and float(pellet_mass_g) > 0.0) else (3.0 * rho_air) / (4.0 * rho_p * d_m)
+    kd_eff = max(0.5, float(k_d))
+    r_tot = max(0.0, float(range_m))
+    v = max(1.0, float(v0_mps))
+    tof = 0.0
+    if r_tot > 0.0:
+        step = max(0.05, float(dx_m))
+        n_full = int(r_tot // step)
+        rem = r_tot - n_full * step
+        steps_list = [step] * n_full + ([rem] if rem > 1e-9 else [])
+        for dx_cur in steps_list:
+            cd = _eval_v2_drag_cd(v, a_sound, drag_law=drag_law, diam_m=d_m, rho_kg_m3=rho_air)
+            q = dx_cur * k_fac * kd_eff * cd
+            if q < 1e-12:
+                tof += dx_cur / v
+            else:
+                tof += dx_cur * (math.exp(q) - 1.0) / (q * v)
+            v *= math.exp(-q)
+
+    return {
+        "pellet_mass_g": float(m_kg * 1000.0),
+        "v_retained_mps": float(v),
+        "tof_s": float(tof),
+        "energy_j": float(0.5 * m_kg * (v ** 2)),
+        "air_density_kg_m3": float(rho_air),
+        "speed_of_sound_mps": float(a_sound),
+        "mach_terminal": float(v / a_sound),
+    }
+
+
 def correct_saami_instrumental_velocity(
     v_instr_mps: float,
     diam_mm: float,
@@ -327,13 +389,14 @@ def wen_2000_frp_ballistic_limit(
     pellet_diam_m: float,
     thickness_m: float,
     rho_target_kg_m3: float = 1550.0,
-    sigma_e_pa: float = 350.0e6,
+    sigma_e_pa: float = 260.0e6,
     beta: float = 1.5,
 ) -> dict[str, Any]:
     """Wen (2000) analytical ballistic limit velocity for FRP/CFRP laminates (`TE-F07`).
 
-    Reference anchor: 3 mm CFRP [0/90]_12 plate struck by a 5 mm, 3.0 g steel sphere
-    with rho_t=1550 kg/m^3, sigma_e ~ 220-300 MPa yields V_bl ~ 102-118 m/s (15.6-20.9 J).
+    Reference anchor: 3 mm CFRP plate (rho_t=1550 kg/m^3, sigma_e=260 MPa) struck by a 5 mm, 3.0 g
+    steel projectile yields V_bl = 121.5 m/s (22.1 J); Kevlar29/Phenolic (TE-P06 sigma_e=194 MPa)
+    yields V_bl = 104.9 m/s.
     """
     m = max(1e-6, float(pellet_mass_kg))
     d = max(1e-4, float(pellet_diam_m))
@@ -597,17 +660,21 @@ def sample_heavy_tailed_atr_error_mrad(
     rng: Any,
     size: int,
     core_sigma_mrad: float = 0.835,
-    tail_prob: float = 0.06,
+    tail_prob: float = 0.02,
     tail_max_mrad: float = 13.74,
+    tail_min_mrad: float | None = None,
 ) -> np.ndarray:
-    """Sample AI/EO ATR centroid noise (`FC-P12`: 0.835 mrad core + outlier tail up to 13.74 mrad)."""
+    """Sample AI/EO ATR centroid noise (`FC-P12`: 0.835 mrad core + 2% outlier tail U(3, 13.74) mrad)."""
     n = max(1, int(size))
-    out = rng.normal(0.0, max(0.05, float(core_sigma_mrad)), size=n)
+    sig_c = max(0.05, float(core_sigma_mrad))
+    out = rng.normal(0.0, sig_c, size=n)
     tail_mask = rng.random(n) < max(0.0, min(0.5, float(tail_prob)))
     n_tail = int(np.sum(tail_mask))
     if n_tail > 0:
         signs = np.where(rng.random(n_tail) < 0.5, -1.0, 1.0)
-        out[tail_mask] = signs * rng.uniform(3.5 * core_sigma_mrad, float(tail_max_mrad), size=n_tail)
+        lo_tail = float(tail_min_mrad) if tail_min_mrad is not None else max(3.0, 3.5 * sig_c)
+        hi_tail = max(lo_tail + 0.1, float(tail_max_mrad))
+        out[tail_mask] = signs * rng.uniform(lo_tail, hi_tail, size=n_tail)
     return out
 
 

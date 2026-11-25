@@ -369,6 +369,7 @@ def _render_effective_range_tab(
             choke=str(default_choke),
             drone_class=str(uw_class),
             aim_error_mrad=max(0.5, float(aim_error_mrad)),
+            drag_law=str(drag_model),
             k_d=float(drag_multiplier_kd),
         )
         wsm = win_res["summary"]

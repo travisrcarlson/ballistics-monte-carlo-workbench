@@ -12,6 +12,7 @@ import math
 from typing import Any
 
 import numpy as np
+from scipy import stats as sp_stats
 
 from ammo_mc.cuas_defense import (
     _estimate_burst_pk_analytics,
@@ -162,6 +163,7 @@ def compare_cuas_architectures_ab(
         selected = list(configs)[:4]
 
     raw_rows: list[dict[str, Any]] = []
+    trial_pk_arrays: list[np.ndarray] = []
     for idx, cfg in enumerate(selected):
         name = str(cfg.get("name", f"Config {chr(65 + idx)}"))
         layout_type = str(cfg.get("layout_type", "circular"))
@@ -177,7 +179,7 @@ def compare_cuas_architectures_ab(
         cycle_s = float(cfg.get("salvo_cycle_time_s", 0.85))
 
         n_kc_trials = 45
-        cfg_seed_kc = seed if use_common_random_numbers else (seed + idx)
+        cfg_seed_kc = seed if use_common_random_numbers else (seed + idx * 97)
         kc_res = simulate_cuas_kill_chain_mc(
             drone_model=drone_model,
             aspect_mode=aspect_mode,
@@ -193,6 +195,7 @@ def compare_cuas_architectures_ab(
             seed=cfg_seed_kc,
         )
         kc_sm = kc_res["summary"]
+        trial_pk_arrays.append(np.asarray(kc_res.get("trial_cum_pks", []), dtype=np.float64))
 
         b_per_burst = 2 if firing_mode != "simultaneous_volley" else min(n_barrels, 4)
         sw_res = simulate_drone_swarm_saturation_mc(
@@ -284,11 +287,9 @@ def compare_cuas_architectures_ab(
     s_th = _minmax_score([r["cookoff_margin_c"] for r in raw_rows], True)
     s_cs = _minmax_score([r["cost_per_kill_usd"] for r in raw_rows], False)
 
-    from ammo_mc.cuas_rigor import compute_wilson_ci
-
     base = raw_rows[0]
-    n_kc_ref = 45
-    k_base = int(round((base["kill_chain_pk_pct"] / 100.0) * n_kc_ref))
+    arr_base = trial_pk_arrays[0] if trial_pk_arrays else np.array([], dtype=np.float64)
+    t_crit = float(sp_stats.t.ppf(0.975, df=max(1, len(arr_base) - 1)))
     for i, r in enumerate(raw_rows):
         mei = round(
             0.30 * s_kc[i]
@@ -310,14 +311,48 @@ def compare_cuas_architectures_ab(
         }
         r["delta_pk_vs_a"] = round(r["kill_chain_pk_pct"] - base["kill_chain_pk_pct"], 1)
         r["delta_cost_vs_a_usd"] = round(r["cost_per_kill_usd"] - base["cost_per_kill_usd"], 2)
-        k_i = int(round((r["kill_chain_pk_pct"] / 100.0) * n_kc_ref))
-        w_lo, w_hi = compute_wilson_ci(k_i, n_kc_ref, alpha=0.05)
-        r["kill_chain_pk_ci95_pct"] = [round(w_lo * 100.0, 1), round(w_hi * 100.0, 1)]
-        p_i = k_i / n_kc_ref
-        p_a = k_base / n_kc_ref
-        # Paired SE scaled down under CRN (MC-F09)
-        se_diff = math.sqrt(max(0.0, p_i * (1 - p_i) + p_a * (1 - p_a)) / n_kc_ref) * (0.55 if use_common_random_numbers else 1.0)
-        r["delta_pk_vs_a_ci95_pct"] = [round((p_i - p_a - 1.96 * se_diff) * 100.0, 1), round((p_i - p_a + 1.96 * se_diff) * 100.0, 1)]
+
+        arr_i = trial_pk_arrays[i] if i < len(trial_pk_arrays) else np.array([], dtype=np.float64)
+        n_i = len(arr_i)
+        if n_i > 1:
+            mean_i = float(np.mean(arr_i))
+            se_i = float(np.std(arr_i, ddof=1) / math.sqrt(n_i))
+            r["kill_chain_pk_ci95_pct"] = [
+                round(max(0.0, mean_i - t_crit * se_i), 1),
+                round(min(100.0, mean_i + t_crit * se_i), 1),
+            ]
+        else:
+            r["kill_chain_pk_ci95_pct"] = [r["kill_chain_pk_pct"], r["kill_chain_pk_pct"]]
+
+        if i == 0:
+            r["delta_pk_vs_a_ci95_pct"] = [0.0, 0.0]
+            r["crn_corr_vs_a"] = 1.0
+        elif use_common_random_numbers and n_i == len(arr_base) and n_i > 1:
+            diffs = arr_i - arr_base
+            d_mean = float(np.mean(diffs))
+            se_diff = float(np.std(diffs, ddof=1) / math.sqrt(n_i))
+            r["delta_pk_vs_a_ci95_pct"] = [
+                round(d_mean - t_crit * se_diff, 1),
+                round(d_mean + t_crit * se_diff, 1),
+            ]
+            sd_i = float(np.std(arr_i, ddof=1))
+            sd_b = float(np.std(arr_base, ddof=1))
+            if sd_i > 1e-9 and sd_b > 1e-9:
+                corr = float(np.corrcoef(arr_i, arr_base)[0, 1])
+                r["crn_corr_vs_a"] = round(0.0 if math.isnan(corr) else corr, 3)
+            else:
+                r["crn_corr_vs_a"] = 0.0
+        elif n_i > 1 and len(arr_base) > 1:
+            d_mean = float(np.mean(arr_i) - np.mean(arr_base))
+            se_diff = math.sqrt((float(np.var(arr_i, ddof=1)) + float(np.var(arr_base, ddof=1))) / min(n_i, len(arr_base)))
+            r["delta_pk_vs_a_ci95_pct"] = [
+                round(d_mean - t_crit * se_diff, 1),
+                round(d_mean + t_crit * se_diff, 1),
+            ]
+            r["crn_corr_vs_a"] = 0.0
+        else:
+            r["delta_pk_vs_a_ci95_pct"] = [r["delta_pk_vs_a"], r["delta_pk_vs_a"]]
+            r["crn_corr_vs_a"] = 0.0
 
     winner = max(raw_rows, key=lambda x: x["mei_score"])
     return {

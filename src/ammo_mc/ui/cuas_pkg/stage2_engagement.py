@@ -425,6 +425,8 @@ def render_stage2_engagement(active_cuas_mod: str, expert: bool, sg_presets_18: 
                 mount_stiffness_n_per_m=float(rec_stiff),
                 mount_load_limit_kn=float(rec_limit),
                 gimbal_trunnion_offset_z_m=float(rec_ztr),
+                recoil_gas_model=str(rec_gas_model),
+                saami_gas_factor_fg=float(rec_fg),
             )
             opt_res = _cached_optimize_antidrone_array(
                 n_barrels=int(rec_nb),

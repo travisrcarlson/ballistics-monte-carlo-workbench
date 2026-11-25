@@ -91,7 +91,7 @@ app = FastAPI(
         "Production REST API for stochastic ammunition effects, trajectory dispersion, "
         "fuze reliability, blast/fragmentation hazard modeling, and Counter-UAS trade studies."
     ),
-    version="2.0.0",
+    version="2.0.1",
 )
 
 app.add_middleware(
@@ -145,7 +145,7 @@ def _verify_api_auth(
 
 class HealthResponse(BaseModel):
     status: str = "ok"
-    version: str = "2.0.0"
+    version: str = "2.0.1"
     uptime_seconds: float
     use_limitation: str = USE_LIMITATION_NOTICE
 
@@ -176,7 +176,7 @@ def get_health() -> HealthResponse:
     """Return API health status, version, and official use limitation notice."""
     return HealthResponse(
         status="ok",
-        version="2.0.0",
+        version="2.0.1",
         uptime_seconds=round(time.time() - START_TIME, 2),
         use_limitation=USE_LIMITATION_NOTICE,
     )
@@ -1510,6 +1510,10 @@ class EngagementWindowRequest(BaseModel):
     choke: str = "Modified"
     drone_class: str = "fpv_cfrp"
     aim_error_mrad: float = 2.0
+    drag_law: str = "walsh_1976"
+    k_d: float = 1.0
+    dead_time_s: float = 0.141
+    t_react_s: float = 0.0
 
 
 class PelletConsistencyRequest(BaseModel):

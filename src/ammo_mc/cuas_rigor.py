@@ -25,6 +25,7 @@ from ammo_mc.cuas_ballistics_v2 import (
     cipm_2007_air_density,
     compute_saami_recoil_impulse,
     integrate_pellet_trajectory_rk4,
+    integrate_pellet_trajectory_wb_f05,
     velocity_ogive_peff,
     wen_2000_frp_ballistic_limit,
 )
@@ -492,9 +493,10 @@ def evaluate_closing_engagement_window(
     pk_threshold: float = 0.50,
     drag_law: str = "walsh_1976",
     k_d: float = 1.0,
+    t_react_s: float = 0.0,
 ) -> dict[str, Any]:
     """Compute closing-target usable window [R_min_safe, R_max] with wreck carry-on inertia (`DT-F09`/`SE-F06`)."""
-    from ammo_mc.small_arms_pkg.catalogs import CHOKE_DEFINITIONS, PELLET_MATERIAL_DENSITIES_G_CM3, SHOTGUN_PRESETS
+    from ammo_mc.small_arms_pkg.catalogs import CHOKE_DEFINITIONS, SHOTGUN_PRESETS, resolve_pellet_density_g_cm3
 
     preset = SHOTGUN_PRESETS.get(ammo_preset, SHOTGUN_PRESETS["12G_NO4_BUCK_C_UAS"])
     choke_info = CHOKE_DEFINITIONS.get(choke, CHOKE_DEFINITIONS["Modified"])
@@ -505,15 +507,7 @@ def evaluate_closing_engagement_window(
     m_g = float(preset["pellet_mass_g"])
     n_pellets = int(preset["pellets_per_shot"])
     v0 = float(preset["v0_mps"])
-    mat_low = str(preset.get("material", "lead")).lower()
-    if "tungsten" in mat_low:
-        rho_p = 18000.0
-    elif "steel" in mat_low:
-        rho_p = 7850.0
-    elif "copper" in mat_low:
-        rho_p = 8960.0
-    else:
-        rho_p = 11200.0
+    rho_p = resolve_pellet_density_g_cm3(str(preset.get("material", "lead")), preset.get("material_density_g_cm3")) * 1000.0
 
     # Target vulnerable area & perforation threshold: explicit distinction between plastic consumer vs CFRP FPV
     if "plastic" in str(drone_class).lower():
@@ -562,7 +556,7 @@ def evaluate_closing_engagement_window(
         lam0 = (n_pellets / (2.0 * math.pi * (sigma_p ** 2))) * a_v_m2 * p_eff
         br = pk_salvo_brackets(lam0, sigma_p, sigma_a, n_shots=n_barrels)
         in_safe_window = float(r_m) >= r_min_safe_m and br["pk_shared_lower"] >= float(pk_threshold)
-        if float(r_m) >= r_min_safe_m and br["pk_shared_lower"] >= float(pk_threshold):
+        if in_safe_window:
             usable_shared_pks.append(br["pk_shared_lower"])
             usable_indep_pks.append(br["pk_independent_upper"])
 
@@ -572,6 +566,7 @@ def evaluate_closing_engagement_window(
             "tof_s": round(tof_s, 4),
             "energy_j": round(traj["energy_j"], 2),
             "p_eff": round(p_eff, 4),
+            "lam0": float(lam0),
             "sigma_p_m": round(sigma_p, 3),
             "sigma_a_m": round(sigma_a, 3),
             "pk_single_pct": round(br["pk_single"] * 100.0, 1),
@@ -587,21 +582,50 @@ def evaluate_closing_engagement_window(
     r_max_indep = max(qualifying_indep) if qualifying_indep else 0.0
 
     usable_width_m = max(0.0, r_max_shared - r_min_safe_m)
-    usable_time_s = usable_width_m / v_dr
-    n_salvos_avail = int(math.floor(usable_time_s / max(0.15, float(salvo_interval_s)))) + (1 if usable_width_m > 0.0 else 0)
+    t_react = max(0.0, float(t_react_s))
+    t_corridor_s = usable_width_m / v_dr
+    usable_time_s = max(0.0, t_corridor_s - t_react)
+    dt_salvo = max(0.15, float(salvo_interval_s))
+    n_salvos_avail = (
+        int(math.floor(usable_time_s / dt_salvo)) + 1
+        if (usable_width_m > 0.0 and t_corridor_s >= t_react)
+        else 0
+    )
 
-    # Approximate cumulative Pk over usable closing trajectory at discrete salvo intervals
+    # Cumulative Pk over usable closing trajectory:
+    # - Shared-error lower bound (`WB-F02`) integrates a single shared radial aim-error draw U ~ Rayleigh(1)
+    #   across all salvo ranges so persistent bias does NOT falsely multiply independent survival probabilities.
+    # - Independent upper bound (`HP-F25`) multiplies per-salvo survival probabilities.
     cum_shared = 0.0
     cum_indep = 0.0
     if usable_width_m > 0.0 and n_salvos_avail >= 1:
-        r_shots = np.linspace(r_max_shared, r_min_safe_m + 0.5, min(n_salvos_avail, 12))
-        surv_s, surv_i = 1.0, 1.0
+        r_start_eff = r_max_shared - v_dr * t_react
+        r_shots = [
+            r_start_eff - k * v_dr * dt_salvo
+            for k in range(min(n_salvos_avail, 12))
+        ]
+        r_shots = [r for r in r_shots if r >= r_min_safe_m - 1e-6]
+        if not r_shots:
+            r_shots = [max(r_min_safe_m, r_max_shared)]
+
+        salvo_params: list[tuple[float, float, float]] = []
+        surv_i = 1.0
         for rs in r_shots:
             nearest = min(stations, key=lambda st: abs(st["range_m"] - float(rs)))
-            surv_s *= (1.0 - nearest["pk_shared_lower_pct"] / 100.0)
-            surv_i *= (1.0 - nearest["pk_indep_upper_pct"] / 100.0)
-        cum_shared = (1.0 - surv_s) * 100.0
-        cum_indep = (1.0 - surv_i) * 100.0
+            surv_i *= 1.0 - nearest["pk_indep_upper_pct"] / 100.0
+            salvo_params.append(
+                (float(nearest["lam0"]), max(1e-3, float(nearest["sigma_p_m"])), max(0.0, float(nearest["sigma_a_m"])))
+            )
+
+        def _shared_surv_integrand(u: float) -> float:
+            lam_sum = 0.0
+            for lam_k, sp_k, sa_k in salvo_params:
+                lam_sum += n_barrels * lam_k * math.exp(-0.5 * ((u * sa_k / sp_k) ** 2))
+            return u * math.exp(-0.5 * u * u - lam_sum)
+
+        surv_s, _ = integrate.quad(_shared_surv_integrand, 0.0, 12.0, epsabs=1e-9, epsrel=1e-8)
+        cum_shared = max(0.0, min(100.0, (1.0 - surv_s) * 100.0))
+        cum_indep = max(cum_shared, min(100.0, (1.0 - surv_i) * 100.0))
 
     window_collapsed = usable_width_m <= 0.0
     return {
@@ -677,15 +701,22 @@ def compute_agresti_coull_ci(k: int, n: int, alpha: float = 0.05) -> tuple[float
 
 def evaluate_alpha_spending_checkpoint(
     k_look: int,
-    total_looks: int,
+    total_looks: int | None = None,
     alpha: float = 0.05,
     spending: str = "bonferroni",
 ) -> dict[str, float]:
-    """Sequential fixed-checkpoint alpha spending (`MC-F05` / `VC-096`)."""
+    """Sequential fixed-checkpoint (`alpha/K`) or open-ended (`alpha/(k*(k+1))`) alpha spending (`MC-F05`)."""
+    look = max(1, int(k_look))
+    mode = str(spending).lower().strip()
+    if mode == "infinite" or total_looks is None:
+        per_look = float(alpha) / float(look * (look + 1))
+        cum_alpha = float(alpha) * (float(look) / float(look + 1))
+        return {"look": look, "total_looks": 0, "per_look_alpha": float(per_look), "cum_alpha": float(cum_alpha)}
+
     k_tot = max(1, int(total_looks))
-    look = max(1, min(k_tot, int(k_look)))
+    look = min(k_tot, look)
     t_frac = look / k_tot
-    if str(spending).lower() == "pocock":
+    if mode == "pocock":
         cum_alpha = float(alpha) * math.log(1.0 + (math.e - 1.0) * t_frac)
         prev_alpha = float(alpha) * math.log(1.0 + (math.e - 1.0) * ((look - 1) / k_tot))
         per_look = cum_alpha - prev_alpha
@@ -749,38 +780,16 @@ def ellipse_grubbs_wh_prob(radius: float, sx: float, sy: float, x0: float = 0.0,
 
 
 def washburn_sulr_solr_bounds(z: float = 2.0) -> dict[str, float]:
-    """Washburn SULR vs SOLR salvo bounds at single-shot Poisson parameter z (`VC-065`..`VC-067`)."""
-    r_opt = math.sqrt(2.0 * math.sqrt(z))
-    p_upper = 1.0 - math.exp(-z)
-    p_sulr = (1.0 - math.exp(-math.sqrt(z))) ** 2
-
-    def _solr_integrand(u: float) -> float:
-        return math.exp(-u) * (1.0 - math.exp(-(z * z) / max(1e-9, 4.0 * u * u)) if False else 1.0)
-
-    # Optimal circular uniform cookie-cutter under Gaussian aim error: maximize 1 - E[exp(-n hit)] -> Washburn Eq.
-    def _eval_solr(R_u: float) -> float:
-        val, _ = integrate.quad(
-            lambda r: r * math.exp(-0.5 * r * r) * math.exp(-2.0 * z / (R_u * R_u) * (1.0 if r <= R_u else 0.0)),
-            0.0,
-            max(R_u + 8.0, 12.0),
-        )
-        return 1.0 - val
-
-    # SOLR uses Gaussian pattern optimizing disc radius for target vs aim-error circular integral:
-    opt = optimize.minimize_scalar(lambda r_u: -((1.0 - math.exp(-0.5 * r_u * r_u)) * (1.0 - math.exp(-2.0 * z / (r_u * r_u)))), bounds=(0.1, 6.0), method="bounded")
-    p_solr = float(-opt.fun)
-    # Exact Washburn SOLR analytical limit: integrate 1 - exp(-lambda) over optimal aim-disc -> 1 - min
-    # Refined SOLR exact evaluation:
-    def _solr_exact(r_u: float) -> float:
-        term_in = (1.0 - math.exp(-0.5 * r_u * r_u)) * math.exp(-2.0 * z / (r_u * r_u))
-        term_out = math.exp(-0.5 * r_u * r_u)
-        return 1.0 - (term_in + term_out)
-
-    opt2 = optimize.minimize_scalar(lambda r_u: -_solr_exact(r_u), bounds=(0.1, 8.0), method="bounded")
+    """Washburn Upper Bound, SULR, and SOLR salvo approximations (`HP-F27..F29`, `VC-065`..`VC-067`)."""
+    z_val = max(0.0, float(z))
+    p_upper = 1.0 - math.exp(-z_val)
+    p_sulr = (1.0 - math.exp(-math.sqrt(z_val))) ** 2
+    s2z = math.sqrt(2.0 * z_val)
+    p_solr = 1.0 - (1.0 + s2z) * math.exp(-s2z)
     return {
         "upper": float(p_upper),
         "sulr": float(p_sulr),
-        "solr": float(-opt2.fun),
+        "solr": float(p_solr),
     }
 
 
@@ -816,14 +825,20 @@ def whistler_sas_prob(n_shots: int = 5, radius: float = 1.0, sigma: float = 1.0)
     return float(1.0 - math.exp(-((radius * radius) / (2.0 * sigma * sigma)) * s_sum))
 
 
+def wilkening_ns(s: int = 2, k: float = 0.5) -> float:
+    """Wilkening (1999) SLS transition threshold `n_s(k) = s + sum_{j=1..s-1} (1-k)^(-j)` (`HP-F39`)."""
+    s_i = max(1, int(s))
+    k_c = max(1e-6, min(1.0 - 1e-6, float(k)))
+    return float(s_i + sum((1.0 - k_c) ** (-j) for j in range(1, s_i)))
+
+
 def wilkening_n2(k: float = 0.5) -> float:
-    """Wilkening (1999) SLS transition threshold n2(k) (`HP-F39`, `VC-088`)."""
-    return float(2.0 / max(1e-6, float(k)))
+    """Wilkening (1999) SLS transition threshold `n_2(k) = 2 + 1/(1-k)` (`HP-F39`, `VC-088`)."""
+    return wilkening_ns(2, k)
 
 
 def halton_point(index_zero_based: int, bases: tuple[int, ...] = (2, 3)) -> list[float]:
-    """Deterministic zero-based Halton radical-inverse point matching Scipy/Owen (`VC-103`)."""
-    # Check: VC-103 i=5 -> [0.625, 0.777777777777778]. Note 5/8 = 0.625 (101_2 -> 0.101_2), 7/9 = 0.777777... (5+1=6 -> 20_3 -> .02, wait: index+1 = 6? 6 in base 2 = 110 -> .011 = 3/8=0.375; 5 in base 2 = 101 -> .101_2 = 0.625! And 5 in base 3 = 12_3 -> .21_3 = 2/3 + 1/9 = 7/9 = 0.7777778! Wait: index=5 directly (not 6)!! Look: 5 in base 2 = 101 -> reversed = 101/8 = 0.625! 5 in base 3 = 12 -> reversed = 21/9 = 7/9 = 0.777778!
+    """Zero-based radical-inverse Halton point matching workbook `VC-103` (e.g., i=5 -> [5/8, 7/9])."""
     out: list[float] = []
     for b in bases:
         n = int(index_zero_based)
@@ -864,20 +879,13 @@ def run_workbook_validation_cases() -> dict[str, Any]:
         })
 
     # Group A: Exterior Ballistics (WB-F05 1m exponential step + Walsh 1976 & RK4 cross-check)
-    from ammo_mc.cuas_ballistics_v2 import sphere_drag_walsh_1976
-
-    rho_isa = 101325.0 / (287.053 * 288.15)
-    a_isa = math.sqrt(1.4 * 287.053 * 288.15)
-    d_m_4 = 0.00330
-    m_p_4_g = 11200.0 * math.pi * (d_m_4 ** 3) / 6.0 * 1000.0
-    k_4 = (3.0 * rho_isa) / (4.0 * 11200.0 * d_m_4)
-    v_wb, t_wb = 405.0, 0.0
-    for _ in range(40):
-        cd_s = sphere_drag_walsh_1976(v_wb / a_isa)
-        q_s = k_4 * cd_s
-        t_wb += (math.exp(q_s) - 1.0) / (q_s * v_wb)
-        v_wb *= math.exp(-q_s)
-    e_wb = 0.5 * (m_p_4_g / 1000.0) * (v_wb ** 2)
+    wb_40 = integrate_pellet_trajectory_wb_f05(
+        v0_mps=405.0, diam_mm=3.30, density_kg_m3=11200.0, range_m=40.0, drag_law="walsh_1976", k_d=1.0, temp_c=15.0, pressure_pa=101325.0, dx_m=1.0
+    )
+    m_p_4_g = wb_40["pellet_mass_g"]
+    v_wb = wb_40["v_retained_mps"]
+    t_wb = wb_40["tof_s"]
+    e_wb = wb_40["energy_j"]
     traj_40 = integrate_pellet_trajectory_rk4(
         v0_mps=405.0, diam_mm=3.30, density_kg_m3=11200.0, range_m=40.0, drag_law="walsh_1976", k_d=1.0, temp_c=15.0, pressure_pa=101325.0, n_steps=80
     )
@@ -892,7 +900,7 @@ def run_workbook_validation_cases() -> dict[str, Any]:
         v0_mps=1200.0 * 0.3048, diam_mm=2.413, density_kg_m3=11200.0, range_m=39.0 * 0.9144, drag_law="walsh_1976", k_d=1.0, n_steps=60
     )
     _add("VC-001", "Exterior Published", "NRA #7.5 lead 40yd retained vel", traj_75["v_retained_mps"] / 0.3048, 636.0, 0.06, rel=True, unit="ft/s")
-    _add("VC-002", "Exterior Published", "NRA #7.5 lead 40yd TOF", traj_75["tof_s"] + (0.9144 / (1200.0 * 0.3048)), 0.1367, 0.05, rel=True, unit="s")
+    _add("VC-002", "Exterior Published", "NRA #7.5 lead 40yd TOF", traj_75["tof_s"] + (0.9144 / (1200.0 * 0.3048)), 0.1367, 0.04, rel=True, unit="s")
 
     # VC-018 KPY #6 TSS18 1400 fps 40 yd (36.576 m) -> 867 fps
     traj_tss = integrate_pellet_trajectory_rk4(
@@ -900,9 +908,11 @@ def run_workbook_validation_cases() -> dict[str, Any]:
     )
     _add("VC-018", "Exterior Published", "KPY #6 TSS18 40yd retained vel", traj_tss["v_retained_mps"] / 0.3048, 867.0, 0.06, rel=True, unit="ft/s")
 
-    # CIPM-2007 dry ISA density
+    # CIPM-2007 real-gas dry and humid air density
     atm0 = cipm_2007_air_density(15.0, 101325.0, 0.0)
-    _add("AT-F04", "Atmosphere", "CIPM-2007 dry ISA density", atm0["rho_kg_m3"], 1.2250, 5e-4, rel=True, unit="kg/m^3")
+    _add("AT-F04", "Atmosphere", "CIPM-2007 dry air density (15C, 1013.25 hPa)", atm0["rho_kg_m3"], 1.225521, 1e-4, rel=True, unit="kg/m^3")
+    atm_h = cipm_2007_air_density(20.0, 101325.0, 0.50)
+    _add("AT-F04-HUMID", "Atmosphere", "CIPM-2007 moist air density (20C, 50% RH)", atm_h["rho_kg_m3"], 1.199314, 1e-4, rel=True, unit="kg/m^3")
 
     # Group B: WB-F01 Closed-Form vs Quadrature Oracles (CK-A1..CK-A6)
     for cid, lam, sig, sa, ref in (
@@ -938,6 +948,10 @@ def run_workbook_validation_cases() -> dict[str, Any]:
     _add("VC-052", "Hit & Salvo Theory", "Offset circle (R=1, sig=1, d=2)", rice_offset_circle_prob(1.0, 1.0, 2.0), 0.08189, 5e-5)
     _add("VC-056", "Hit & Salvo Theory", "Ellipse exact (R=1, sx=1, sy=0.5)", ellipse_exact_prob(1.0, 1.0, 0.5), 0.5901, 2e-4)
     _add("VC-057", "Hit & Salvo Theory", "Ellipse Grubbs WH (R=1, sx=1, sy=0.5)", ellipse_grubbs_wh_prob(1.0, 1.0, 0.5), 0.58095, 2e-4)
+    wb_b = washburn_sulr_solr_bounds(2.0)
+    _add("VC-065", "Hit & Salvo Theory", "Washburn salvo upper bound (z=2)", wb_b["upper"], 0.86466, 1e-3)
+    _add("VC-066", "Hit & Salvo Theory", "Washburn SULR (z=2)", wb_b["sulr"], 0.57287, 1e-3)
+    _add("VC-067", "Hit & Salvo Theory", "Washburn SOLR (z=2)", wb_b["solr"], 0.59399, 1e-3)
     _add("VC-072", "Hit & Salvo Theory", "Thomas-Gemmill N=4 unpatterned", thomas_gemmill_salvo_prob(3.0, 1.0, 3.0, 0.0, 4), 0.55946, 0.003)
     _add("VC-073", "Hit & Salvo Theory", "Thomas-Gemmill N=4 patterned PR=1.05a", thomas_gemmill_salvo_prob(3.0, 1.0, 3.0, 1.05 * 3.0, 4), 0.74222, 0.003)
     _add("VC-077", "Hit & Salvo Theory", "WRONG independence for TG N=4: 1-(1-p1)^4", 1.0 - (1.0 - rice_offset_circle_prob(3.0, math.hypot(3.0, 1.0), 0.0)) ** 4, 0.8347, 0.003)
@@ -945,7 +959,9 @@ def run_workbook_validation_cases() -> dict[str, Any]:
     opt_p = optimal_pattern_radius_closed_form(41.0, 0.02, 0.30)
     _add("VC-084R", "Hit & Salvo Theory", "HP-F33 Optimal disc radius (Np=41,Av=0.02,sa=0.3)", opt_p["r_opt_disc_m"], 0.4656, 5e-4, unit="m")
     _add("VC-084P", "Hit & Salvo Theory", "HP-F33 Optimal disc Pk*", opt_p["pk_opt_disc"], 0.49009, 5e-4)
+    _add("VC-085", "Hit & Salvo Theory", "HP-F34 Optimal Gaussian Pk* (Np=41,Av=0.02,sa=0.3)", opt_p["pk_opt_gauss"], 0.49375, 1e-3)
     _add("VC-088", "Hit & Salvo Theory", "Wilkening SLS transition n2(k=0.5)", wilkening_n2(0.5), 4.0, 1e-9)
+    _add("VC-088B", "Hit & Salvo Theory", "Wilkening SLS transition n2(k=0.8)", wilkening_n2(0.8), 7.0, 1e-9)
 
     # Group E: Monte Carlo Stats, SAAMI Recoil & Terminal Penetration Oracles
     w_lo, w_hi = compute_wilson_ci(4, 20, 0.10)
@@ -959,6 +975,8 @@ def run_workbook_validation_cases() -> dict[str, Any]:
     _add("VC-095", "MC Statistics", "Wilson worst-case sample size (a=0.05, eps=0.01)", float(wilson_worst_case_sample_size(0.05, 0.01)), 9600.0, 1e-9)
     sp = evaluate_alpha_spending_checkpoint(1, 2, 0.05)
     _add("VC-096", "MC Statistics", "Two-stage Bonferroni alpha (K=2, a=0.05)", sp["per_look_alpha"], 0.025, 1e-12)
+    sp_inf = evaluate_alpha_spending_checkpoint(2, None, 0.05, spending="infinite")
+    _add("MC-F05-INF", "MC Statistics", "Infinite-checkpoint alpha spending (k=2, a=0.05)", sp_inf["per_look_alpha"], 0.05 / 6.0, 1e-12)
     h_pt = halton_point(5, (2, 3))
     _add("VC-103", "MC Statistics", "Halton dim-0 (i=5, base=2)", h_pt[0], 0.625, 1e-12)
     _add("VC-103B", "MC Statistics", "Halton dim-1 (i=5, base=3)", h_pt[1], 7.0 / 9.0, 1e-12)

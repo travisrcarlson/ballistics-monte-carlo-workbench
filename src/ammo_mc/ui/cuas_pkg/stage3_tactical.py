@@ -152,7 +152,7 @@ def render_stage3_tactical(active_cuas_mod: str, expert: bool, sg_presets_18: di
             st.download_button("📥 Download Ground Pellet Impact Fallout Log (.csv)", gi_df.to_csv(index=False).encode("utf-8"), "cuas_pellet_fallout_sdz.csv", "text/csv", key="cuas18_dl_sdz")
         with sdt4:
             _s_prof = st.session_state.get("_active_cuas_profile") or {}
-            cs1, cs2 = st.columns(2)
+            cs1, cs2, cs3, cs4 = st.columns(4)
             with cs1:
                 collat_env = st.selectbox(
                     "Deployment Environment",
@@ -162,6 +162,10 @@ def render_stage3_tactical(active_cuas_mod: str, expert: bool, sg_presets_18: di
                 )
             with cs2:
                 collat_bpb = st.slider("Burst Barrels Fired Together", 1, 6, min(6, int(_s_prof.get("barrels_per_burst", 2))), 1, key="cuas18_collat_bpb")
+            with cs3:
+                collat_dr_mass = st.number_input("Intercepted UAS Mass (kg)", 0.25, 25.0, 1.5, 0.25, key="cuas18_collat_dr_mass")
+            with cs4:
+                collat_dr_alt = st.number_input("Debris Drop Altitude (m)", 5.0, 150.0, 35.0, 5.0, key="cuas18_collat_dr_alt")
             collat_res = _cached_collateral_safety_envelope(
                 n_barrels=int(_s_prof.get("n_barrels", 6)),
                 barrels_per_burst=int(collat_bpb),
@@ -177,6 +181,8 @@ def render_stage3_tactical(active_cuas_mod: str, expert: bool, sg_presets_18: di
                 calibration_profile_json=_get_effective_cal_twin_json(),
                 n_sample_pellets=int(sd_n_p),
                 seed=42,
+                drone_mass_kg=float(collat_dr_mass),
+                drone_altitude_m=float(collat_dr_alt),
             )
             csm = collat_res["summary"]
             cm1, cm2, cm3, cm4 = st.columns(4)
@@ -212,7 +218,11 @@ def render_stage3_tactical(active_cuas_mod: str, expert: bool, sg_presets_18: di
                         )
                     with d_c2:
                         st.markdown("**Falling Drone Debris (SE-F04) & Doctrine Reference Angles**")
-                        st.metric("1.5 kg Drone Impact Energy (35 m)", f"{deb_h.get('impact_energy_j', 0.0):.1f} J", delta=deb_h.get("threshold_status", ""))
+                        st.metric(
+                            f"{deb_h.get('drone_mass_kg', 1.5):.2f} kg Drone Impact Energy ({deb_h.get('drone_altitude_m', 35.0):.0f} m)",
+                            f"{deb_h.get('impact_energy_j', 0.0):.1f} J",
+                            delta=deb_h.get("threshold_status", ""),
+                        )
                         ar_ov = doc_ov.get("ar_385_63_table_5_1", {})
                         uk_ov = doc_ov.get("uk_jsp_403_vol2_ch2_table3", {})
                         st.caption(
@@ -226,7 +236,7 @@ def render_stage3_tactical(active_cuas_mod: str, expert: bool, sg_presets_18: di
             from ammo_mc.cuas_rigor import get_contextual_counter_evidence, resolve_verification_grade
 
             render_verification_and_counter_evidence(
-                resolve_verification_grade({"ballistic_fallout": "V1", "injury_thresholds": "V1", "post_kill_debris": "V2"}),
+                resolve_verification_grade({"ballistic_fallout": "V1", "injury_thresholds": "V1", "post_kill_debris": "V3"}),
                 get_contextual_counter_evidence(stage="sdz"),
                 key_prefix="stage3_sdz",
             )

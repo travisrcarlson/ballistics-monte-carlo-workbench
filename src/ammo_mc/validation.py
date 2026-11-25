@@ -596,15 +596,15 @@ def _run_physics_benchmarks_b01_b18(seed: int = 42) -> tuple[list[dict[str, Any]
     rows.append(_make_benchmark_row(
         benchmark_id="B-18",
         domain="Literature Governance",
-        title="100-source provenance linkage & flagged formula registry integrity",
+        title="101-source provenance linkage & flagged formula registry integrity",
         module="ammo_mc.literature",
-        source_ids=["S01", "S100"],
+        source_ids=["S01", "S101"],
         unit="%",
         computed=float(lit_summary["linked_source_coverage_pct"]),
         reference=100.0,
         tolerance=1e-9,
         extra_passed=(
-            int(lit_summary["total_sources"]) == 100
+            int(lit_summary["total_sources"]) == 101
             and int(lit_summary["total_formulas"]) == 96
             and sorted(lit_summary["flagged_formula_ids"]) == ["TB-12", "TF-12", "TP-01"]
         ),
@@ -615,7 +615,7 @@ def _run_physics_benchmarks_b01_b18(seed: int = 42) -> tuple[list[dict[str, Any]
     from ammo_mc.cuas_ballistics_v2 import (
         cipm_2007_air_density,
         compute_saami_recoil_impulse,
-        sphere_drag_walsh_1976,
+        integrate_pellet_trajectory_wb_f05,
     )
     from ammo_mc.cuas_rigor import (
         compute_wilson_ci,
@@ -624,13 +624,9 @@ def _run_physics_benchmarks_b01_b18(seed: int = 42) -> tuple[list[dict[str, Any]
         run_workbook_validation_cases,
     )
 
-    rho_isa = 101325.0 / (287.053 * 288.15)
-    a_isa = math.sqrt(1.4 * 287.053 * 288.15)
-    k_4 = (3.0 * rho_isa) / (4.0 * 11200.0 * 0.00330)
-    v_40 = 405.0
-    for _ in range(40):
-        q_s = k_4 * sphere_drag_walsh_1976(v_40 / a_isa)
-        v_40 *= math.exp(-q_s)
+    wb_40 = integrate_pellet_trajectory_wb_f05(
+        v0_mps=405.0, diam_mm=3.30, density_kg_m3=11200.0, range_m=40.0, drag_law="walsh_1976", k_d=1.0, temp_c=15.0, pressure_pa=101325.0, dx_m=1.0
+    )
     rows.append(_make_benchmark_row(
         benchmark_id="B-19",
         domain="C-UAS Exterior Ballistics",
@@ -638,7 +634,7 @@ def _run_physics_benchmarks_b01_b18(seed: int = 42) -> tuple[list[dict[str, Any]
         module="ammo_mc.cuas_ballistics_v2",
         source_ids=["S88"],
         unit="m/s",
-        computed=v_40,
+        computed=wb_40["v_retained_mps"],
         reference=227.858844,
         tolerance=1e-4,
         notes="WB-F05 1 m exponential integrator on Walsh table EB-T01",
@@ -683,7 +679,7 @@ def _run_physics_benchmarks_b01_b18(seed: int = 42) -> tuple[list[dict[str, Any]
         domain="C-UAS Workbook Oracles",
         title=f"Deterministic C-UAS workbook matrix ({wb_vv['summary']['total']} oracles & binomial CIs)",
         module="ammo_mc.cuas_rigor",
-        source_ids=["S94", "S100"],
+        source_ids=["S94", "S101"],
         unit="%",
         computed=float(wb_vv["summary"]["pass_rate_pct"]),
         reference=100.0,
@@ -733,7 +729,7 @@ def run_extended_vv_benchmarks(seed: int = 42, n_mc_v08: int = 50_000) -> dict[s
     phys_total = len(physics_benchmarks)
 
     return {
-        "version": "2.0.0",
+        "version": "2.0.1",
         "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "seed": int(seed),
         "n_mc_v08": int(n_mc_v08),
@@ -768,7 +764,7 @@ def generate_vv_certificate_markdown(report: dict[str, Any]) -> str:
     summary = report["summary"]
     lit = summary["literature"]
     lines = [
-        f"# Ammunition Monte Carlo (`ammo-mc`) v{report.get('version', '2.0.0')} — Verification & Validation Audit Certificate",
+        f"# Ammunition Monte Carlo (`ammo-mc`) v{report.get('version', '2.0.1')} — Verification & Validation Audit Certificate",
         "",
         f"- **Generated (UTC):** `{report.get('generated_utc', '')}`",
         f"- **RNG Seed:** `{report.get('seed', 42)}` | **V-08 MC Samples:** `{report.get('n_mc_v08', 50_000):,}` | **Runtime:** `{report.get('elapsed_s', 0.0):.3f} s`",
@@ -884,7 +880,7 @@ def generate_vv_certificate_html(report: dict[str, Any]) -> str:
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>ammo-mc v{html.escape(str(report.get('version', '2.0.0')))} V&amp;V Audit Certificate</title>
+<title>ammo-mc v{html.escape(str(report.get('version', '2.0.1')))} V&amp;V Audit Certificate</title>
 <style>
   :root {{ --bg:#f8fafc; --card:#ffffff; --ink:#0f172a; --muted:#475569; --line:#e2e8f0; --accent:#0f4c81; }}
   body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--ink); margin:0; padding:28px; line-height:1.45; }}
@@ -917,7 +913,7 @@ def generate_vv_certificate_html(report: dict[str, Any]) -> str:
 <div class="wrap">
   <div class="hero">
     <div>
-      <h1>Ammunition Monte Carlo (ammo-mc) v{html.escape(str(report.get('version', '2.0.0')))} — V&amp;V Audit Certificate</h1>
+      <h1>Ammunition Monte Carlo (ammo-mc) v{html.escape(str(report.get('version', '2.0.1')))} — V&amp;V Audit Certificate</h1>
       <p>Generated UTC: {html.escape(str(report.get('generated_utc', '')))} &middot; Seed: {report.get('seed', 42)} &middot; V-08 MC: {report.get('n_mc_v08', 50000):,} &middot; Runtime: {report.get('elapsed_s', 0.0):.3f} s</p>
     </div>
     <div class="status-badge">{badge_txt}</div>

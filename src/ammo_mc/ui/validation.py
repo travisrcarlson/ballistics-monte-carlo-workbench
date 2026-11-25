@@ -273,8 +273,8 @@ def tab_validation() -> None:
     st.header("✅ Verification & Validation Benchmark Dashboard & Audit Certificates")
     st.markdown(
         "Automated V&V audit harness combining the 22-case `Ammunition Monte Carlo Knowledge Base.xlsx` regression suite "
-        "(`V-01a..V-12`), 22 independent physical, analytical, and standards benchmarks (`B-01..B-22`), and 46 C-UAS workbook "
-        "oracles across 100 linked literature sources."
+        "(`V-01a..V-12`), 22 independent physical, analytical, and standards benchmarks (`B-01..B-22`), and 53 C-UAS workbook "
+        "oracles across 101 linked literature sources."
     )
 
     with st.sidebar:
@@ -404,7 +404,7 @@ def tab_validation() -> None:
             "🔬 Extended Physics Benchmarks (B-01..B-22)",
             "📋 Knowledge Base Workbook Suite (V-01a..V-12)",
             "🧪 Experimental C-UAS Benchmarks (E-01..E-06)",
-            "📐 C-UAS Workbook V&V Matrix (46 Oracles)",
+            "📐 C-UAS Workbook V&V Matrix (53 Oracles)",
         ]
     )
 
@@ -522,7 +522,7 @@ def tab_validation() -> None:
             "and Wilson / Clopper-Pearson / Agresti-Coull / alpha-spending intervals."
         )
         if "cuas_wb_vv_matrix" not in st.session_state or st.button("🔄 Re-run C-UAS Workbook Matrix", key="val_rerun_wb_vv_btn"):
-            with st.spinner("Running 46 C-UAS Workbook Regression Oracles..."):
+            with st.spinner("Running 53 C-UAS Workbook Regression Oracles..."):
                 st.session_state["cuas_wb_vv_matrix"] = run_workbook_validation_cases()
         wb_vv = st.session_state["cuas_wb_vv_matrix"]
         st.plotly_chart(create_workbook_vv_matrix_figure(wb_vv), width="stretch", key="val_wb_vv_fig")

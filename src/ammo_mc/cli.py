@@ -1140,17 +1140,29 @@ def cmd_cuas_rigor_check(
         get_contextual_counter_evidence,
         resolve_verification_grade,
     )
-    from ammo_mc.small_arms import PELLET_MATERIAL_DENSITIES_G_CM3, get_shotgun_presets
+    from ammo_mc.small_arms import get_shotgun_presets, resolve_pellet_density_g_cm3
 
     presets = get_shotgun_presets()
     p = presets.get(ammo, presets["12G_NO4_BUCK_C_UAS"])
-    rho_kg = float(PELLET_MATERIAL_DENSITIES_G_CM3.get(str(p.get("material", "Hardened Lead")), 11.3)) * 1000.0
-    pel_chk = check_pellet_count_consistency(
-        float(p["pellets_per_shot"]) * float(p["pellet_mass_g"]),
-        float(p["pellet_diameter_mm"]),
-        rho_kg,
-        int(p["pellets_per_shot"]),
-    )
+    rho_kg = resolve_pellet_density_g_cm3(str(p.get("material", "Hardened Lead")), p.get("material_density_g_cm3")) * 1000.0
+    p_type_low = str(p.get("pellet_type", "")).lower()
+    if any(tok in p_type_low for tok in ("flechette", "dart", "slug")) or "flechette" in str(ammo).lower() or bool(p.get("is_duplex")):
+        pel_chk = {
+            "pellet_mass_g": float(p["pellet_mass_g"]),
+            "physical_pellet_count": float(p["pellets_per_shot"]),
+            "claimed_pellet_count": int(p["pellets_per_shot"]),
+            "discrepancy_pct": 0.0,
+            "consistent": True,
+            "warning": None,
+            "note": "Non-spherical or mixed-duplex payload; single-sphere SE-F14 check not applicable.",
+        }
+    else:
+        pel_chk = check_pellet_count_consistency(
+            float(p["pellets_per_shot"]) * float(p["pellet_mass_g"]),
+            float(p["pellet_diameter_mm"]),
+            rho_kg,
+            int(p["pellets_per_shot"]),
+        )
     grade = resolve_verification_grade({"drag": "V1", "dispersion": "V3", "vulnerability": "V4"})
     ce = get_contextual_counter_evidence("array", range_m=range_m, n_barrels=barrels, splay_mrad=splay_mrad)
     payload = {"pellet_consistency": pel_chk, "verification_grade": grade, "counter_evidence": ce}

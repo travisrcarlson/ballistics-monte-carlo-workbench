@@ -261,6 +261,8 @@ SHOTGUN_PRESETS: dict[str, dict[str, Any]] = {
         "gauge": "12_gauge",
         "pellet_type": "#2 Tungsten Super-Shot (TSS)",
         "material": "Tungsten",
+        "material_density_g_cm3": 15.0,
+        "is_duplex": True,
         "pellets_per_shot": 48,
         "pellet_diameter_mm": 4.50,
         "pellet_mass_g": 0.72,
@@ -849,6 +851,29 @@ PELLET_MATERIAL_DENSITIES_G_CM3: dict[str, float] = {
     "Tungsten Super-Shot (TSS 18 g/cm³)": 18.00,
     "Depleted Tungsten Alloy": 17.50,
 }
+
+
+def resolve_pellet_density_g_cm3(material_name: str, explicit_density_g_cm3: float | None = None) -> float:
+    """Resolve material density (g/cm^3) reliably from preset material strings or catalog labels."""
+    if explicit_density_g_cm3 is not None and float(explicit_density_g_cm3) > 0.0:
+        return float(explicit_density_g_cm3)
+    raw = str(material_name or "").strip()
+    if raw in PELLET_MATERIAL_DENSITIES_G_CM3:
+        return float(PELLET_MATERIAL_DENSITIES_G_CM3[raw])
+    low = raw.lower()
+    if "tungsten" in low or "tss" in low:
+        if "iron" in low or "hevi" in low:
+            return 12.0
+        if "18.2" in low or "sphero" in low:
+            return 18.2
+        return 18.0
+    if "steel" in low or "iron" in low:
+        return 7.85
+    if "copper" in low:
+        return 9.0
+    if "bismuth" in low:
+        return 9.7
+    return 11.3
 
 
 def build_custom_shell_spec(

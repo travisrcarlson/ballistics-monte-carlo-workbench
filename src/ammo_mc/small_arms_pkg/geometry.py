@@ -7,6 +7,12 @@ import struct
 from typing import Any
 import numpy as np
 
+from ammo_mc.cuas_ballistics_v2 import (
+    faa_shear_plugging_v50,
+    thor_tr47_metallic_penetration,
+    velocity_ogive_peff,
+    wen_2000_frp_ballistic_limit,
+)
 from .catalogs import DRONE_ASPECT_PRESETS
 
 def _convex_hull_2d(pts: np.ndarray) -> np.ndarray:
@@ -703,33 +709,54 @@ def evaluate_drone_impact(
                         continue
 
                 v50_info: dict[str, Any] | None = None
-                if p_mode in {"wen_cfrp", "faa_cs", "thor_metal", "velocity_ogive"}:
-                    from ammo_mc.cuas_ballistics_v2 import (
-                        faa_shear_plugging_v50,
-                        thor_tr47_metallic_penetration,
-                        velocity_ogive_peff,
-                        wen_2000_frp_ballistic_limit,
-                    )
+                obliq_deg = float(cand.get("obliquity_deg", 0.0))
+                if use_oblique_ricochet and obliq_deg >= 68.0:
+                    ricochet_any = True
+                    is_perf = False
+                    is_lethal = False
+                    last_v50 = 9999.0
+                    v50_info = {"v50_mps": 9999.0, "p_perforation": 0.0, "residual_velocity_mps": 0.0}
+                elif p_mode in {"wen_cfrp", "faa_cs", "thor_metal", "velocity_ogive"}:
+                    base_t_mm = float(drone_spec.get("shell_thickness_mm", 3.0))
+                    if comp.startswith("rotor_"):
+                        t_comp_mm = max(0.8, 0.35 * base_t_mm)
+                    elif comp.startswith("motor_") or comp == "warhead_pg7m":
+                        t_comp_mm = max(1.2, 0.65 * base_t_mm)
+                    else:
+                        t_comp_mm = base_t_mm
 
-                    t_mm = float(drone_spec.get("shell_thickness_mm", 3.0))
                     if p_mode == "wen_cfrp":
-                        wen = wen_2000_frp_ballistic_limit(m_eff, d_eff, max(0.001, t_mm / 1000.0))
-                        v50_c = float(wen["v_bl_mps"])
+                        if comp.startswith("rotor_"):
+                            v50_c = math.sqrt(2.0 * float(cand["e_req"]) / m_eff)
+                        else:
+                            wen = wen_2000_frp_ballistic_limit(m_eff, d_eff, max(0.0008, t_comp_mm / 1000.0))
+                            obliq_scale = 1.0 / max(0.25, math.cos(math.radians(min(75.0, obliq_deg))))
+                            v50_c = float(wen["v_bl_mps"]) * obliq_scale
+                        p_og = velocity_ogive_peff(v_cur, v50_c, spread_s_v=float(ogive_spread_sv))
+                        v_res_c = math.sqrt(max(0.0, v_cur ** 2 - v50_c ** 2)) if v_cur > v50_c else 0.0
                     elif p_mode == "faa_cs":
-                        faa = faa_shear_plugging_v50(m_eff, d_eff, max(0.001, t_mm / 1000.0), obliquity_deg=float(cand.get("obliquity_deg", 0.0)))
+                        faa = faa_shear_plugging_v50(m_eff, d_eff, max(0.0008, t_comp_mm / 1000.0), obliquity_deg=obliq_deg)
                         v50_c = float(faa["v50_mps"])
+                        p_og = velocity_ogive_peff(v_cur, v50_c, spread_s_v=float(ogive_spread_sv))
+                        v_res_c = math.sqrt(max(0.0, v_cur ** 2 - v50_c ** 2)) if v_cur > v50_c else 0.0
                     elif p_mode == "thor_metal":
-                        mat_p = "Lead" if pellet_density_g_cm3 > 10.0 and pellet_density_g_cm3 < 13.0 else "Steel"
-                        th = thor_tr47_metallic_penetration(m_eff * 1000.0, d_eff * 1000.0, v_cur, t_mm, float(cand.get("obliquity_deg", 0.0)), pellet_material=mat_p)
-                        v50_c = float(th["v_limit_mps"])
+                        mat_p = "Lead" if 10.0 < pellet_density_g_cm3 < 13.0 else "Steel"
+                        th = thor_tr47_metallic_penetration(m_eff * 1000.0, d_eff * 1000.0, v_cur, t_comp_mm, obliq_deg, pellet_material=mat_p)
+                        v_lim = float(th["v_limit_mps"])
+                        # TE-F02 returns zero-perforation limit V0 rather than median V50
+                        v50_c = v_lim * (1.0 + 1.5 * max(0.05, float(ogive_spread_sv)))
+                        p_og = 0.0 if v_cur <= 0.95 * v_lim else velocity_ogive_peff(v_cur, v50_c, spread_s_v=float(ogive_spread_sv))
+                        v_res_c = float(th["v_residual_mps"])
                     else:
                         v50_c = math.sqrt(2.0 * float(cand["e_req"]) / m_eff)
-                    p_og = velocity_ogive_peff(v_cur, v50_c, spread_s_v=float(ogive_spread_sv))
+                        p_og = velocity_ogive_peff(v_cur, v50_c, spread_s_v=float(ogive_spread_sv))
+                        v_res_c = math.sqrt(max(0.0, v_cur ** 2 - v50_c ** 2)) if v_cur > v50_c else 0.0
+
                     last_v50 = v50_c
                     u_perf = float(rng.random()) if rng is not None else 0.5
                     is_perf = bool(u_perf < p_og)
                     is_lethal = is_perf
-                    v50_info = {"v50_mps": v50_c, "p_perforation": p_og, "residual_velocity_mps": math.sqrt(max(0.0, v_cur ** 2 - v50_c ** 2)) if v_cur > v50_c else 0.0}
+                    v50_info = {"v50_mps": v50_c, "p_perforation": p_og, "residual_velocity_mps": v_res_c}
                 elif use_v50_ballistic_limit:
                     v50_info = compute_component_v50_perforation(
                         comp,

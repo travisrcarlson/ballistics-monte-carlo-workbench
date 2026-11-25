@@ -134,9 +134,15 @@ def evaluate_evasive_drone_state(
     elif maneuver_profile == "singer_correlated":
         from ammo_mc.cuas_ballistics_v2 import generate_singer_evasive_trajectory
 
-        rng_s = np.random.default_rng(int(abs(phase_rad) * 1000) + 7)
-        s_traj = generate_singer_evasive_trajectory(
-            t_arr if np.ndim(t_arr) > 0 else np.array([float(t_arr)]),
+        t_flat = np.atleast_1d(t_arr).astype(np.float64)
+        t_lo = min(-0.85, math.floor((float(np.min(t_flat)) - 0.05) * 2.0) / 2.0)
+        t_hi = max(0.50, math.ceil((float(np.max(t_flat)) + 0.05) * 2.0) / 2.0)
+        dt_canon = 0.005
+        n_canon = int(round((t_hi - t_lo) / dt_canon)) + 1
+        t_canon = np.linspace(t_lo, t_hi, n_canon)
+        rng_s = np.random.default_rng(int(round(abs(float(phase_rad)) * 100000)) + 7)
+        s_canon = generate_singer_evasive_trajectory(
+            t_canon,
             target_distance_m=target_distance_m,
             velocity_mps=velocity_mps,
             heading_deg=heading_deg,
@@ -144,9 +150,10 @@ def evaluate_evasive_drone_state(
             tau_m_s=1.2,
             rng=rng_s,
         )
+        interp_out = {k: np.interp(t_flat, t_canon, v) for k, v in s_canon.items()}
         if np.ndim(t_arr) == 0:
-            return {k: float(v[0]) for k, v in s_traj.items()}
-        return s_traj
+            return {k: float(v[0]) for k, v in interp_out.items()}
+        return interp_out
     else:  # "sinusoidal_weave"
         amp = a_amp / (w ** 2)
         dy_m = amp * (np.sin(w * t_arr + phase_rad) - np.sin(phase_rad))
@@ -334,17 +341,33 @@ def simulate_closed_loop_fcs_engagement_mc(
     )
     from ammo_mc.cuas_rigor import resolve_verification_grade
 
-    ov_dt = {"edge_gpu_vision_ms": float(dead_time_override_ms)} if dead_time_override_ms is not None else None
     dead_budget = compute_serial_dead_time_budget(
         preset=dead_time_preset,
-        overrides_ms=ov_dt,
         tof_s=t_tof_nom,
         a_unmod_mps2=max(0.0, float(max_maneuver_g) * 9.80665 * 0.5),
     )
+    if dead_time_override_ms is not None:
+        t_dead_override_s = max(0.0, float(dead_time_override_ms)) / 1000.0
+        dead_budget = dict(dead_budget)
+        dead_budget["t_dead_ms"] = round(t_dead_override_s * 1000.0, 2)
+        dead_budget["t_dead_s"] = round(t_dead_override_s, 4)
+        dead_budget["t_total_s"] = round(t_dead_override_s + max(0.0, float(t_tof_nom)), 4)
+        dead_budget["quadratic_maneuver_miss_m"] = round(
+            0.5 * max(0.0, float(max_maneuver_g) * 9.80665 * 0.5) * (dead_budget["t_total_s"] ** 2),
+            4,
+        )
     t_lat = float(dead_budget["t_dead_s"]) if use_serial_dead_time_chain else (float(sensor["fcs_latency_ms"]) / 1000.0)
+    is_radar_sensor = "radar" in str(sensor_preset).lower()
     rcs_null_scale = 1.0
-    if enable_aspect_rcs_nulls:
-        rcs_db = compute_aspect_dependent_rcs_dbsm(-20.0, aspect_deg=float(drone_yaw_deg) if abs(float(drone_yaw_deg)) > 1e-3 else 35.0)
+    rcs_null_applied = bool(enable_aspect_rcs_nulls and is_radar_sensor)
+    if rcs_null_applied:
+        if abs(float(drone_yaw_deg)) > 1e-3:
+            aspect_deg_eff = float(drone_yaw_deg)
+        elif abs(float(drone_heading_deg) % 180.0) > 1e-3:
+            aspect_deg_eff = float(drone_heading_deg)
+        else:
+            aspect_deg_eff = 35.0
+        rcs_db = compute_aspect_dependent_rcs_dbsm(-20.0, aspect_deg=aspect_deg_eff)
         rcs_null_scale = 1.0 + max(0.0, (-20.0 - rcs_db) / 20.0) * 1.4
     sigma_y_meas = target_distance_m * (float(sensor["sigma_az_mrad"]) / 1000.0) * rcs_null_scale
     sigma_z_meas = target_distance_m * (float(sensor["sigma_el_mrad"]) / 1000.0) * rcs_null_scale
@@ -394,8 +417,9 @@ def simulate_closed_loop_fcs_engagement_mc(
             t_track_grid, target_distance_m, drone_velocity_mps, drone_heading_deg, maneuver_profile, max_maneuver_g, weave_freq_rad_s, phase
         )
         if use_heavy_tailed_atr:
-            y_atr_noise = target_distance_m * (sample_heavy_tailed_atr_error_mrad(rng, len(t_track_grid)) / 1000.0) * rcs_null_scale
-            z_atr_noise = target_distance_m * (sample_heavy_tailed_atr_error_mrad(rng, len(t_track_grid)) / 1000.0) * rcs_null_scale
+            atr_core_mrad = 0.835 if "eo" in str(sensor_preset).lower() else max(0.835, float(sensor["sigma_az_mrad"]))
+            y_atr_noise = target_distance_m * (sample_heavy_tailed_atr_error_mrad(rng, len(t_track_grid), core_sigma_mrad=atr_core_mrad) / 1000.0)
+            z_atr_noise = target_distance_m * (sample_heavy_tailed_atr_error_mrad(rng, len(t_track_grid), core_sigma_mrad=atr_core_mrad) / 1000.0)
             y_meas = np.asarray(true_track["y"]) + y_atr_noise
             z_meas = np.asarray(true_track["z"]) + z_atr_noise
         else:
@@ -593,10 +617,12 @@ def simulate_closed_loop_fcs_engagement_mc(
             "quadratic_maneuver_miss_m": dead_budget["quadratic_maneuver_miss_m"],
             "use_heavy_tailed_atr": bool(use_heavy_tailed_atr),
             "enable_aspect_rcs_nulls": bool(enable_aspect_rcs_nulls),
+            "rcs_null_applied": bool(rcs_null_applied),
+            "rcs_null_scale": round(float(rcs_null_scale), 3),
             "verification_grade": resolve_verification_grade(
                 {
-                    "sensor_noise": "V1" if use_heavy_tailed_atr else "V2",
-                    "dead_time": "V1" if use_serial_dead_time_chain else "V3",
+                    "sensor_noise": "V4" if use_heavy_tailed_atr else "V2",
+                    "dead_time": "V4" if use_serial_dead_time_chain else "V3",
                     "maneuver_model": "V1" if maneuver_profile == "singer_correlated" else "V3",
                     "target_vulnerability": "V3",
                 }
@@ -1530,17 +1556,31 @@ def simulate_turret_recoil_and_gimbal_loads(
     peak_trans_kn = float(np.max(np.abs(f_trans_arr)))
     margin_pct = ((mount_load_limit_kn - peak_trans_kn) / max(mount_load_limit_kn, 0.1)) * 100.0
 
-    from ammo_mc.cuas_ballistics_v2 import compute_saami_recoil_impulse
-
-    ref_ammo = presets.get(default_ammunition_preset, presets["12G_NO4_BUCK_C_UAS"])
-    saami_ref = compute_saami_recoil_impulse(
-        shot_mass_g=int(ref_ammo["pellets_per_shot"]) * float(ref_ammo["pellet_mass_g"]) * len(barrels),
-        wad_mass_g=float(ref_ammo.get("wad_mass_g", 2.79)) * len(barrels),
-        propellant_mass_g=float(ref_ammo.get("propellant_mass_g", 2.2)) * len(barrels),
-        v0_mps=float(ref_ammo["v0_mps"]),
-        gun_mass_kg=max(mount_mass_kg, 1.0),
-        gas_factor_fg=float(saami_gas_factor_fg),
-    )
+    tot_saami_shot_g = 0.0
+    tot_saami_wad_g = 0.0
+    tot_saami_prop_g = 0.0
+    tot_saami_imp_ns = 0.0
+    for b in barrels:
+        b_ammo_key = str(b.get("ammunition_preset", default_ammunition_preset))
+        ammo = presets.get(b_ammo_key, presets["12G_NO4_BUCK_C_UAS"])
+        m_s_g = int(ammo["pellets_per_shot"]) * float(ammo["pellet_mass_g"])
+        m_w_g = float(ammo.get("wad_mass_g", 2.79))
+        m_p_g = float(ammo.get("propellant_mass_g", 2.2))
+        b_len = float(b.get("barrel_length_in", 24.0))
+        v0_b = float(ammo["v0_mps"]) + 2.2 * (b_len - 28.0)
+        tot_saami_shot_g += m_s_g
+        tot_saami_wad_g += m_w_g
+        tot_saami_prop_g += m_p_g
+        tot_saami_imp_ns += ((m_s_g + m_w_g + m_p_g * max(1.0, float(saami_gas_factor_fg))) / 1000.0) * v0_b
+    m_gun_eff = max(mount_mass_kg, 1.0)
+    v_gun_saami = tot_saami_imp_ns / m_gun_eff
+    saami_ref = {
+        "impulse_ns": float(tot_saami_imp_ns),
+        "free_recoil_velocity_mps": float(v_gun_saami),
+        "free_recoil_energy_j": float(0.5 * m_gun_eff * (v_gun_saami ** 2)),
+        "gas_factor_fg": float(max(1.0, float(saami_gas_factor_fg))),
+        "ejecta_mass_g": float(tot_saami_shot_g + tot_saami_wad_g),
+    }
 
     return {
         "summary": {
@@ -1587,6 +1627,8 @@ def sweep_recoil_vs_ripple_delay(
     gimbal_trunnion_offset_z_m: float = 0.18,
     gimbal_pitch_inertia_kg_m2: float = 3.2,
     gimbal_yaw_inertia_kg_m2: float = 3.5,
+    recoil_gas_model: str = "legacy_1275",
+    saami_gas_factor_fg: float = 1.50,
 ) -> dict[str, Any]:
     """Compare peak structural shock force and gimbal muzzle walk across ripple delays for Sequential vs Balanced Pair."""
     if ripple_delays_ms is None:
@@ -1611,6 +1653,8 @@ def sweep_recoil_vs_ripple_delay(
             gimbal_trunnion_offset_z_m=gimbal_trunnion_offset_z_m,
             gimbal_pitch_inertia_kg_m2=gimbal_pitch_inertia_kg_m2,
             gimbal_yaw_inertia_kg_m2=gimbal_yaw_inertia_kg_m2,
+            recoil_gas_model=recoil_gas_model,
+            saami_gas_factor_fg=saami_gas_factor_fg,
         )
         seq_force.append(res_seq["summary"]["peak_transmitted_mount_force_kn"])
         seq_walk.append(max(res_seq["summary"]["max_muzzle_climb_mrad"], res_seq["summary"]["max_yaw_deflection_mrad"]))
@@ -1628,6 +1672,8 @@ def sweep_recoil_vs_ripple_delay(
             gimbal_trunnion_offset_z_m=gimbal_trunnion_offset_z_m,
             gimbal_pitch_inertia_kg_m2=gimbal_pitch_inertia_kg_m2,
             gimbal_yaw_inertia_kg_m2=gimbal_yaw_inertia_kg_m2,
+            recoil_gas_model=recoil_gas_model,
+            saami_gas_factor_fg=saami_gas_factor_fg,
         )
         pair_force.append(res_pair["summary"]["peak_transmitted_mount_force_kn"])
         pair_walk.append(max(res_pair["summary"]["max_muzzle_climb_mrad"], res_pair["summary"]["max_yaw_deflection_mrad"]))

@@ -330,9 +330,9 @@ def test_native_range_instruments_fiducials_live_sprt_and_vv_keys() -> None:
 
 
 def test_v18_cli_api_version_and_literature_100pct() -> None:
-    assert ammo_mc.__version__ == "2.0.0"
+    assert ammo_mc.__version__ == "2.0.1"
     lit = build_literature_audit_summary()
-    assert lit["total_sources"] == 100
+    assert lit["total_sources"] == 101
     assert lit["linked_source_coverage_pct"] == 100.0
 
     runner = CliRunner()
@@ -349,7 +349,7 @@ def test_v18_cli_api_version_and_literature_100pct() -> None:
     client = TestClient(fastapi_app)
     h = client.get("/health")
     assert h.status_code == 200
-    assert h.json()["version"] == "2.0.0"
+    assert h.json()["version"] == "2.0.1"
 
     arr_r = client.post("/cuas/array", json={"n_barrels": 4, "use_oblique_ricochet": True, "shot_cup_separation_m": 4.0, "n_volleys": 6})
     assert arr_r.status_code == 200

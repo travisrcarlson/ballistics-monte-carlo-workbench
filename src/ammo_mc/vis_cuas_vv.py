@@ -288,11 +288,12 @@ def create_salvo_brackets_and_window_figure(window_res: dict[str, Any]) -> go.Fi
     fig = make_subplots(
         rows=1,
         cols=2,
+        specs=[[{"secondary_y": False}, {"secondary_y": True}]],
         subplot_titles=(
             f"Salvo Brackets (WB-F01/F02) & Usable Window [{r_safe:.0f}–{r_max_s:.0f} m]",
             f"Pellet Velocity & Ogive P_eff(v) (V50={sm.get('v50_mps', 0.0):.0f} m/s)",
         ),
-        horizontal_spacing=0.11,
+        horizontal_spacing=0.12,
     )
     if rs:
         fig.add_trace(
@@ -317,14 +318,15 @@ def create_salvo_brackets_and_window_figure(window_res: dict[str, Any]) -> go.Fi
         if not sm.get("window_collapsed") and r_max_s > r_safe:
             fig.add_vrect(x0=r_safe, x1=r_max_s, fillcolor="rgba(16, 185, 129, 0.12)", line_width=1, line_color="#10b981", annotation_text="Usable Window", row=1, col=1)
 
-        fig.add_trace(go.Scatter(x=rs, y=peffs, mode="lines+markers", name="Ogive P_eff(v) (%)", line=dict(width=2.5, color="#f59e0b")), row=1, col=2)
-        fig.add_trace(go.Scatter(x=rs, y=vs, mode="lines", name="Retained Velocity (m/s)", line=dict(dash="dash", color="#14b8a6")), row=1, col=2)
+        fig.add_trace(go.Scatter(x=rs, y=peffs, mode="lines+markers", name="Ogive P_eff(v) (%)", line=dict(width=2.5, color="#f59e0b")), row=1, col=2, secondary_y=False)
+        fig.add_trace(go.Scatter(x=rs, y=vs, mode="lines", name="Retained Velocity (m/s)", line=dict(dash="dash", color="#14b8a6")), row=1, col=2, secondary_y=True)
 
     fig.update_xaxes(title_text="Slant Range R (m)", row=1, col=1)
     fig.update_yaxes(title_text="Kill Probability (%)", range=[0, 105], row=1, col=1)
     fig.update_xaxes(title_text="Slant Range R (m)", row=1, col=2)
-    fig.update_yaxes(title_text="Ogive (%) / Velocity (m/s)", row=1, col=2)
-    fig.update_layout(height=380, margin=dict(l=45, r=25, t=55, b=40))
+    fig.update_yaxes(title_text="Ogive P_eff(v) (%)", range=[0, 105], row=1, col=2, secondary_y=False)
+    fig.update_yaxes(title_text="Retained Velocity (m/s)", row=1, col=2, secondary_y=True)
+    fig.update_layout(height=380, margin=dict(l=45, r=45, t=55, b=40))
     return fig
 
 

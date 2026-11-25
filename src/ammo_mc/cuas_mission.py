@@ -235,8 +235,11 @@ def simulate_cuas_kill_chain_mc(
     classify_samples: list[float] = []
     auth_samples: list[float] = []
     slew_samples: list[float] = []
+    trial_killed_flags: list[int] = []
 
-    for _ in range(n_trials):
+    trial_seeds = np.random.SeedSequence(int(seed)).spawn(max(1, int(n_trials)))
+    for t_idx in range(n_trials):
+        t_rng = np.random.default_rng(trial_seeds[t_idx])
         best_r = 0.0
         best_key = ""
         best_conf = 0.5
@@ -245,11 +248,11 @@ def simulate_cuas_kill_chain_mc(
             if r_nom <= 0.0:
                 continue
             spec = KILL_CHAIN_SENSOR_CATALOG[k]
-            r_draw = max(0.0, float(rng.normal(r_nom, r_nom * float(spec["range_sigma_frac"]))))
+            r_draw = max(0.0, float(t_rng.normal(r_nom, r_nom * float(spec["range_sigma_frac"]))))
             if r_draw > best_r:
                 best_r = r_draw
                 best_key = k
-                best_conf = max(0.10, float(rng.normal(float(spec["confirm_latency_s"]), 0.08)))
+                best_conf = max(0.10, float(t_rng.normal(float(spec["confirm_latency_s"]), 0.08)))
 
         if best_key:
             winning_sensors[best_key] += 1
@@ -261,12 +264,13 @@ def simulate_cuas_kill_chain_mc(
             t_window_list.append(0.0)
             salvos_fired_list.append(0)
             cum_pks.append(0.0)
+            trial_killed_flags.append(0)
             breach_count += 1
             continue
 
-        t_cls = max(0.15, float(rng.normal(ai_classify_s, 0.10)))
-        t_auth = max(0.20, float(rng.normal(human_auth_s, 0.22))) if human_in_the_loop else 0.0
-        t_slew = max(0.05, float(rng.normal(t_slew_nom, 0.06)))
+        t_cls = max(0.15, float(t_rng.normal(ai_classify_s, 0.10)))
+        t_auth = max(0.20, float(t_rng.normal(human_auth_s, 0.22))) if human_in_the_loop else 0.0
+        t_slew = max(0.05, float(t_rng.normal(t_slew_nom, 0.06)))
         # Slew happens concurrently during late auth if HITL is active, adding residual latency
         t_command = best_conf + t_cls + max(t_auth, t_slew) + 0.12
         t_overhead_list.append(t_command)
@@ -286,6 +290,7 @@ def simulate_cuas_kill_chain_mc(
             t_window_list.append(0.0)
             salvos_fired_list.append(0)
             cum_pks.append(0.0)
+            trial_killed_flags.append(0)
             breach_count += 1
             continue
 
@@ -315,13 +320,14 @@ def simulate_cuas_kill_chain_mc(
             )
             p_survive *= (1.0 - pk_burst)
             n_fired += 1
-            if not killed_in_draw and float(rng.random()) < pk_burst:
+            if not killed_in_draw and float(t_rng.random()) < pk_burst:
                 killed_in_draw = True
                 break
             t_elapsed += salvo_cycle_time_s
 
         salvos_fired_list.append(n_fired)
         cum_pks.append((1.0 - p_survive) * 100.0)
+        trial_killed_flags.append(1 if killed_in_draw else 0)
         if not killed_in_draw:
             breach_count += 1
 
@@ -434,6 +440,8 @@ def simulate_cuas_kill_chain_mc(
         "modality_breakdown": modality_breakdown,
         "timeline_stages": timeline_stages,
         "speed_sweep": speed_sweep,
+        "trial_cum_pks": [round(float(x), 4) for x in cum_pks],
+        "trial_killed": trial_killed_flags,
     }
 
 
