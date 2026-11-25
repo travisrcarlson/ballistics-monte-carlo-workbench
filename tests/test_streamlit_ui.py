@@ -307,4 +307,56 @@ def test_ui_scientific_vv_and_high_fidelity_controls() -> None:
     assert at_val.session_state["active_workbench"] == "Audit & Sources"
 
 
+def test_ui_v18_global_hf_sidebar_stl_sprt_and_4pillar_calibration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify v1.8 global HF sidebar switch, STL CAD panel, 4-pillar Calibration, native instruments & live SPRT."""
+    monkeypatch.setenv("AMMO_MC_SCENARIO_DB", str(tmp_path / "ui_v18.db"))
+
+    # 1. Global High-Fidelity sidebar toggle + Stage 1 oblique ricochet, shot-cup & 3D STL CAD ray-cast
+    at_s1 = AppTest.from_file(ROOT_APP, default_timeout=60)
+    at_s1.session_state["authenticated"] = True
+    at_s1.query_params["wb"] = "cuas"
+    at_s1.query_params["mod"] = "array"
+    at_s1.run()
+    assert not at_s1.exception
+    at_s1.toggle(key="ui_high_fidelity_physics").set_value(True)
+    at_s1.checkbox(key="cuas_hf_oblique_ricochet").set_value(True)
+    at_s1.slider(key="cuas_shot_cup_sep_m").set_value(4.0)
+    at_s1.button(key="cuas_stl_demo_btn").click().run()
+    assert not at_s1.exception
+    assert at_s1.session_state["ui_high_fidelity_physics"] is True
+    assert at_s1.session_state["_report_array_summary"]["physics_fidelity_mode"] == "high_fidelity"
+    assert "_cuas_stl_bytes" in at_s1.session_state
+
+    # 2. Stage 4 4-pillar Calibration: LabRadar native import, skewed fiducial photo, PX4 track & Live SPRT buttons
+    at_cal = AppTest.from_file(ROOT_APP, default_timeout=60)
+    at_cal.session_state["authenticated"] = True
+    at_cal.query_params["wb"] = "cuas"
+    at_cal.query_params["mod"] = "calibration"
+    at_cal.run()
+    assert not at_cal.exception
+
+    at_cal.button(key="cal_inst_s_labradar").click().run()
+    assert not at_cal.exception
+    at_cal.button(key="cal_inst_apply_btn").click().run()
+    assert not at_cal.exception
+    assert "_calibrated_digital_twin" in at_cal.session_state
+
+    at_cal.radio(key="cal_pat_mode").set_value("Photo-to-Pattern Hole Digitizer (PNG / JPG)").run()
+    assert not at_cal.exception
+    at_cal.button(key="cal_ph_fiducial_sample_btn").click().run()
+    assert not at_cal.exception
+
+    at_cal.button(key="cal_trk_s_px4").click().run()
+    assert not at_cal.exception
+
+    at_cal.button(key="cal_sprt_kill_btn").click().run()
+    assert not at_cal.exception
+    at_cal.button(key="cal_sprt_miss_btn").click().run()
+    assert not at_cal.exception
+    at_cal.button(key="cal_sprt_commit_btn").click().run()
+    assert not at_cal.exception
+    assert "_cal_live_sprt_res" in at_cal.session_state
+
+
+
 

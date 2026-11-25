@@ -1051,5 +1051,83 @@
     "used_for": "Mach-only smooth-sphere shot cloud aerodynamics, random force dispersion, and atmospheric corrections for 12-gauge C-UAS modeling",
     "workbenches": ["cuas", "physics", "literature"],
     "verification_status": "VERIFIED-SRC"
+  },
+  {
+    "source_id": "S82",
+    "title": "Free-Flight Measurements of Sphere Drag in the Subsonic, Transonic, and Supersonic Regimes",
+    "authors": "A. B. Bailey & J. Hiatt",
+    "year": 1972,
+    "doi": "10.2514/3.50385",
+    "category": "Exterior & Terminal Ballistics",
+    "type": "Journal Article (AIAA Journal)",
+    "url": "https://doi.org/10.2514/3.50385",
+    "used_for": "Experimental sphere drag coefficient validation curves E-01..E-02 across subsonic, transonic, and supersonic Mach-Reynolds regimes",
+    "workbenches": ["cuas", "physics", "validation", "literature"],
+    "verification_status": "VERIFIED-DOI"
+  },
+  {
+    "source_id": "S83",
+    "title": "Ballistic Perforation Dynamics",
+    "authors": "R. F. Recht & T. W. Ipson",
+    "year": 1963,
+    "doi": "10.1115/1.3636566",
+    "category": "Exterior & Terminal Ballistics",
+    "type": "Journal Article (Journal of Applied Mechanics)",
+    "url": "https://doi.org/10.1115/1.3636566",
+    "used_for": "Residual velocity vs. striking velocity model, component V50 perforation threshold, and oblique ricochet cutoff for UAV structure impacts",
+    "workbenches": ["cuas", "physics", "validation", "literature"],
+    "verification_status": "VERIFIED-DOI"
+  },
+  {
+    "source_id": "S84",
+    "title": "ASME V&V 20-2009: Standard for Verification and Validation in Computational Fluid Dynamics and Heat Transfer",
+    "authors": "American Society of Mechanical Engineers",
+    "year": 2009,
+    "doi": "10.1115/1.802960",
+    "category": "Verification, Validation & Uncertainty Quantification",
+    "type": "Engineering Standard (ASME V&V 20)",
+    "url": "https://www.asme.org/codes-standards/find-codes-standards/v-v-20-standard-verification-validation-computational-fluid-dynamics-heat-transfer",
+    "used_for": "Comparison error |E| vs validation uncertainty u_val formulation for C-UAS blind holdout model validation",
+    "workbenches": ["cuas", "validation", "literature"],
+    "verification_status": "VERIFIED-DOI"
+  },
+  {
+    "source_id": "S85",
+    "title": "Verification and Validation in Scientific Computing",
+    "authors": "W. L. Oberkampf & C. J. Roy",
+    "year": 2010,
+    "doi": "10.1017/CBO9780511760396",
+    "category": "Verification, Validation & Uncertainty Quantification",
+    "type": "Reference Monograph (Cambridge University Press)",
+    "url": "https://doi.org/10.1017/CBO9780511760396",
+    "used_for": "Ferson-Oberkampf Area Validation Metric (AVM), nested epistemic x aleatory P-box uncertainty propagation, and FAIR validation dossiers",
+    "workbenches": ["cuas", "validation", "literature"],
+    "verification_status": "VERIFIED-DOI"
+  },
+  {
+    "source_id": "S86",
+    "title": "Sequential Tests of Statistical Hypotheses",
+    "authors": "A. Wald",
+    "year": 1945,
+    "doi": "10.1214/aoms/1177731118",
+    "category": "Statistical Quality Control & Sampling",
+    "type": "Journal Article (Annals of Mathematical Statistics)",
+    "url": "https://doi.org/10.1214/aoms/1177731118",
+    "used_for": "Exact Sequential Probability Ratio Test (SPRT) log-likelihood stopping boundaries for live-fire C-UAS range trials",
+    "workbenches": ["cuas", "validation", "literature"],
+    "verification_status": "VERIFIED-DOI"
+  },
+  {
+    "source_id": "S87",
+    "title": "The Use of Confidence or Fiducial Limits Illustrated in the Case of the Binomial",
+    "authors": "C. J. Clopper & E. S. Pearson",
+    "year": 1934,
+    "doi": "10.1093/biomet/26.4.404",
+    "category": "Statistical Quality Control & Sampling",
+    "type": "Journal Article (Biometrika)",
+    "url": "https://doi.org/10.1093/biomet/26.4.404",
+    "used_for": "Exact two-sided binomial Clopper-Pearson confidence intervals on live-fire shoot-down probability",
+    "workbenches": ["cuas", "validation", "literature"],
+    "verification_status": "VERIFIED-DOI"
   }
 ]

@@ -72,9 +72,12 @@ def simulate_unified_tactical_raid_mc(
     swarm_package: list[dict[str, Any]] | None = None,
     outer_layer_type: str = "none",
     calibration_profile: dict[str, Any] | None = None,
+    physics_fidelity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run Monte Carlo time-stepped cooperative multi-turret 3D C-UAS raid defense."""
     cp = dict(calibration_profile or {})
+    if physics_fidelity is not None and isinstance(physics_fidelity, dict):
+        cp["_physics_fidelity"] = dict(physics_fidelity)
     if cp.get("measured_slew_rate_deg_s") is not None:
         turret_slew_rate_deg_s = float(cp["measured_slew_rate_deg_s"])
     if cp.get("measured_slew_accel_deg_s2") is not None:

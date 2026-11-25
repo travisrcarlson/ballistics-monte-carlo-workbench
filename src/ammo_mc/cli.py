@@ -879,6 +879,199 @@ def cmd_cuas_wizard(
         )
 
 
+@cuas_app.command("vv-benchmarks")
+def cmd_cuas_vv_benchmarks(
+    as_json: bool = typer.Option(False, "--json", help="Output JSON benchmark table."),
+) -> None:
+    """Run published C-UAS experimental benchmarks (E-01..E-06)."""
+    from ammo_mc.cuas_scientific_vv import run_experimental_validation_benchmarks
+
+    res = run_experimental_validation_benchmarks()
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    typer.echo(f"C-UAS Experimental Benchmarks: {res['passed']}/{res['total']} PASS")
+    for b in res["benchmarks"]:
+        typer.echo(f"  [{b['id']}] {'PASS' if b['passed'] else 'FAIL'} | {b['name']}")
+
+
+@cuas_app.command("blind-holdout")
+def cmd_cuas_blind_holdout(
+    choke: str = typer.Option("Modified", "--choke", help="Nominal choke preset."),
+    ammo: str = typer.Option("12G_NO4_BUCK_C_UAS", "--ammo", help="Ammunition preset."),
+    drone: str = typer.Option("fpv_14in_36cm_pg7m", "--drone", help="Target drone model."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON blind holdout report."),
+) -> None:
+    """Run blind out-of-sample range holdout validation with ASME V&V 20 metrics."""
+    from ammo_mc.cuas_scientific_vv import (
+        generate_sample_blind_holdout_dataset,
+        run_blind_holdout_validation,
+    )
+
+    ds = generate_sample_blind_holdout_dataset(nominal_choke=choke, ammunition_preset=ammo)
+    res = run_blind_holdout_validation(
+        pattern_rows=ds["pattern_rows"],
+        livefire_rows=ds["livefire_rows"],
+        holdout_ranges_m=(65.0, 75.0),
+        nominal_choke=choke,
+        ammunition_preset=ammo,
+        drone_model=drone,
+    )
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    typer.echo(
+        f"Blind Holdout Validation: Nominal RMSE={res['holdout_rmse_nominal_m']:.3f}m -> "
+        f"Calibrated={res['holdout_rmse_calibrated_m']:.3f}m ({res['error_reduction_pct']:+.1f}%)"
+    )
+
+
+@cuas_app.command("uq-envelope")
+def cmd_cuas_uq_envelope(
+    ammo: str = typer.Option("ALDA_BUCKSHOT_12_76_COPPER_32G", "--ammo", help="Ammunition preset."),
+    drone: str = typer.Option("fpv_14in_36cm_pg7m", "--drone", help="Target drone model."),
+    draws: int = typer.Option(6, "--draws", help="Latin Hypercube epistemic draws."),
+    volleys: int = typer.Option(6, "--volleys", help="Aleatory volleys per draw."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON UQ P-box envelope."),
+) -> None:
+    """Compute nested epistemic x aleatory UQ P-box R80 envelope."""
+    from ammo_mc.cuas_scientific_vv import compute_epistemic_aleatory_uq_envelope
+
+    res = compute_epistemic_aleatory_uq_envelope(
+        distance_stations_m=(20.0, 35.0, 50.0, 65.0, 75.0),
+        ammunition_preset=ammo,
+        drone_model=drone,
+        n_epistemic_draws=draws,
+        n_volleys_per_draw=volleys,
+    )
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    typer.echo(
+        f"UQ P-Box R80: Median={res['r80_median_m']:.1f}m "
+        f"(P05={res['r80_p05_m']:.1f}m, P95={res['r80_p95_m']:.1f}m)"
+    )
+
+
+@cuas_app.command("doe-plan")
+def cmd_cuas_doe_plan(
+    range_m: float = typer.Option(50.0, "--range-m", help="Primary validation slant range (m)."),
+    p0: float = typer.Option(0.50, "--p0", help="Null-hypothesis kill probability."),
+    p1: float = typer.Option(0.80, "--p1", help="Target alternative kill probability."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON DOE & SPRT plan."),
+) -> None:
+    """Generate pre-test range Design of Experiments and Wald SPRT boundaries."""
+    from ammo_mc.cuas_scientific_vv import plan_range_validation_doe
+
+    res = plan_range_validation_doe(target_range_m=range_m, p0=p0, p1=p1)
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    typer.echo(
+        f"DOE Plan @ {range_m:.0f}m: n_prec_ci={res['n_required_precision_ci']}, "
+        f"SPRT={res['sprt_bounds']}"
+    )
+
+
+@cuas_app.command("doppler-drag")
+def cmd_cuas_doppler_drag(
+    csv_file: Optional[Path] = typer.Option(None, "--file", help="Optional Doppler velocity CSV file."),
+    ammo: str = typer.Option("12G_NO4_BUCK_C_UAS", "--ammo", help="Reference ammunition preset."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON Doppler drag fit."),
+) -> None:
+    """Fit in-flight pellet Cd scale and V0 from Doppler radar track CSV."""
+    from ammo_mc.cuas_scientific_vv import (
+        calibrate_doppler_radar_drag,
+        generate_sample_doppler_radar_csv,
+    )
+
+    csv_t = csv_file.read_text(encoding="utf-8", errors="replace") if csv_file else generate_sample_doppler_radar_csv(ammunition_preset=ammo)
+    res = calibrate_doppler_radar_drag(csv_t, ammunition_preset=ammo)
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    typer.echo(
+        f"Doppler Drag Fit: V0={res['fitted_v0_mps']:.1f} m/s | "
+        f"Cd_scale={res['calibrated_cd_scale']:.3f} | RMSE={res['rmse_velocity_mps']:.2f} m/s"
+    )
+
+
+@cuas_app.command("shotstring")
+def cmd_cuas_shotstring(
+    csv_file: Optional[Path] = typer.Option(None, "--file", help="Optional shot-string & weather CSV."),
+    range_m: float = typer.Option(50.0, "--range-m", help="Target range (m)."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON shot-string summary."),
+) -> None:
+    """Parse acoustic/optical shot-string arrival times and moist air density."""
+    from ammo_mc.cuas_scientific_vv import (
+        generate_sample_shotstring_csv,
+        parse_weather_and_shotstring_csv,
+    )
+
+    csv_t = csv_file.read_text(encoding="utf-8", errors="replace") if csv_file else generate_sample_shotstring_csv(range_m=range_m)
+    res = parse_weather_and_shotstring_csv(csv_t, range_m=range_m)
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    typer.echo(
+        f"Shot-String @ {range_m:.0f}m: L={res['string_length_m']:.2f}m ({res['string_duration_ms']:.2f}ms) | "
+        f"rho={res['air_density_kg_m3']:.3f} kg/m3"
+    )
+
+
+@cuas_app.command("parse-instrument")
+def cmd_cuas_parse_instrument(
+    file: Optional[Path] = typer.Option(None, "--file", help="Native LabRadar/Garmin/Kestrel/PX4 file path."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON parsed instrument packet."),
+) -> None:
+    """Auto-detect and parse LabRadar, Garmin Xero C1, Kestrel LiNK, or PX4 telemetry files."""
+    from ammo_mc.cuas_scientific_vv import (
+        detect_and_parse_instrument_file,
+        generate_sample_labradar_native_csv,
+    )
+
+    if file is not None:
+        raw = file.read_bytes()
+        name = file.name
+    else:
+        raw = generate_sample_labradar_native_csv().encode("utf-8")
+        name = "labradar_sample.csv"
+    res = detect_and_parse_instrument_file(name, raw)
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    typer.echo(f"Instrument Auto-Parse [{res['instrument_type']}]: patch keys={list((res.get('twin_patch') or {}).keys())}")
+
+
+@cuas_app.command("stl-vuln")
+def cmd_cuas_stl_vuln(
+    file: Optional[Path] = typer.Option(None, "--file", help="Optional .stl drone CAD mesh path."),
+    aspect: str = typer.Option("head_on_frontal", "--aspect", help="Presentation aspect mode."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON STL projection summary."),
+) -> None:
+    """Project 3D STL drone CAD mesh triangles for presented area & surface obliquity."""
+    from ammo_mc.small_arms import (
+        generate_sample_drone_stl_bytes,
+        parse_stl_mesh,
+        project_stl_mesh_vulnerability,
+    )
+
+    stl_b = file.read_bytes() if file is not None else generate_sample_drone_stl_bytes("quadcopter")
+    mesh = parse_stl_mesh(stl_b)
+    proj = project_stl_mesh_vulnerability(mesh, aspect_mode=aspect)
+    out = {
+        "n_triangles": mesh["n_triangles"],
+        "format": mesh["format"],
+        "aspect_mode": aspect,
+        "presented_area_cm2": proj["presented_area_cm2"],
+        "span_xyz_m": mesh["span_xyz_m"],
+    }
+    if as_json:
+        typer.echo(json.dumps(out, indent=2))
+        return
+    typer.echo(f"STL Projection ({aspect}): {out['n_triangles']} tris, A_pres={out['presented_area_cm2']:.1f} cm2")
+
+
 @app.command("literature")
 def cmd_literature(
     query: str = typer.Option("", "--query", "-q", help="Filter sources by keyword, author, DOI, or formula."),

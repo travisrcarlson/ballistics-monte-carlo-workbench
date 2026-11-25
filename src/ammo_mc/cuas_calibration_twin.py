@@ -74,6 +74,11 @@ def get_default_nominal_twin() -> dict[str, Any]:
         "tracker_jitter_mrad_se": 0.5,
         "tracker_latency_ms": None,
         "otm_jitter_mrad": 0.0,
+        "pattern_distribution": "gaussian",
+        "flyer_fraction": 0.12,
+        "shot_cup_separation_m": 0.0,
+        "air_density_kg_m3": 1.225,
+        "measured_shot_string_length_m": None,
         "lot_number": "",
         "barrel_serial": "",
         "history": [],
@@ -657,6 +662,165 @@ def generate_skewed_pattern_board_png_with_corners(
     return buf.getvalue(), corners_px, np.asarray(gt_pts, dtype=np.float64)
 
 
+def generate_printable_fiducial_board_pdf(
+    board_width_m: float = 1.0,
+    board_height_m: float = 1.0,
+    title: str = "C-UAS Auto-Fiducial Calibration Pattern Board",
+) -> bytes:
+    """Render a printable calibration target board PDF with 4 corner fiducial squares & 30-inch ring."""
+    from matplotlib.backends.backend_pdf import PdfPages
+    from matplotlib.figure import Figure
+    from matplotlib.patches import Circle, Rectangle
+
+    w = max(0.4, float(board_width_m))
+    h = max(0.4, float(board_height_m))
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        fig = Figure(figsize=(8.5, 8.5), facecolor="#FFFFFF")
+        ax = fig.add_axes([0.08, 0.08, 0.84, 0.82], facecolor="#FFFFFF")
+        ax.set_xlim(-0.5 * w, 0.5 * w)
+        ax.set_ylim(-0.5 * h, 0.5 * h)
+        ax.set_aspect("equal", "box")
+
+        # Outer board perimeter & 10 cm ticks
+        ax.add_patch(Rectangle((-0.5 * w, -0.5 * h), w, h, fill=False, edgecolor="#1E293B", linewidth=2.0))
+        ax.add_patch(Circle((0.0, 0.0), 0.381, fill=False, edgecolor="#475569", linestyle="--", linewidth=1.4))
+        ax.plot([-0.04, 0.04], [0.0, 0.0], color="#0F172A", linewidth=1.6)
+        ax.plot([0.0, 0.0], [-0.04, 0.04], color="#0F172A", linewidth=1.6)
+
+        # 4 high-contrast corner fiducials at +/- 0.44 W/H
+        f_off_x = 0.44 * w
+        f_off_y = 0.44 * h
+        sq = 0.055 * min(w, h)
+        for sx in (-1.0, 1.0):
+            for sy in (-1.0, 1.0):
+                cx_f, cy_f = sx * f_off_x, sy * f_off_y
+                ax.add_patch(Rectangle((cx_f - 0.5 * sq, cy_f - 0.5 * sq), sq, sq, facecolor="#000000", edgecolor="#000000"))
+
+        ax.set_xlabel(f"Horizontal Y (m) — Total Width {w:.2f} m (Fiducials ±{f_off_x:.3f} m)")
+        ax.set_ylabel(f"Vertical Z (m) — Total Height {h:.2f} m (30-in circle dashed)")
+        fig.suptitle(title, fontsize=13, fontweight="bold", color="#0F172A")
+        pdf.savefig(fig, facecolor="#FFFFFF")
+    return buf.getvalue()
+
+
+def detect_fiducial_board_corners(img_gray: np.ndarray) -> list[tuple[float, float]] | None:
+    """Auto-detect the 4 dark square corner fiducials in TL, TR, BR, BL order."""
+    arr = np.asarray(img_gray, dtype=np.float64)
+    if arr.ndim != 2 or min(arr.shape) < 64:
+        return None
+    h_px, w_px = arr.shape
+    bg = sp_ndimage.gaussian_filter(arr, sigma=max(12.0, min(h_px, w_px) / 22.0))
+    diff = np.maximum(bg - arr, 0.0)
+    dark = (diff >= max(0.28, float(np.percentile(diff, 97.5)) * 0.65)) | (arr <= 0.25)
+
+    quads = [
+        (0, h_px // 2, 0, w_px // 2),
+        (0, h_px // 2, w_px // 2, w_px),
+        (h_px // 2, h_px, w_px // 2, w_px),
+        (h_px // 2, h_px, 0, w_px // 2),
+    ]
+    min_fid_area = max(90.0, (h_px * w_px) * 0.00025)
+    found: list[tuple[float, float]] = []
+    for y0, y1, x0, x1 in quads:
+        sub_mask = dark[y0:y1, x0:x1]
+        lbl, n_c = sp_ndimage.label(sub_mask)
+        if n_c == 0:
+            return None
+        best_score = -1.0
+        best_pt: tuple[float, float] | None = None
+        slices = sp_ndimage.find_objects(lbl)
+        for idx, slc in enumerate(slices, start=1):
+            if slc is None:
+                continue
+            comp = lbl[slc] == idx
+            area = float(np.sum(comp))
+            if area < min_fid_area:
+                continue
+            bh = max(1, slc[0].stop - slc[0].start)
+            bw = max(1, slc[1].stop - slc[1].start)
+            aspect = max(bh / bw, bw / bh)
+            solidity = area / float(bh * bw)
+            if aspect > 1.9 or solidity < 0.55:
+                continue
+            score = area * solidity / aspect
+            if score > best_score:
+                best_score = score
+                ry, rx = np.nonzero(comp)
+                best_pt = (float(x0 + slc[1].start) + float(np.mean(rx)), float(y0 + slc[0].start) + float(np.mean(ry)))
+        if best_pt is None:
+            return None
+        found.append(best_pt)
+    return found
+
+
+def generate_skewed_fiducial_board_png(
+    range_m: float = 36.58,
+    nominal_choke: str = "Modified",
+    true_spread_factor: float = 1.18,
+    n_pellets: int = 36,
+    board_width_m: float = 1.0,
+    board_height_m: float = 1.0,
+    fiducial_inset_frac: float = 0.06,
+    seed: int = 42,
+) -> tuple[bytes, list[tuple[float, float]], np.ndarray]:
+    """Generate a perspective-skewed pattern board PNG WITH 4 auto-detectable dark corner fiducials."""
+    rng = np.random.default_rng(seed)
+    w_px, h_px = 640, 640
+    corners_px = [(92.0, 74.0), (542.0, 98.0), (588.0, 562.0), (56.0, 536.0)]
+    in_x = (0.5 - float(fiducial_inset_frac)) * float(board_width_m)
+    in_y = (0.5 - float(fiducial_inset_frac)) * float(board_height_m)
+    dst_m = [(-in_x, +in_y), (+in_x, +in_y), (+in_x, -in_y), (-in_x, -in_y)]
+    H_m_to_px = _compute_homography_matrix(dst_m, corners_px)
+
+    img = rng.normal(0.92, 0.012, size=(h_px, w_px)).astype(np.float64)
+    yy, xx = np.ogrid[:h_px, :w_px]
+
+    # Stamp 4 solid dark fiducial squares centered at corners_px
+    half_fid = 14.0
+    for fx, fy in corners_px:
+        f_mask = (np.abs(xx - fx) <= half_fid) & (np.abs(yy - fy) <= half_fid)
+        img[f_mask] = 0.05
+
+    sigma_nom = _choke_sigma_at_40yd(nominal_choke) * ((float(range_m) / 36.58) ** 1.15)
+    sigma_true = sigma_nom * float(true_spread_factor)
+    gt_pts: list[tuple[float, float]] = []
+    placed_px: list[tuple[float, float]] = []
+    attempts = 0
+    while len(gt_pts) < int(n_pellets) and attempts < int(n_pellets) * 35:
+        attempts += 1
+        y_m = float(rng.normal(0.02, sigma_true))
+        z_m = float(rng.normal(-0.015, sigma_true))
+        if abs(y_m) > 0.36 * board_width_m or abs(z_m) > 0.36 * board_height_m:
+            continue
+        px_pt = _apply_homography(H_m_to_px, [(y_m, z_m)])[0]
+        px_x, px_y = float(px_pt[0]), float(px_pt[1])
+        if not (42.0 <= px_x <= w_px - 42.0 and 42.0 <= px_y <= h_px - 42.0):
+            continue
+        if any(math.hypot(px_x - fx, px_y - fy) < 28.0 for fx, fy in corners_px):
+            continue
+        if any(math.hypot(px_x - ox, px_y - oy) < 15.0 for ox, oy in placed_px):
+            continue
+        gt_pts.append((y_m, z_m))
+        placed_px.append((px_x, px_y))
+        rad = float(rng.uniform(4.2, 5.2))
+        dist2 = (xx - px_x) ** 2 + (yy - px_y) ** 2
+        mask = dist2 <= (rad ** 2)
+        img[mask] = np.minimum(img[mask], 0.14 + 0.12 * (dist2[mask] / max(rad ** 2, 1.0)))
+
+    img_u8 = np.clip(img * 255.0, 0, 255).astype(np.uint8)
+    buf = io.BytesIO()
+    try:
+        from PIL import Image
+
+        Image.fromarray(img_u8, mode="L").convert("RGB").save(buf, format="PNG")
+    except Exception:
+        from matplotlib import image as mpimg
+
+        mpimg.imsave(buf, img_u8, cmap="gray", format="png")
+    return buf.getvalue(), corners_px, np.asarray(gt_pts, dtype=np.float64)
+
+
 def digitize_pattern_board_image(
     image_bytes: bytes,
     board_width_m: float = 1.0,
@@ -669,8 +833,10 @@ def digitize_pattern_board_image(
     max_blob_px: int = 550,
     roi_margin_frac: float = 0.04,
     corner_points_px: list[tuple[float, float]] | None = None,
+    auto_detect_fiducials: bool = False,
+    fiducial_inset_frac: float = 0.06,
 ) -> dict[str, Any]:
-    """Detect pellet puncture holes in a target-board image with optional 4-corner homography rectification."""
+    """Detect pellet puncture holes in a target-board image with optional manual/auto-fiducial homography."""
     if not image_bytes:
         raise ValueError("Uploaded image bytes are empty.")
 
@@ -693,6 +859,15 @@ def digitize_pattern_board_image(
         raise ValueError("Target-board image is too small or invalid grayscale dimensions.")
 
     h_px, w_px = arr.shape
+    auto_corners: list[tuple[float, float]] | None = None
+    eff_corners = corner_points_px
+    used_fiducials = False
+    if eff_corners is None and auto_detect_fiducials:
+        auto_corners = detect_fiducial_board_corners(arr)
+        if auto_corners is not None:
+            eff_corners = auto_corners
+            used_fiducials = True
+
     bg = sp_ndimage.gaussian_filter(arr, sigma=max(10.0, min(h_px, w_px) / 30.0))
     diff = np.maximum(bg - arr, 0.0)
 
@@ -708,6 +883,12 @@ def digitize_pattern_board_image(
     binary[-my:, :] = False
     binary[:, :mx] = False
     binary[:, -mx:] = False
+
+    if eff_corners is not None and len(eff_corners) == 4:
+        yy_f, xx_f = np.ogrid[:h_px, :w_px]
+        r_mask = max(18.0, 0.038 * min(h_px, w_px))
+        for fx, fy in eff_corners:
+            binary[((xx_f - float(fx)) ** 2 + (yy_f - float(fy)) ** 2) <= (r_mask ** 2)] = False
 
     labeled, n_raw = sp_ndimage.label(binary)
     centroids: list[tuple[float, float]] = []
@@ -738,14 +919,17 @@ def digitize_pattern_board_image(
 
     homography_applied = False
     homography_mat: list[list[float]] | None = None
-    if corner_points_px is not None and len(corner_points_px) == 4:
+    if eff_corners is not None and len(eff_corners) == 4:
+        inset = float(fiducial_inset_frac) if used_fiducials else 0.0
+        half_w = (0.5 - inset) * float(board_width_m)
+        half_h = (0.5 - inset) * float(board_height_m)
         dst_corners_m = [
-            (-0.5 * float(board_width_m), +0.5 * float(board_height_m)),
-            (+0.5 * float(board_width_m), +0.5 * float(board_height_m)),
-            (+0.5 * float(board_width_m), -0.5 * float(board_height_m)),
-            (-0.5 * float(board_width_m), -0.5 * float(board_height_m)),
+            (-half_w, +half_h),
+            (+half_w, +half_h),
+            (+half_w, -half_h),
+            (-half_w, -half_h),
         ]
-        H_px_to_m = _compute_homography_matrix(corner_points_px, dst_corners_m)
+        H_px_to_m = _compute_homography_matrix(eff_corners, dst_corners_m)
         rectified = _apply_homography(H_px_to_m, centroids)
         homography_applied = True
         homography_mat = H_px_to_m.tolist()
@@ -770,8 +954,11 @@ def digitize_pattern_board_image(
         "n_detected_holes": len(centroids),
         "image_shape": [int(h_px), int(w_px)],
         "pixel_centroids": [[round(cx_v, 1), round(cy_v, 1)] for cx_v, cy_v in centroids],
+        "detected_holes_px": centroids,
         "homography_applied": homography_applied,
         "homography_matrix": homography_mat,
+        "auto_detected_corners_px": auto_corners,
+        "rectification_corners_px": eff_corners,
         "extracted_csv": extracted_csv,
         "pattern_calibration": pat_res,
         "twin_patch": {

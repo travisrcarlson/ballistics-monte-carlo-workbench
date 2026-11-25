@@ -25,6 +25,7 @@ from ammo_mc.ui.common import (  # noqa: E402,F401
     render_digital_twin_sidebar_control,
     render_focus_mode_toggle,
     render_header,
+    render_physics_fidelity_sidebar_control,
     require_password,
     sync_query_params,
 )
@@ -66,6 +67,7 @@ def main() -> None:
     with st.sidebar:
         render_focus_mode_toggle()
         render_digital_twin_sidebar_control()
+        render_physics_fidelity_sidebar_control()
         st.divider()
 
     if st.session_state.get("active_workbench") not in _WORKBENCH_OPTIONS:

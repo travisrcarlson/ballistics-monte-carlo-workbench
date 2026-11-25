@@ -23,6 +23,7 @@ import math
 import platform
 import subprocess
 from typing import Any
+import warnings
 
 import numpy as np
 from scipy import optimize as sp_opt
@@ -113,7 +114,9 @@ def compute_asme_vv20_metrics(
         ks_stat, ks_p = 0.0, 1.0
 
     try:
-        ad_res = sp_stats.anderson_ksamp([s, e])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            ad_res = sp_stats.anderson_ksamp([s, e])
         ad_stat = float(ad_res.statistic)
     except Exception:
         ad_stat = 0.0
@@ -125,6 +128,7 @@ def compute_asme_vv20_metrics(
         "sim_mean": round(mu_s, 5),
         "exp_mean": round(mu_e, 5),
         "comparison_error_E": round(comp_error, 5),
+        "mean_comparison_error_e": round(abs(comp_error), 5),
         "u_num": round(u_num_eff, 5),
         "u_input": round(float(u_input), 5),
         "u_exp": round(u_exp_stat, 5),
@@ -132,10 +136,12 @@ def compute_asme_vv20_metrics(
         "k_coverage": float(k_coverage),
         "e_over_kuval": round(ratio, 4),
         "area_validation_metric": round(avm, 5),
+        "area_validation_metric_avm": round(avm, 5),
         "ks_statistic": round(ks_stat, 4),
         "ks_pvalue": round(ks_p, 4),
         "ad_statistic": round(ad_stat, 4),
         "verdict": verdict,
+        "validated": bool(verdict == "VALIDATED"),
     }
 
 
@@ -962,12 +968,15 @@ def calibrate_doppler_radar_drag(
     return {
         "success": bool(res.success),
         "n_stations": len(pts),
+        "n_track_points": len(pts),
+        "nominal_v0_mps": round(init_v0, 2),
         "v0_fit_mps": round(v0_fit, 2),
         "fitted_v0_mps": round(v0_fit, 2),
         "v0_se_mps": round(v0_se, 2),
         "pellet_cd_scale": round(cd_fit, 4),
         "calibrated_cd_scale": round(cd_fit, 4),
         "pellet_cd_scale_se": round(cd_se, 4),
+        "cd_scale_se": round(cd_se, 4),
         "rmse_mps": round(rmse, 2),
         "rmse_velocity_mps": round(rmse, 2),
         "ambient_temp_c": round(t_c, 1),
@@ -1031,6 +1040,8 @@ def parse_weather_and_shotstring_csv(csv_text: str, range_m: float = 45.0) -> di
     p_v = (max(0.0, min(100.0, rh)) / 100.0) * e_sat
     p_d = max(1000.0, p_pa - p_v)
     rho_moist = (p_d / (287.058 * t_k)) + (p_v / (461.495 * t_k))
+    t_virt_k = t_k / max(1.0 - 0.378 * (p_v / max(p_pa, 1.0)), 0.5)
+    t_sd_ms = float(np.std(t_arr, ddof=1) * 1000.0) if len(t_arr) > 1 else 0.0
 
     return {
         "n_samples": len(times),
@@ -1038,6 +1049,7 @@ def parse_weather_and_shotstring_csv(csv_text: str, range_m: float = 45.0) -> di
         "median_arrival_s": round(float(np.median(t_arr)), 5),
         "dt_90_ms": round(dt_90 * 1000.0, 2),
         "string_duration_ms": round(dt_90 * 1000.0, 2),
+        "arrival_time_sd_ms": round(t_sd_ms, 2),
         "median_impact_velocity_mps": round(v_med, 2),
         "measured_shot_string_length_m": round(string_len_m, 3),
         "string_length_m": round(string_len_m, 3),
@@ -1048,8 +1060,13 @@ def parse_weather_and_shotstring_csv(csv_text: str, range_m: float = 45.0) -> di
         "ambient_pressure_hpa": round(p_pa / 100.0, 2),
         "moist_air_density_kg_m3": round(rho_moist, 4),
         "air_density_kg_m3": round(rho_moist, 4),
+        "virtual_temp_k": round(t_virt_k, 2),
         "speed_of_sound_mps": round(math.sqrt(1.4 * 287.058 * t_k), 1),
         "range_m": float(range_m),
+        "twin_patch": {
+            "air_density_kg_m3": round(rho_moist, 4),
+            "measured_shot_string_length_m": round(string_len_m, 3),
+        },
     }
 
 
@@ -1092,13 +1109,16 @@ def build_reproducible_validation_bundle(
         },
         "input_sha256": hashes,
         "twin_snapshot": twin_profile or twin or get_default_nominal_twin(),
-        "blind_holdout": holdout_res,
-        "uq_envelope": uq_res,
+        "blind_holdout": holdout_res or kwargs.get("blind_holdout_results"),
+        "uq_envelope": uq_res or kwargs.get("uq_results"),
+        "livefire_dataset": kwargs.get("livefire_dataset"),
         "experimental_benchmarks": exp_res or run_experimental_validation_benchmarks(),
         "doe_plan": doe_res,
     }
     canon = json.dumps(bundle_core, sort_keys=True, default=str).encode("utf-8")
-    bundle_core["bundle_sha256"] = hashlib.sha256(canon).hexdigest()
+    digest = hashlib.sha256(canon).hexdigest()
+    bundle_core["bundle_sha256"] = digest
+    bundle_core["manifest_sha256"] = digest
     return bundle_core
 
 
@@ -1174,3 +1194,363 @@ def generate_scientific_vv_dossier_html(bundle: dict[str, Any]) -> str:
         f"<tbody>{rows_html}</tbody></table>"
         f"<h2>Full Reproducibility Manifest</h2><pre>{html.escape(md_text)}</pre></body></html>"
     )
+
+
+# -------------------------------------------------------------------------
+# 8. NATIVE RANGE-INSTRUMENT PARSERS (LABRADAR, GARMIN XERO, KESTREL, AUTO)
+# -------------------------------------------------------------------------
+
+
+def generate_sample_labradar_native_csv(v0_true_mps: float = 410.0, cd_scale: float = 1.06, seed: int = 42) -> str:
+    """Synthesize a native LabRadar semicolon-delimited multi-shot Doppler track CSV."""
+    rng = np.random.default_rng(seed)
+    lines = [
+        "Device;LabRadar v1.4;Series;C-UAS-01",
+        "Units Vel;m/s;Units Dist;m",
+        "Shot ID;V0;V1;V2;V3;V4;V5;Dist1;Dist2;Dist3;Dist4;Dist5",
+    ]
+    dists = (5.0, 15.0, 25.0, 35.0, 50.0)
+    kappa = 0.0092 * float(cd_scale)
+    for sid in range(1, 6):
+        v0 = float(rng.normal(v0_true_mps, 3.2))
+        vels = [v0] + [max(30.0, v0 * math.exp(-kappa * d) + float(rng.normal(0.0, 1.3))) for d in dists]
+        lines.append(
+            f"{sid};{vels[0]:.1f};{vels[1]:.1f};{vels[2]:.1f};{vels[3]:.1f};{vels[4]:.1f};{vels[5]:.1f};"
+            f"{dists[0]:.1f};{dists[1]:.1f};{dists[2]:.1f};{dists[3]:.1f};{dists[4]:.1f}"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def parse_labradar_native_csv(csv_text: str) -> dict[str, Any]:
+    """Parse native LabRadar semicolon/comma shot-track export into SI Doppler and Chronograph CSVs."""
+    lines = [ln.strip() for ln in csv_text.splitlines() if ln.strip()]
+    delim = ";" if any(";" in ln for ln in lines[:10]) else ","
+    units_imperial = any("fps" in ln.lower() or "ft/s" in ln.lower() or "yd" in ln.lower() for ln in lines[:6])
+
+    hdr_idx: int | None = None
+    for i, ln in enumerate(lines):
+        low = ln.lower()
+        if "shot id" in low or ("v0" in low and "v1" in low):
+            hdr_idx = i
+            break
+    if hdr_idx is None:
+        raise ValueError("Unrecognized LabRadar CSV format (missing Shot ID / V0..Vn header).")
+
+    reader = csv.DictReader(io.StringIO("\n".join(lines[hdr_idx:])), delimiter=delim)
+    vel_scale = 0.3048 if units_imperial else 1.0
+    dist_scale = 0.9144 if units_imperial else 1.0
+
+    v0_vals: list[float] = []
+    doppler_pts: dict[float, list[float]] = {}
+    for row in reader:
+        r = {str(k).strip().lower(): str(v).strip() for k, v in row.items() if k is not None}
+        v0_raw = r.get("v0")
+        if v0_raw:
+            v0_si = float(v0_raw) * vel_scale
+            v0_vals.append(v0_si)
+            doppler_pts.setdefault(0.0, []).append(v0_si)
+        for k in range(1, 10):
+            vk = r.get(f"v{k}")
+            dk = r.get(f"dist{k}", r.get(f"d{k}"))
+            if vk and dk:
+                doppler_pts.setdefault(float(dk) * dist_scale, []).append(float(vk) * vel_scale)
+
+    if not v0_vals:
+        raise ValueError("No valid velocity shots parsed from LabRadar CSV.")
+
+    dop_lines = ["range_m,velocity_mps"]
+    for rm in sorted(doppler_pts):
+        if rm > 0.0:
+            dop_lines.append(f"{rm:.2f},{float(np.mean(doppler_pts[rm])):.2f}")
+    chrono_lines = ["shot_id,velocity_mps"]
+    for idx, vv in enumerate(v0_vals, start=1):
+        chrono_lines.append(f"{idx},{vv:.2f}")
+
+    dop_csv = "\n".join(dop_lines) + "\n"
+    dop_fit = calibrate_doppler_radar_drag(dop_csv) if len(dop_lines) >= 5 else {}
+    mean_v0 = float(np.mean(v0_vals))
+    sd_v0 = float(np.std(v0_vals, ddof=1)) if len(v0_vals) > 1 else 0.0
+    return {
+        "instrument": "LabRadar",
+        "units_detected": "imperial (ft/s, yd) -> SI" if units_imperial else "metric (m/s, m)",
+        "n_shots": len(v0_vals),
+        "mean_v0_mps": round(mean_v0, 2),
+        "sd_v0_mps": round(sd_v0, 2),
+        "doppler_csv": dop_csv,
+        "chronograph_csv": "\n".join(chrono_lines) + "\n",
+        "doppler_fit": dop_fit,
+        "twin_patch": {
+            "mv_sd_mps": round(sd_v0, 2),
+            **({"pellet_cd_scale": dop_fit["pellet_cd_scale"], "pellet_cd_scale_se": dop_fit["pellet_cd_scale_se"]} if dop_fit else {}),
+        },
+    }
+
+
+def generate_sample_garmin_xero_csv(mean_v0_mps: float = 416.0, sd_mps: float = 3.8, n_shots: int = 10, seed: int = 42) -> str:
+    """Synthesize a native Garmin Xero C1 Pro session CSV export (FPS)."""
+    rng = np.random.default_rng(seed)
+    lines = ["Shot #,Speed (FPS),KE (ft-lbs),Power Factor,Clean Bore,Cold Bore"]
+    for i in range(1, int(n_shots) + 1):
+        v_mps = float(rng.normal(mean_v0_mps, sd_mps))
+        v_fps = v_mps / 0.3048
+        lines.append(f"{i},{v_fps:.1f},58.4,19.1,No,No")
+    return "\n".join(lines) + "\n"
+
+
+def parse_garmin_xero_c1_csv_or_xlsx(payload: bytes | str) -> dict[str, Any]:
+    """Parse Garmin Xero C1 Pro .csv or .xlsx chronograph export (FPS or m/s) into SI."""
+    rows_dicts: list[dict[str, Any]] = []
+    if isinstance(payload, bytes) and payload[:2] == b"PK":
+        import openpyxl
+
+        wb = openpyxl.load_workbook(io.BytesIO(payload), data_only=True)
+        ws = wb.active
+        raw_rows = list(ws.iter_rows(values_only=True))
+        hdr_row_idx = 0
+        for idx, r in enumerate(raw_rows[:12]):
+            if r and any("speed" in str(c).lower() or "velocity" in str(c).lower() for c in r if c is not None):
+                hdr_row_idx = idx
+                break
+        headers = [str(c or f"col_{j}").strip().lower() for j, c in enumerate(raw_rows[hdr_row_idx])]
+        for r in raw_rows[hdr_row_idx + 1 :]:
+            if not r or all(c is None for c in r):
+                continue
+            rows_dicts.append({headers[j]: r[j] for j in range(min(len(headers), len(r)))})
+    else:
+        txt = payload.decode("utf-8", errors="replace") if isinstance(payload, bytes) else str(payload)
+        lines = [ln for ln in txt.splitlines() if ln.strip()]
+        hdr_idx = 0
+        for idx, ln in enumerate(lines[:12]):
+            low = ln.lower()
+            if "speed" in low or "velocity" in low:
+                hdr_idx = idx
+                break
+        reader = csv.DictReader(io.StringIO("\n".join(lines[hdr_idx:])))
+        for row in reader:
+            rows_dicts.append({str(k).strip().lower(): v for k, v in row.items() if k is not None})
+
+    v_mps_list: list[float] = []
+    is_fps = False
+    for row in rows_dicts:
+        for k, val in row.items():
+            if ("speed" in k or "velocity" in k) and val not in (None, ""):
+                v_num = float(str(val).replace(",", ""))
+                if "fps" in k or "ft" in k or v_num > 850.0:
+                    is_fps = True
+                    v_num *= 0.3048
+                v_mps_list.append(v_num)
+                break
+
+    if not v_mps_list:
+        raise ValueError("No velocity readings found in Garmin Xero C1 payload.")
+
+    arr = np.asarray(v_mps_list, dtype=np.float64)
+    mean_v = float(np.mean(arr))
+    sd_v = float(np.std(arr, ddof=1)) if arr.size > 1 else 0.0
+    chrono_lines = ["shot_id,velocity_mps"] + [f"{i + 1},{v:.2f}" for i, v in enumerate(arr)]
+    return {
+        "instrument": "Garmin Xero C1 Pro",
+        "units_detected": "FPS -> m/s" if is_fps else "m/s",
+        "n_shots": int(arr.size),
+        "mean_v0_mps": round(mean_v, 2),
+        "sd_v0_mps": round(sd_v, 2),
+        "es_mps": round(float(np.max(arr) - np.min(arr)), 2),
+        "min_v0_mps": round(float(np.min(arr)), 2),
+        "max_v0_mps": round(float(np.max(arr)), 2),
+        "chronograph_csv": "\n".join(chrono_lines) + "\n",
+        "twin_patch": {"mv_sd_mps": round(sd_v, 2)},
+    }
+
+
+def generate_sample_kestrel_link_csv(temp_c: float = 14.0, rh_pct: float = 65.0, pressure_hpa: float = 1012.0) -> str:
+    """Synthesize a Kestrel LiNK weather log CSV."""
+    return (
+        "Device Name,Kestrel 5700 Elite\n"
+        "FORMATTED DATE_TIME,Temp,Relative Humidity,Station Pressure,Crosswind,Headwind\n"
+        "YYYY-MM-DD hh:mm:ss,°C,%,hPa,m/s,m/s\n"
+        f"2026-11-25 09:00:00,{temp_c:.1f},{rh_pct:.1f},{pressure_hpa:.1f},2.4,1.2\n"
+        f"2026-11-25 09:01:00,{temp_c + 0.3:.1f},{rh_pct - 1.0:.1f},{pressure_hpa + 0.2:.1f},2.8,1.5\n"
+        f"2026-11-25 09:02:00,{temp_c - 0.2:.1f},{rh_pct + 0.5:.1f},{pressure_hpa - 0.1:.1f},2.1,1.0\n"
+    )
+
+
+def parse_kestrel_link_csv(csv_text: str) -> dict[str, Any]:
+    """Parse Kestrel LiNK weather export and compute CIP moist-air density, wind, and sound speed."""
+    lines = [ln.strip() for ln in csv_text.splitlines() if ln.strip()]
+    hdr_idx: int | None = None
+    for i, ln in enumerate(lines[:10]):
+        low = ln.lower()
+        if "temp" in low and ("humidity" in low or "rh" in low or "pressure" in low):
+            hdr_idx = i
+            break
+    if hdr_idx is None:
+        raise ValueError("Unrecognized Kestrel LiNK CSV format (missing Temp / Humidity / Pressure header).")
+
+    headers = [h.strip().lower() for h in next(csv.reader([lines[hdr_idx]]))]
+    data_start = hdr_idx + 1
+    units_row: list[str] = []
+    if data_start < len(lines):
+        cand_units = next(csv.reader([lines[data_start]]))
+        if any(u.strip().lower() in ("°c", "c", "°f", "f", "%", "hpa", "mbar", "inhg", "m/s", "mph") for u in cand_units):
+            units_row = [u.strip().lower() for u in cand_units]
+            data_start += 1
+
+    reader = csv.reader(lines[data_start:])
+    temps_c, rhs, press_hpa, cw_list, hw_list = [], [], [], [], []
+    is_f = any("f" in u for u in units_row)
+    is_inhg = any("inhg" in u for u in units_row)
+    is_mph = any("mph" in u for u in units_row)
+
+    for cols in reader:
+        if not cols:
+            continue
+        rmap = {headers[j]: cols[j].strip() for j in range(min(len(headers), len(cols)))}
+        for k, v in rmap.items():
+            if v == "":
+                continue
+            if "temp" in k and "wet" not in k:
+                t_v = float(v)
+                temps_c.append((t_v - 32.0) * 5.0 / 9.0 if is_f else t_v)
+            elif "humidity" in k or k == "rh" or "rh_pct" in k:
+                rhs.append(float(v))
+            elif "pressure" in k or "baro" in k:
+                p_v = float(v)
+                press_hpa.append(p_v * 33.8639 if is_inhg else p_v)
+            elif "crosswind" in k:
+                w_v = float(v)
+                cw_list.append(w_v * 0.44704 if is_mph else w_v)
+            elif "headwind" in k:
+                w_v = float(v)
+                hw_list.append(w_v * 0.44704 if is_mph else w_v)
+
+    if not temps_c:
+        raise ValueError("No temperature records parsed from Kestrel LiNK CSV.")
+
+    tc = float(np.mean(temps_c))
+    rh = float(np.mean(rhs)) if rhs else 50.0
+    p_hpa = float(np.mean(press_hpa)) if press_hpa else 1013.25
+    t_k = tc + 273.15
+    e_sat = 610.94 * math.exp((17.625 * tc) / (tc + 243.04))
+    p_v = (max(0.0, min(100.0, rh)) / 100.0) * e_sat
+    p_d = max(1000.0, p_hpa * 100.0 - p_v)
+    rho_moist = (p_d / (287.058 * t_k)) + (p_v / (461.495 * t_k))
+    return {
+        "instrument": "Kestrel LiNK Weather",
+        "n_samples": len(temps_c),
+        "ambient_temp_c": round(tc, 1),
+        "relative_humidity_pct": round(rh, 1),
+        "air_pressure_hpa": round(p_hpa, 2),
+        "air_density_kg_m3": round(rho_moist, 4),
+        "speed_of_sound_mps": round(math.sqrt(1.4 * 287.058 * t_k), 1),
+        "mean_crosswind_mps": round(float(np.mean(cw_list)), 2) if cw_list else 0.0,
+        "mean_headwind_mps": round(float(np.mean(hw_list)), 2) if hw_list else 0.0,
+        "twin_patch": {"air_density_kg_m3": round(rho_moist, 4)},
+    }
+
+
+def detect_and_parse_instrument_file(filename: str, raw_bytes: bytes) -> dict[str, Any]:
+    """Auto-detect commercial instrument file format and return normalized parsed metrics & twin_patch."""
+    fname = str(filename or "").lower()
+    if fname.endswith(".xlsx") or raw_bytes[:2] == b"PK":
+        parsed = parse_garmin_xero_c1_csv_or_xlsx(raw_bytes)
+        return {"instrument_type": "garmin_xero_c1", "parsed": parsed, "summary": parsed, "twin_patch": parsed["twin_patch"]}
+
+    txt = raw_bytes.decode("utf-8", errors="replace")
+    low = txt[:1500].lower()
+    if "labradar" in low or ("shot id;" in low and "v0" in low):
+        parsed = parse_labradar_native_csv(txt)
+        return {"instrument_type": "labradar", "parsed": parsed, "summary": parsed, "twin_patch": parsed["twin_patch"]}
+    if "kestrel" in low or ("relative humidity" in low and "station pressure" in low):
+        parsed = parse_kestrel_link_csv(txt)
+        return {"instrument_type": "kestrel_link", "parsed": parsed, "summary": parsed, "twin_patch": parsed["twin_patch"]}
+    if ("speed (fps)" in low or "power factor" in low or "shot #" in low) and "range" not in low:
+        parsed = parse_garmin_xero_c1_csv_or_xlsx(txt)
+        return {"instrument_type": "garmin_xero_c1", "parsed": parsed, "summary": parsed, "twin_patch": parsed["twin_patch"]}
+    if ("timestamp" in low and "x" in low and "y" in low and "z" in low) or ("timeus" in low and "lat" in low):
+        from ammo_mc.cuas_track_replay import parse_ardupilot_px4_flight_log
+
+        parsed = parse_ardupilot_px4_flight_log(txt)
+        return {"instrument_type": "px4_ardupilot", "parsed": parsed, "summary": parsed, "twin_patch": {}}
+    if "arrival_time_s" in low:
+        parsed = parse_weather_and_shotstring_csv(txt)
+        return {"instrument_type": "shotstring_met", "parsed": parsed, "summary": parsed, "twin_patch": parsed.get("twin_patch", {})}
+
+    parsed = calibrate_doppler_radar_drag(txt)
+    return {"instrument_type": "doppler_radar_csv", "parsed": parsed, "summary": parsed, "twin_patch": parsed.get("twin_patch", {})}
+
+
+def evaluate_sprt_live_sequence(
+    outcomes: list[int],
+    sprt_p0: float = 0.65,
+    sprt_p1: float = 0.85,
+    alpha: float = 0.05,
+    power: float = 0.80,
+    range_m: float = 45.0,
+    ammunition_preset: str = "12G_NO4_BUCK_C_UAS",
+    choke: str = "Modified",
+    barrels_fired: int = 5,
+) -> dict[str, Any]:
+    """Evaluate a live shot-by-shot kill/miss sequence (1/0) against Wald SPRT early-stopping thresholds."""
+    p0 = max(0.05, min(0.90, float(sprt_p0)))
+    p1 = max(p0 + 0.05, min(0.98, float(sprt_p1)))
+    alpha_s = max(0.01, min(0.20, float(alpha)))
+    beta_s = 1.0 - max(0.55, min(0.98, float(power)))
+
+    a_log = math.log((1.0 - beta_s) / alpha_s)
+    b_log = math.log(beta_s / (1.0 - alpha_s))
+    log_odds = math.log((p1 * (1.0 - p0)) / (p0 * (1.0 - p1)))
+    log_q = math.log((1.0 - p1) / (1.0 - p0))
+
+    cum_kills = 0
+    decision = "CONTINUE"
+    stopping_round: int | None = None
+    trajectory: list[dict[str, Any]] = []
+    livefire_rows: list[dict[str, Any]] = []
+
+    for idx, raw_o in enumerate(outcomes, start=1):
+        kill = 1 if int(raw_o) > 0 else 0
+        cum_kills += kill
+        llr = cum_kills * math.log(p1 / p0) + (idx - cum_kills) * math.log((1.0 - p1) / (1.0 - p0))
+        acc_k = (a_log - idx * log_q) / log_odds
+        rej_k = (b_log - idx * log_q) / log_odds
+        step_state = "CONTINUE"
+        if llr >= a_log:
+            step_state = "ACCEPT_H1"
+        elif llr <= b_log:
+            step_state = "REJECT_H0"
+        if decision == "CONTINUE" and step_state != "CONTINUE":
+            decision = step_state
+            stopping_round = idx
+        trajectory.append({
+            "n": idx,
+            "outcome": kill,
+            "cum_kills": cum_kills,
+            "llr": round(llr, 3),
+            "accept_min_kills": round(min(float(idx) + 0.5, acc_k), 2),
+            "reject_max_kills": round(max(-0.5, rej_k), 2),
+            "state": step_state,
+        })
+        livefire_rows.append({
+            "range_m": float(range_m),
+            "ammunition_preset": str(ammunition_preset),
+            "choke": str(choke),
+            "barrels_fired": int(barrels_fired),
+            "drone_killed": kill,
+        })
+
+    n_rounds = len(outcomes)
+    obs_pk = (cum_kills / n_rounds) if n_rounds > 0 else 0.0
+    ci_lo, ci_hi = compute_clopper_pearson_ci(cum_kills, n_rounds, alpha=alpha_s) if n_rounds > 0 else (0.0, 1.0)
+    return {
+        "n_rounds": n_rounds,
+        "n_kills": cum_kills,
+        "observed_pk": round(obs_pk, 3),
+        "ci95_low": ci_lo,
+        "ci95_high": ci_hi,
+        "decision": decision,
+        "stopping_round": stopping_round,
+        "a_bound_llr": round(a_log, 3),
+        "b_bound_llr": round(b_log, 3),
+        "trajectory": trajectory,
+        "livefire_rows": livefire_rows,
+    }

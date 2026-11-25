@@ -587,6 +587,24 @@
       "formula_ids": ["TB-01", "TB-03", "EB-04", "EB-16", "DA-01", "TV-04", "TP-01", "MC-02"],
       "data_tables": ["validation_cases.json", "atmosphere.json", "explosives.json", "kb_coefficients.json"],
       "assumptions_and_limits": "Self-contained numerical regression tolerances verify implementation fidelity against closed-form reference physics and standards."
+    },
+    {
+      "entry_id": "cuas-scientific-vv",
+      "workbench": "🛸 C-UAS & Multi-Barrel",
+      "workbench_slug": "cuas",
+      "module_name": "C-UAS Scientific V&V, Digital Twin Calibration & High-Fidelity Terminal Physics",
+      "code_files": [
+        "src/ammo_mc/cuas_scientific_vv.py",
+        "src/ammo_mc/cuas_calibration_twin.py",
+        "src/ammo_mc/small_arms_pkg/geometry.py",
+        "src/ammo_mc/small_arms_pkg/arrays.py",
+        "src/ammo_mc/ui/cuas_pkg/stage4_calibration.py"
+      ],
+      "description": "ASME V&V 20 blind holdout validation, Ferson-Oberkampf area validation metric, Latin Hypercube epistemic x aleatory P-boxes, Recht-Ipson oblique V50(theta) ricochet, 3D STL CAD mesh ray-casting, native range-instrument parsers, 4-fiducial photo homography, and live Wald SPRT with Clopper-Pearson intervals.",
+      "source_ids": ["S81", "S82", "S83", "S84", "S85", "S86", "S87"],
+      "formula_ids": ["EB-04", "TV-04", "DA-01", "MC-02"],
+      "data_tables": ["cuas_shotgun_presets.json", "cuas_drone_targets.json"],
+      "assumptions_and_limits": "Single-stage pellet ballistic limits assume isotropic spherical or flechette impactor geometry with calibrated cosine obliquity scaling."
     }
   ],
   "data_tables": [

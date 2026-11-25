@@ -18,8 +18,11 @@ import numpy as np
 
 from ammo_mc.aero_sphere import sphere_drag_compressible, sphere_drag_compressible_array
 from ammo_mc.small_arms import (
+    PELLET_MATERIAL_DENSITIES_G_CM3,
     compute_balanced_pair_fire_times,
+    compute_component_v50_perforation,
     compute_drone_projected_geometry,
+    compute_rotor_blade_strike_probability,
     configure_array_pointing_vectors,
     evaluate_drone_impact,
     generate_multishotgun_array_layout,
@@ -566,9 +569,13 @@ def _estimate_burst_pk_analytics(
     aspect_mode: str = "head_on_frontal",
     aspect_geom: dict[str, Any] | None = None,
     calibration_profile: dict[str, Any] | None = None,
+    physics_fidelity: dict[str, Any] | None = None,
 ) -> float:
     """Analytical Poisson + lethal energy single-burst P_kill estimate at slant_range_m."""
     cp = dict(calibration_profile or {})
+    pf = dict(physics_fidelity) if isinstance(physics_fidelity, dict) else (
+        dict(cp["_physics_fidelity"]) if isinstance(cp.get("_physics_fidelity"), dict) else None
+    )
     spread_factor = max(0.35, float(cp.get("spread_factor", 1.0) or 1.0))
     spread_exp = max(0.80, min(1.80, float(cp.get("spread_exponent", 1.15) or 1.15)))
     mv_scale = max(0.50, min(1.50, float(cp.get("mv_scale", 1.0) or 1.0)))
@@ -582,10 +589,12 @@ def _estimate_burst_pk_analytics(
     sigma_ref = 0.381 / math.sqrt(-2.0 * math.log(1.0 - p_bench))
     theta_choke = sigma_ref / 36.58
     R = max(slant_range_m, 5.0)
-    sigma_r = (0.01852 / 4.0 + theta_choke * R * ((R / 36.58) ** (spread_exp - 1.0))) * spread_factor
+    cup_sep_m = float((pf or {}).get("shot_cup_separation_m", cp.get("shot_cup_separation_m", 0.0)) or 0.0)
+    R_spread = max(0.5, R - min(cup_sep_m, 0.65 * R)) if cup_sep_m > 0.0 else R
+    sigma_r = (0.01852 / 4.0 + theta_choke * R_spread * ((R_spread / 36.58) ** (spread_exp - 1.0))) * spread_factor
 
     # Pellet striking energy at range R
-    rho_air = 1.225
+    rho_air = float(cp.get("air_density_kg_m3", 1.225) or 1.225) if pf else 1.225
     d_m = pellet_diameter_mm / 1000.0
     m_kg = pellet_mass_g / 1000.0
     area_m2 = math.pi * 0.25 * (d_m ** 2)
@@ -598,17 +607,35 @@ def _estimate_burst_pk_analytics(
         return 0.0
 
     # Presented vulnerable area
-    if aspect_geom is not None:
-        area_vuln = float(aspect_geom.get("presented_area_m2", 0.02))
-    elif aspect_mode:
-        geom = compute_drone_projected_geometry(drone_spec, aspect_mode=aspect_mode)
-        area_vuln = float(geom.get("presented_area_m2", 0.02))
+    geom_eff = aspect_geom
+    if geom_eff is None and aspect_mode:
+        geom_eff = compute_drone_projected_geometry(drone_spec, aspect_mode=aspect_mode)
+
+    if geom_eff is not None:
+        area_vuln = float(geom_eff.get("presented_area_m2", 0.02))
     else:
         rotors = drone_spec.get("rotors", [])
         area_rotors = sum(math.pi * (float(r["radius_m"]) ** 2) for r in rotors)
         area_core = float(drone_spec.get("fuselage_w_m", 0.10)) * float(drone_spec.get("fuselage_h_m", 0.10))
         area_vuln = min(area_rotors + area_core, math.pi * (float(drone_spec.get("span_m", 0.4)) ** 2) * 0.65)
     area_vuln *= avuln_scale
+
+    if pf and bool(pf.get("use_rotor_solidity", False)):
+        rot_list = drone_spec.get("rotors", [])
+        mean_r = float(np.mean([float(r.get("radius_m", 0.12)) for r in rot_list])) if rot_list else 0.12
+        p_blade = compute_rotor_blade_strike_probability(
+            radial_frac=0.55,
+            n_blades=int(drone_spec.get("rotor_blade_count", 3)),
+            rotor_radius_m=mean_r,
+            rpm=float(drone_spec.get("rotor_rpm", 11500.0)),
+            pellet_diameter_m=d_m,
+            pellet_velocity_mps=v_imp,
+        )
+        if geom_eff is not None and float(geom_eff.get("presented_area_cm2", 0.0)) > 1e-3:
+            rotor_share = min(0.85, float(geom_eff.get("rotors_area_cm2", 0.0)) * 0.75 / float(geom_eff["presented_area_cm2"]))
+        else:
+            rotor_share = 0.55
+        area_vuln *= (1.0 - rotor_share) + rotor_share * max(0.28, p_blade)
 
     # Gaussian core hit probability inside vulnerable disk (nominal 1.2 mrad + empirical biases/jitters)
     r_eq_sq = area_vuln / math.pi
@@ -622,10 +649,31 @@ def _estimate_burst_pk_analytics(
     sigma_aim = (aim_err_mrad / 1000.0) * R
     sigma_eff_sq = (sigma_r ** 2) + (sigma_aim ** 2)
     p_pellet = 1.0 - math.exp(-r_eq_sq / max(2.0 * sigma_eff_sq, 1e-6))
-    # Transition smoothly between rotor-only lethality (~0.55) and full core lethality (1.0)
-    e_core = float(drone_spec.get("lethal_energy_core_j", 20.0)) * ecrit_scale
-    energy_factor = 0.55 + 0.45 * min(1.0, max(0.0, ke_j - e_rotor) / max(e_core - e_rotor, 1.0))
-    lam_lethal = barrels_fired * pellets_per_shot * p_pellet * 0.78 * energy_factor
+
+    if pf and bool(pf.get("use_v50_ballistic_limit", False)):
+        rho_pel = float(PELLET_MATERIAL_DENSITIES_G_CM3.get(str(pf.get("pellet_material", "Hardened Lead")), 11.3))
+        obliq_deg = min(45.0, abs(float((geom_eff or {}).get("pitch_deg", 15.0))))
+        v50_res = compute_component_v50_perforation(
+            "fuselage_core",
+            pellet_velocity_mps=v_imp,
+            pellet_mass_kg=m_kg,
+            pellet_diameter_m=d_m,
+            pellet_density_g_cm3=rho_pel,
+            obliquity_deg=obliq_deg,
+            enable_ricochet=bool(pf.get("use_oblique_ricochet", False)),
+        )
+        energy_factor = 0.30 + 0.70 * float(v50_res["p_perforation"])
+    else:
+        # Transition smoothly between rotor-only lethality (~0.55) and full core lethality (1.0)
+        e_core = float(drone_spec.get("lethal_energy_core_j", 20.0)) * ecrit_scale
+        energy_factor = 0.55 + 0.45 * min(1.0, max(0.0, ke_j - e_rotor) / max(e_core - e_rotor, 1.0))
+
+    flyer_frac = float(pf.get("flyer_fraction", 0.12)) if pf else 0.0
+    pat_dist = str(pf.get("pattern_distribution", "gaussian")) if pf else "gaussian"
+    flyer_mult = (1.0 - 0.55 * flyer_frac) if (pf and pat_dist != "gaussian") else 1.0
+    shield_mult = 0.90 if (pf and bool(pf.get("enable_ray_shielding", False))) else 1.0
+
+    lam_lethal = barrels_fired * pellets_per_shot * p_pellet * 0.78 * energy_factor * flyer_mult * shield_mult
 
     n_crit = int(drone_spec.get("critical_hits_for_kill", 3))
     # Poisson survival sum P(X >= n_crit)

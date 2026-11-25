@@ -256,6 +256,7 @@ def simulate_recorded_track_engagement_mc(
     breach_radius_m: float = 12.0,
     n_mc_trials: int = 40,
     seed: int = 42,
+    physics_fidelity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Simulate a configured/calibrated C-UAS shotgun turret engaging recorded drone flight tracks."""
     parsed = (
@@ -265,6 +266,9 @@ def simulate_recorded_track_engagement_mc(
     )
     blue_n = normalize_blue_config(turret_config or {})
     cal = dict(calibration_profile or {})
+    pf = dict(physics_fidelity) if isinstance(physics_fidelity, dict) else (
+        dict(cal["_physics_fidelity"]) if isinstance(cal.get("_physics_fidelity"), dict) else None
+    )
 
     spread_factor = float(cal.get("spread_factor", 1.0))
     aim_bias_mrad = float(cal.get("aim_bias_mrad", 0.0))
@@ -392,7 +396,9 @@ def simulate_recorded_track_engagement_mc(
         bias_m = (aim_bias_mrad / 1000.0) * R
         e_lead_tot = e_maneuver + servo_lag_m + ray_draw * sigma_meas + 0.35 * bias_m
 
-        sigma_r = (0.00463 + ring_p["theta_choke"] * R * ((R / 36.58) ** 0.15)) * spread_factor
+        cup_sep_m = float((pf or {}).get("shot_cup_separation_m", cal.get("shot_cup_separation_m", 0.0)) or 0.0)
+        R_spr = max(0.5, R - min(cup_sep_m, 0.65 * R)) if cup_sep_m > 0.0 else R
+        sigma_r = (0.00463 + ring_p["theta_choke"] * R_spr * ((R_spr / 36.58) ** 0.15)) * spread_factor
         if blue_n["pointing_mode"] == "divergent_curtain":
             sigma_eff = math.hypot(sigma_r, 0.58 * (float(blue_n["splay_angle_mrad"]) / 1000.0) * R)
         elif blue_n["pointing_mode"] == "staggered_tiling":
@@ -401,12 +407,26 @@ def simulate_recorded_track_engagement_mc(
             sigma_eff = sigma_r
 
         sigma_eff_sq = max(sigma_eff ** 2, 1e-6)
-        r_eq_sq = meta["asp_areas"].get(st["aspect"], 0.02) / math.pi
+        r_eq_sq = (meta["asp_areas"].get(st["aspect"], 0.02) / math.pi) * (0.68 if (pf and bool(pf.get("use_rotor_solidity", False))) else 1.0)
         p_pel_c = 1.0 - math.exp(-r_eq_sq / (2.0 * sigma_eff_sq))
         off_ax = math.exp(-(e_lead_tot ** 2) / (2.0 * sigma_eff_sq))
         p_pel = p_pel_c * off_ax * (0.45 + 0.55 * (sigma_r / max(sigma_eff, sigma_r)))
-        energy_fac = 0.55 + 0.45 * min(1.0, max(0.0, ke_j - meta["e_rotor"]) / max(meta["e_core"] - meta["e_rotor"], 1.0))
-        lam = min(60.0, n_bbls * ring_p["pellets"] * p_pel * 0.80 * energy_fac)
+        if pf and bool(pf.get("use_v50_ballistic_limit", False)):
+            from ammo_mc.small_arms import compute_component_v50_perforation
+
+            v50_res = compute_component_v50_perforation(
+                "fuselage_core",
+                pellet_velocity_mps=v_imp,
+                pellet_mass_kg=ring_p["m_kg"],
+                pellet_diameter_m=math.sqrt((ring_p["m_kg"] / 11300.0) * 6.0 / math.pi),
+                enable_ricochet=bool(pf.get("use_oblique_ricochet", False)),
+            )
+            energy_fac = 0.30 + 0.70 * float(v50_res["p_perforation"])
+        else:
+            energy_fac = 0.55 + 0.45 * min(1.0, max(0.0, ke_j - meta["e_rotor"]) / max(meta["e_core"] - meta["e_rotor"], 1.0))
+        fly_m = (1.0 - 0.55 * float(pf.get("flyer_fraction", 0.12))) if (pf and str(pf.get("pattern_distribution", "gaussian")) != "gaussian") else 1.0
+        shld_m = 0.90 if (pf and bool(pf.get("enable_ray_shielding", False))) else 1.0
+        lam = min(60.0, n_bbls * ring_p["pellets"] * p_pel * 0.80 * energy_fac * fly_m * shld_m)
         p_surv = 0.0
         term = math.exp(-lam)
         for k in range(meta["n_crit"]):
@@ -591,6 +611,7 @@ def simulate_recorded_track_engagement_mc(
             "peak_lat_g": round(max(r["peak_lat_g"] for r in track_rows), 2),
             "peak_speed_mps": round(max(r["peak_speed_mps"] for r in track_rows), 1),
             "calibrated_twin_active": bool(calibration_profile),
+            "physics_fidelity_mode": "high_fidelity" if pf else "standard",
         },
         "tracks": track_rows,
         "track_paths": {
@@ -604,4 +625,82 @@ def simulate_recorded_track_engagement_mc(
         },
         "time_series": time_series,
         "sample_events": sample_events,
+    }
+
+
+def generate_sample_px4_flight_csv(scenario: str = "evasive_fpv_dive", seed: int = 42) -> str:
+    """Synthesize a PX4 ULog-style NED CSV flight log (`timestamp,x,y,z`) with microsecond timestamps."""
+    base_csv = generate_sample_drone_track_csv(scenario=scenario, seed=seed)
+    reader = csv.DictReader(io.StringIO(base_csv))
+    lines = ["timestamp,x,y,z,drone_id"]
+    for row in reader:
+        t_s = float(row.get("t_s") or row.get("time_s") or 0.0)
+        t_us = int(round(t_s * 1_000_000))
+        e_m = float(row.get("x_m") or row.get("east_m") or 0.0)
+        n_m = float(row.get("y_m") or row.get("north_m") or 0.0)
+        u_m = float(row.get("z_m") or row.get("up_m") or 0.0)
+        d_m = -u_m
+        lines.append(f"{t_us},{n_m:.3f},{e_m:.3f},{d_m:.3f},{row.get('track_id', 'PX4-01')}")
+    return "\n".join(lines) + "\n"
+
+
+def parse_ardupilot_px4_flight_log(csv_text: str) -> dict[str, Any]:
+    """Parse PX4 ULog CSV (`timestamp,x,y,z` NED) or ArduPilot POS/GPS CSV into ENU track CSV."""
+    reader = csv.DictReader(io.StringIO(csv_text.strip()))
+    if not reader.fieldnames:
+        raise ValueError("Flight log CSV has no header row.")
+    flds = [str(f).strip().lower() for f in reader.fieldnames]
+    rows = [{str(k).strip().lower(): v for k, v in r.items() if k is not None} for r in reader]
+    if not rows:
+        raise ValueError("Flight log CSV has no data rows.")
+
+    out_lines = ["track_id,t_s,x_m,y_m,z_m,drone_model"]
+    t0_s: float | None = None
+    lat0: float | None = None
+    lon0: float | None = None
+    fmt_tag = "px4_ned"
+
+    for row in rows:
+        if "timestamp" in flds and "x" in flds and "y" in flds and "z" in flds:
+            fmt_tag = "px4_ulog_ned"
+            t_raw = float(row["timestamp"])
+            t_s = t_raw / 1_000_000.0 if t_raw > 1e4 else t_raw
+            if t0_s is None:
+                t0_s = t_s
+            tid = str(row.get("drone_id", row.get("track_id", "PX4-01")))
+            north_m = float(row["x"])
+            east_m = float(row["y"])
+            up_m = -float(row["z"])
+            out_lines.append(f"{tid},{t_s - t0_s:.3f},{east_m:.3f},{north_m:.3f},{up_m:.3f},fpv_quad_small")
+        elif ("timeus" in flds or "time_ms" in flds) and "lat" in flds and ("lng" in flds or "lon" in flds):
+            fmt_tag = "ardupilot_gps"
+            t_raw = float(row.get("timeus") or row.get("time_ms") or 0.0)
+            t_s = t_raw / 1_000_000.0 if "timeus" in flds else t_raw / 1000.0
+            if t0_s is None:
+                t0_s = t_s
+            lat = float(row["lat"])
+            lon = float(row.get("lng", row.get("lon", 0.0)))
+            alt = float(row.get("alt", row.get("relalt", 15.0)))
+            if lat > 1e5:
+                lat /= 1e7
+            if abs(lon) > 1e5:
+                lon /= 1e7
+            if lat0 is None:
+                lat0, lon0 = lat, lon
+            north_m = (lat - lat0) * 111132.0
+            east_m = (lon - float(lon0)) * 111320.0 * math.cos(math.radians(lat0))
+            out_lines.append(f"APM-01,{t_s - t0_s:.3f},{east_m:.3f},{north_m:.3f},{alt:.3f},fpv_quad_small")
+        else:
+            raise ValueError("Unsupported PX4/ArduPilot flight log schema (expected PX4 timestamp/x/y/z or ArduPilot TimeUS/Lat/Lng/Alt).")
+
+    track_csv = "\n".join(out_lines) + "\n"
+    n_pts = len(out_lines) - 1
+    parsed_enu = parse_drone_track_csv(track_csv)
+    return {
+        "format": fmt_tag,
+        "n_points": n_pts,
+        "n_tracks": int(parsed_enu["n_tracks"]),
+        "duration_s": round(float(parsed_enu["t_max_s"]) - float(parsed_enu["t_min_s"]), 2),
+        "track_csv": track_csv,
+        "enu_csv": track_csv,
     }

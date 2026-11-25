@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import struct
 from typing import Any
 import numpy as np
 
@@ -64,19 +65,32 @@ def point_in_convex_polygon(y: float, z: float, poly_verts: np.ndarray) -> bool:
     return all(s == signs[0] for s in signs)
 
 
-def compute_drone_projected_geometry(
-    drone_spec: dict[str, Any],
+def point_in_convex_polygon_batch(y_arr: np.ndarray, z_arr: np.ndarray, poly_verts: np.ndarray) -> np.ndarray:
+    """Vectorized test whether 1D arrays (y_arr, z_arr) lie inside a 2D convex polygon."""
+    y = np.asarray(y_arr, dtype=np.float64)
+    z = np.asarray(z_arr, dtype=np.float64)
+    pv = np.asarray(poly_verts, dtype=np.float64)
+    if pv.ndim != 2 or pv.shape[0] < 3 or y.size == 0:
+        return np.zeros(y.shape, dtype=bool)
+    p2 = np.roll(pv, -1, axis=0)
+    dx = p2[:, 0] - pv[:, 0]
+    dz = p2[:, 1] - pv[:, 1]
+    cross = dx[None, :] * (z[:, None] - pv[None, :, 1]) - dz[None, :] * (y[:, None] - pv[None, :, 0])
+    pos = cross > 1e-9
+    neg = cross < -1e-9
+    any_nz = np.any(pos | neg, axis=1)
+    all_pos = np.all(~neg, axis=1)
+    all_neg = np.all(~pos, axis=1)
+    return any_nz & (all_pos | all_neg)
+
+
+def _euler_los_rotation_matrix(
     aspect_mode: str = "head_on_frontal",
     drone_pitch_deg: float = -15.0,
     drone_yaw_deg: float = 0.0,
     drone_roll_deg: float = 0.0,
-) -> dict[str, Any]:
-    """Compute the 2D projected cross-section silhouette and component boundaries.
-
-    Transforms 3D drone components (fuselage, battery, rotors, motor pods, arms,
-    wings) into the 2D line-of-fire target plane (Y = horizontal, Z = vertical)
-    under arbitrary 3-axis Euler angles (pitch, yaw, roll).
-    """
+) -> tuple[np.ndarray, dict[str, Any], float, float, float]:
+    """Build 3x3 right-handed rotation matrix from body coordinates to LOS (X=range, Y=right, Z=up)."""
     preset = DRONE_ASPECT_PRESETS.get(aspect_mode, DRONE_ASPECT_PRESETS["head_on_frontal"])
     if aspect_mode != "custom":
         yaw_deg = float(preset["yaw_deg"])
@@ -91,15 +105,13 @@ def compute_drone_projected_geometry(
     theta_r = math.radians(pitch_deg)
     phi_r = math.radians(roll_deg)
 
-    # 1. Forward unit vector (nose)
-    ux_fwd = -math.cos(psi_r) * math.cos(theta_r)
-    uy_fwd = math.sin(psi_r) * math.cos(theta_r)
-    uz_fwd = math.sin(theta_r)
-    u_fwd = np.array([ux_fwd, uy_fwd, uz_fwd], dtype=float)
+    u_fwd = np.array(
+        [-math.cos(psi_r) * math.cos(theta_r), math.sin(psi_r) * math.cos(theta_r), math.sin(theta_r)],
+        dtype=float,
+    )
     norm_f = np.linalg.norm(u_fwd)
     u_fwd = u_fwd / norm_f if norm_f > 1e-9 else np.array([-1.0, 0.0, 0.0])
 
-    # 2. Lateral unit vector (starboard, right-handed wrt u_fwd facing -X at yaw=0)
     if abs(abs(theta_r) - math.pi / 2) < 1e-4:
         u_r0 = np.array([0.0, -1.0, 0.0], dtype=float)
     else:
@@ -107,7 +119,6 @@ def compute_drone_projected_geometry(
         norm_r0 = np.linalg.norm(u_r0)
         u_r0 = u_r0 / norm_r0 if norm_r0 > 1e-9 else np.array([0.0, -1.0, 0.0])
 
-    # Rodrigues roll around u_fwd
     u_right = (
         u_r0 * math.cos(phi_r)
         + np.cross(u_fwd, u_r0) * math.sin(phi_r)
@@ -116,13 +127,32 @@ def compute_drone_projected_geometry(
     norm_r = np.linalg.norm(u_right)
     u_right = u_right / norm_r if norm_r > 1e-9 else np.array([0.0, -1.0, 0.0])
 
-    # 3. Upward unit vector (right-handed: u_up = u_fwd x u_right, det(M) == +1.0 everywhere)
     u_up = np.cross(u_fwd, u_right)
     norm_up = np.linalg.norm(u_up)
     u_up = u_up / norm_up if norm_up > 1e-9 else np.array([0.0, 0.0, 1.0])
 
-    # 3x3 rotation matrix: p_los = M @ [x_b, y_b, z_b]
-    M = np.column_stack([u_fwd, u_right, u_up])
+    return np.column_stack([u_fwd, u_right, u_up]), preset, yaw_deg, pitch_deg, roll_deg
+
+
+def compute_drone_projected_geometry(
+    drone_spec: dict[str, Any],
+    aspect_mode: str = "head_on_frontal",
+    drone_pitch_deg: float = -15.0,
+    drone_yaw_deg: float = 0.0,
+    drone_roll_deg: float = 0.0,
+) -> dict[str, Any]:
+    """Compute the 2D projected cross-section silhouette and component boundaries.
+
+    Transforms 3D drone components (fuselage, battery, rotors, motor pods, arms,
+    wings) into the 2D line-of-fire target plane (Y = horizontal, Z = vertical)
+    under arbitrary 3-axis Euler angles (pitch, yaw, roll).
+    """
+    M, preset, yaw_deg, pitch_deg, roll_deg = _euler_los_rotation_matrix(
+        aspect_mode=aspect_mode,
+        drone_pitch_deg=drone_pitch_deg,
+        drone_yaw_deg=drone_yaw_deg,
+        drone_roll_deg=drone_roll_deg,
+    )
 
     # Fuselage 3D Box
     l_f = float(drone_spec.get("fuselage_l_m", drone_spec.get("span_m", 0.4) * 0.55))
@@ -453,8 +483,11 @@ def compute_component_v50_perforation(
     pellet_diameter_m: float,
     pellet_density_g_cm3: float = 11.3,
     obliquity_deg: float = 0.0,
+    ricochet_angle_deg: float = 68.0,
+    obliquity_exponent: float = 0.85,
+    enable_ricochet: bool = True,
 ) -> dict[str, Any]:
-    """Evaluate sectional-density & obliquity-dependent V50 perforation and Recht-Ipson residual speed."""
+    """Evaluate sectional-density & obliquity-dependent V50 perforation, ricochet, and Recht-Ipson residual speed."""
     ck = str(component)
     if ck.startswith("motor_"):
         prof = _COMPONENT_ARMOR_PROFILES["motor"]
@@ -477,23 +510,32 @@ def compute_component_v50_perforation(
     elif 7.4 <= rho <= 8.4:
         mat_hardness_factor *= 0.94
 
-    theta_rad = math.radians(max(0.0, min(70.0, abs(float(obliquity_deg)))))
-    obliq_factor = (1.0 / max(math.cos(theta_rad), 0.34)) ** 0.75
+    abs_theta = abs(float(obliquity_deg))
+    theta_rad = math.radians(max(0.0, min(70.0, abs_theta)))
+    obliq_factor = (1.0 / max(math.cos(theta_rad), 0.34)) ** float(obliquity_exponent)
 
     v50 = float(prof["ref_v50_mps"]) * (sd_ratio ** -0.45) * mat_hardness_factor * obliq_factor
     v_cur = max(0.0, float(pellet_velocity_mps))
-    slope = max(0.12 * v50, 8.0)
-    z_log = max(-40.0, min(40.0, (v_cur - v50) / slope))
-    p_perf = 1.0 / (1.0 + math.exp(-z_log))
+    is_ricochet = bool(enable_ricochet and abs_theta >= float(ricochet_angle_deg))
+    if is_ricochet:
+        p_perf = 0.0
+        v_res = 0.0
+    else:
+        slope = max(0.12 * v50, 8.0)
+        z_log = max(-40.0, min(40.0, (v_cur - v50) / slope))
+        p_perf = 1.0 / (1.0 + math.exp(-z_log))
 
-    m_plug = float(prof["plug_areal_kg_m2"]) * area_p * (1.0 / max(math.cos(theta_rad), 0.34))
-    a_r = m_kg / max(m_kg + m_plug, 1e-6)
-    v_res = a_r * math.sqrt(max(0.0, v_cur ** 2 - v50 ** 2)) if v_cur > v50 else 0.0
+        m_plug = float(prof["plug_areal_kg_m2"]) * area_p * (1.0 / max(math.cos(theta_rad), 0.34))
+        a_r = m_kg / max(m_kg + m_plug, 1e-6)
+        v_res = a_r * math.sqrt(max(0.0, v_cur ** 2 - v50 ** 2)) if v_cur > v50 else 0.0
+
     return {
         "v50_mps": round(v50, 2),
         "p_perforation": float(p_perf),
         "residual_velocity_mps": float(v_res),
         "sectional_density_kg_m2": round(sd_kg_m2, 2),
+        "ricochet": is_ricochet,
+        "obliquity_deg": round(abs_theta, 2),
     }
 
 
@@ -511,6 +553,7 @@ def evaluate_drone_impact(
     use_rotor_solidity: bool = False,
     use_v50_ballistic_limit: bool = False,
     enable_ray_shielding: bool = False,
+    use_oblique_ricochet: bool = False,
     rng: Any | None = None,
 ) -> dict[str, Any]:
     """Evaluate whether an impact point (y, z) hits a drone component and whether it is lethal.
@@ -632,6 +675,7 @@ def evaluate_drone_impact(
             v_cur = float(pellet_velocity_mps) if (pellet_velocity_mps is not None and pellet_velocity_mps > 0) else math.sqrt(2.0 * max(striking_energy_j, 0.0) / m_eff)
             ke_cur = 0.5 * m_eff * (v_cur ** 2)
             blade_passed_any = False
+            ricochet_any = False
             n_blades_spec = int(drone_spec.get("rotor_blade_count", 3))
             rpm_spec = float(drone_spec.get("rotor_rpm", 11500.0))
 
@@ -664,8 +708,11 @@ def evaluate_drone_impact(
                         pellet_diameter_m=d_eff,
                         pellet_density_g_cm3=pellet_density_g_cm3,
                         obliquity_deg=float(cand.get("obliquity_deg", 0.0)),
+                        enable_ricochet=use_oblique_ricochet,
                     )
                     last_v50 = float(v50_info["v50_mps"])
+                    if v50_info.get("ricochet"):
+                        ricochet_any = True
                     u_perf = float(rng.random()) if rng is not None else 0.5
                     is_perf = bool((u_perf < float(v50_info["p_perforation"])) and (ke_cur >= 0.45 * float(cand["e_req"])))
                     is_lethal = is_perf
@@ -681,6 +728,7 @@ def evaluate_drone_impact(
                     "striking_energy_j": ke_cur,
                     "v50_mps": last_v50,
                     "blade_pass_through": blade_passed_any,
+                    "ricochet": ricochet_any,
                 }
                 if first_hit is None:
                     first_hit = hit_rec
@@ -715,6 +763,7 @@ def evaluate_drone_impact(
                 "striking_energy_j": striking_energy_j,
                 "v50_mps": last_v50,
                 "blade_pass_through": blade_passed_any,
+                "ricochet": ricochet_any,
             }
 
     if aspect_geometry is not None:
@@ -904,6 +953,560 @@ def evaluate_drone_impact(
         "is_lethal": False,
         "critical_system": False,
         "striking_energy_j": striking_energy_j,
+    }
+
+
+def _geometry_bounding_box(drone_spec: dict[str, Any], aspect_geometry: dict[str, Any] | None) -> tuple[float, float, float, float]:
+    """Compute tight 2D bounding box (min_y, max_y, min_z, max_z) covering all drone components."""
+    if aspect_geometry is None:
+        span_m = max(float(drone_spec.get("span_m", 0.50)), float(drone_spec.get("wingspan_m", 0.0)), 0.35)
+        half = 0.65 * span_m
+        return -half, half, -half, half
+
+    ys: list[float] = []
+    zs: list[float] = []
+    for key in ("fuselage_polygon", "battery_polygon", "warhead_polygon"):
+        poly = aspect_geometry.get(key)
+        if poly and len(poly) >= 1:
+            arr = np.asarray(poly, dtype=np.float64)
+            ys.extend([float(np.min(arr[:, 0])), float(np.max(arr[:, 0]))])
+            zs.extend([float(np.min(arr[:, 1])), float(np.max(arr[:, 1]))])
+    for w_poly in aspect_geometry.get("wings", []):
+        if w_poly and len(w_poly) >= 1:
+            arr = np.asarray(w_poly, dtype=np.float64)
+            ys.extend([float(np.min(arr[:, 0])), float(np.max(arr[:, 0]))])
+            zs.extend([float(np.min(arr[:, 1])), float(np.max(arr[:, 1]))])
+    for m in aspect_geometry.get("motors", []):
+        my, mz = float(m["y_m"]), float(m["z_m"])
+        hw, hh = 0.5 * float(m["w_m"]), 0.5 * float(m["h_m"])
+        ys.extend([my - hw, my + hw])
+        zs.extend([mz - hh, mz + hh])
+    for r in aspect_geometry.get("rotors", []):
+        ry, rz = float(r["y_m"]), float(r["z_m"])
+        rmax = max(float(r.get("semi_major_m", 0.1)), float(r.get("semi_minor_m", 0.1)))
+        ys.extend([ry - rmax, ry + rmax])
+        zs.extend([rz - rmax, rz + rmax])
+    for arm in aspect_geometry.get("arms", []):
+        p1, p2 = arm.get("p1", [0.0, 0.0]), arm.get("p2", [0.0, 0.0])
+        ar = 0.5 * float(arm.get("diameter_m", 0.02))
+        ys.extend([float(p1[0]) - ar, float(p1[0]) + ar, float(p2[0]) - ar, float(p2[0]) + ar])
+        zs.extend([float(p1[1]) - ar, float(p1[1]) + ar, float(p2[1]) - ar, float(p2[1]) + ar])
+
+    if not ys or not zs:
+        return -0.5, 0.5, -0.5, 0.5
+    pad = 1e-4
+    return min(ys) - pad, max(ys) + pad, min(zs) - pad, max(zs) + pad
+
+
+def evaluate_drone_impact_batch(
+    y_rel_arr: np.ndarray,
+    z_rel_arr: np.ndarray,
+    drone_spec: dict[str, Any],
+    striking_energy_arr: np.ndarray,
+    aspect_geometry: dict[str, Any] | None = None,
+    *,
+    pellet_velocity_arr: np.ndarray | None = None,
+    pellet_mass_kg: float | None = None,
+    pellet_diameter_m: float | None = None,
+    pellet_density_g_cm3: float = 11.3,
+    use_rotor_solidity: bool = False,
+    use_v50_ballistic_limit: bool = False,
+    enable_ray_shielding: bool = False,
+    use_oblique_ricochet: bool = False,
+    rng: Any | None = None,
+) -> dict[str, Any]:
+    """Vectorized batch evaluation of pellet impacts against a drone silhouette."""
+    y = np.asarray(y_rel_arr, dtype=np.float64)
+    z = np.asarray(z_rel_arr, dtype=np.float64)
+    ke = np.asarray(striking_energy_arr, dtype=np.float64)
+    v_arr = np.asarray(pellet_velocity_arr, dtype=np.float64) if pellet_velocity_arr is not None else None
+    n_tot = int(y.size)
+
+    is_hit = np.zeros(n_tot, dtype=bool)
+    is_lethal = np.zeros(n_tot, dtype=bool)
+    critical_system = np.zeros(n_tot, dtype=bool)
+    components = ["miss"] * n_tot
+    blade_pass_through_count = 0
+    ricochet_count = 0
+    v50_samples: list[float] = []
+
+    if n_tot == 0:
+        return {
+            "is_hit": is_hit,
+            "is_lethal": is_lethal,
+            "critical_system": critical_system,
+            "component": components,
+            "blade_pass_through_count": 0,
+            "ricochet_count": 0,
+            "v50_samples": v50_samples,
+        }
+
+    min_y, max_y, min_z, max_z = _geometry_bounding_box(drone_spec, aspect_geometry)
+    cand_mask = (y >= min_y) & (y <= max_y) & (z >= min_z) & (z <= max_z)
+    cand_idx = np.flatnonzero(cand_mask)
+    if cand_idx.size == 0:
+        return {
+            "is_hit": is_hit,
+            "is_lethal": is_lethal,
+            "critical_system": critical_system,
+            "component": components,
+            "blade_pass_through_count": 0,
+            "ricochet_count": 0,
+            "v50_samples": v50_samples,
+        }
+
+    use_hf = bool(use_rotor_solidity or use_v50_ballistic_limit or enable_ray_shielding)
+    if aspect_geometry is not None and not use_hf:
+        e_rotor_lethal = float(drone_spec.get("lethal_energy_rotor_j", 8.0))
+        e_core_lethal = float(drone_spec.get("lethal_energy_core_j", 20.0))
+        e_arm_lethal = float(drone_spec.get("lethal_energy_arm_j", 30.0))
+        e_warhead_lethal = float(drone_spec.get("lethal_energy_warhead_j", e_core_lethal * 0.85))
+
+        yc = y[cand_idx]
+        zc = z[cand_idx]
+        kec = ke[cand_idx]
+        assigned = np.zeros(cand_idx.size, dtype=bool)
+
+        def _commit(local_mask: np.ndarray, comp_label: str, e_req: float, critical: bool) -> None:
+            nonlocal assigned
+            m_new = (~assigned) & local_mask
+            if not np.any(m_new):
+                return
+            sel = cand_idx[m_new]
+            is_hit[sel] = True
+            is_lethal[sel] = kec[m_new] >= e_req
+            critical_system[sel] = critical
+            for gi in sel:
+                components[int(gi)] = comp_label
+            assigned |= m_new
+
+        for poly_key, comp_label, e_req in (
+            ("fuselage_polygon", "fuselage_core", e_core_lethal),
+            ("battery_polygon", "battery_payload", e_core_lethal * 0.75),
+            ("warhead_polygon", "warhead_pg7m", e_warhead_lethal),
+        ):
+            poly = aspect_geometry.get(poly_key)
+            if poly and len(poly) >= 3:
+                _commit(point_in_convex_polygon_batch(yc, zc, np.asarray(poly, dtype=np.float64)), comp_label, e_req, True)
+
+        for m in aspect_geometry.get("motors", []):
+            my, mz = float(m["y_m"]), float(m["z_m"])
+            mw, mh = float(m["w_m"]), float(m["h_m"])
+            m_mask = (np.abs(yc - my) <= mw / 2.0) & (np.abs(zc - mz) <= mh / 2.0)
+            _commit(m_mask, f"motor_{m.get('id', 'M')}", e_rotor_lethal, True)
+
+        for r in aspect_geometry.get("rotors", []):
+            ry, rz = float(r["y_m"]), float(r["z_m"])
+            a, b = max(float(r["semi_major_m"]), 1e-9), max(float(r["semi_minor_m"]), 1e-9)
+            u_maj, u_min = r.get("u_maj", [1.0, 0.0]), r.get("u_min", [0.0, 1.0])
+            dy, dz = yc - ry, zc - rz
+            u = dy * float(u_maj[0]) + dz * float(u_maj[1])
+            v = dy * float(u_min[0]) + dz * float(u_min[1])
+            r_mask = ((u / a) ** 2 + (v / b) ** 2) <= 1.0
+            _commit(r_mask, f"rotor_{r.get('id', 'R')}", e_rotor_lethal, True)
+
+        for w_poly in aspect_geometry.get("wings", []):
+            if w_poly and len(w_poly) >= 3:
+                _commit(point_in_convex_polygon_batch(yc, zc, np.asarray(w_poly, dtype=np.float64)), "wing_spar", e_arm_lethal, False)
+
+        for arm in aspect_geometry.get("arms", []):
+            p1, p2 = arm.get("p1", [0.0, 0.0]), arm.get("p2", [0.0, 0.0])
+            arm_r = float(arm.get("diameter_m", 0.020)) / 2.0
+            p1_y, p1_z = float(p1[0]), float(p1[1])
+            p2_y, p2_z = float(p2[0]), float(p2[1])
+            seg_dy, seg_dz = p2_y - p1_y, p2_z - p1_z
+            seg_len_sq = seg_dy ** 2 + seg_dz ** 2
+            if seg_len_sq > 1e-6:
+                t_p = np.clip(((yc - p1_y) * seg_dy + (zc - p1_z) * seg_dz) / seg_len_sq, 0.0, 1.0)
+                dist = np.hypot(yc - (p1_y + t_p * seg_dy), zc - (p1_z + t_p * seg_dz))
+                _commit(dist <= arm_r, "structural_arm", e_arm_lethal, False)
+
+        return {
+            "is_hit": is_hit,
+            "is_lethal": is_lethal,
+            "critical_system": critical_system,
+            "component": components,
+            "blade_pass_through_count": 0,
+            "ricochet_count": 0,
+            "v50_samples": v50_samples,
+        }
+
+    # Bounding-box filtered evaluation for high-fidelity or planform fallback
+    for raw_i in cand_idx:
+        idx = int(raw_i)
+        hit_info = evaluate_drone_impact(
+            float(y[idx]),
+            float(z[idx]),
+            drone_spec,
+            float(ke[idx]),
+            aspect_geometry=aspect_geometry,
+            pellet_velocity_mps=float(v_arr[idx]) if v_arr is not None else None,
+            pellet_mass_kg=pellet_mass_kg,
+            pellet_diameter_m=pellet_diameter_m,
+            pellet_density_g_cm3=pellet_density_g_cm3,
+            use_rotor_solidity=use_rotor_solidity,
+            use_v50_ballistic_limit=use_v50_ballistic_limit,
+            enable_ray_shielding=enable_ray_shielding,
+            use_oblique_ricochet=use_oblique_ricochet,
+            rng=rng,
+        )
+        if hit_info.get("blade_pass_through"):
+            blade_pass_through_count += 1
+        if hit_info.get("ricochet"):
+            ricochet_count += 1
+        if hit_info.get("v50_mps") is not None:
+            v50_samples.append(float(hit_info["v50_mps"]))
+        if hit_info["is_hit"]:
+            is_hit[idx] = True
+            is_lethal[idx] = bool(hit_info["is_lethal"])
+            critical_system[idx] = bool(hit_info["critical_system"])
+            components[idx] = str(hit_info["component"])
+
+    return {
+        "is_hit": is_hit,
+        "is_lethal": is_lethal,
+        "critical_system": critical_system,
+        "component": components,
+        "blade_pass_through_count": blade_pass_through_count,
+        "ricochet_count": ricochet_count,
+        "v50_samples": v50_samples,
+    }
+
+
+# -------------------------------------------------------------------------
+# 3D .STL DRONE CAD MESH PARSER & OBLIQUE RAY-CAST VULNERABILITY
+# -------------------------------------------------------------------------
+
+
+def parse_stl_mesh(stl_bytes_or_text: bytes | str, scale_to_meters: float | None = None) -> dict[str, Any]:
+    """Parse ASCII or binary STL mesh into centered metric (N, 3, 3) triangles and unit normals."""
+    raw = stl_bytes_or_text.encode("utf-8", errors="ignore") if isinstance(stl_bytes_or_text, str) else bytes(stl_bytes_or_text)
+    if len(raw) < 16:
+        raise ValueError("STL payload is too short to be a valid 3D mesh.")
+
+    is_ascii = False
+    head_txt = raw[:256].lstrip().lower()
+    if head_txt.startswith(b"solid"):
+        txt_try = raw.decode("utf-8", errors="ignore")
+        if "facet normal" in txt_try.lower() and "vertex" in txt_try.lower():
+            is_ascii = True
+
+    tris_list: list[list[list[float]]] = []
+    norms_list: list[list[float]] = []
+
+    if is_ascii:
+        fmt_tag = "ascii"
+        txt = raw.decode("utf-8", errors="ignore")
+        cur_n = [0.0, 0.0, 1.0]
+        cur_v: list[list[float]] = []
+        for line in txt.splitlines():
+            parts = line.strip().split()
+            if not parts:
+                continue
+            kw = parts[0].lower()
+            if kw == "facet" and len(parts) >= 5 and parts[1].lower() == "normal":
+                cur_n = [float(parts[2]), float(parts[3]), float(parts[4])]
+                cur_v = []
+            elif kw == "vertex" and len(parts) >= 4:
+                cur_v.append([float(parts[1]), float(parts[2]), float(parts[3])])
+                if len(cur_v) == 3:
+                    tris_list.append(cur_v)
+                    norms_list.append(cur_n)
+                    cur_v = []
+    else:
+        fmt_tag = "binary"
+        if len(raw) < 84:
+            raise ValueError("Binary STL header incomplete (< 84 bytes).")
+        n_tris = int(struct.unpack("<I", raw[80:84])[0])
+        expected_len = 84 + n_tris * 50
+        if n_tris <= 0 or len(raw) < expected_len:
+            raise ValueError(f"Binary STL triangle count ({n_tris}) does not match byte length ({len(raw)}).")
+        tri_dtype = np.dtype([
+            ("normal", "<f4", (3,)),
+            ("v0", "<f4", (3,)),
+            ("v1", "<f4", (3,)),
+            ("v2", "<f4", (3,)),
+            ("attr", "<u2"),
+        ])
+        arr = np.frombuffer(raw[84:expected_len], dtype=tri_dtype)
+        norms_arr = np.asarray(arr["normal"], dtype=np.float64)
+        verts_arr = np.stack([arr["v0"], arr["v1"], arr["v2"]], axis=1).astype(np.float64)
+
+    if is_ascii:
+        if not tris_list:
+            raise ValueError("No valid triangles parsed from ASCII STL mesh.")
+        verts_arr = np.asarray(tris_list, dtype=np.float64)
+        norms_arr = np.asarray(norms_list, dtype=np.float64)
+
+    # Auto-compute geometric normals when file normals are zeroed
+    e1 = verts_arr[:, 1, :] - verts_arr[:, 0, :]
+    e2 = verts_arr[:, 2, :] - verts_arr[:, 0, :]
+    cross_n = np.cross(e1, e2)
+    n_len = np.linalg.norm(cross_n, axis=1, keepdims=True)
+    geo_norms = np.divide(cross_n, np.maximum(n_len, 1e-12), out=np.zeros_like(cross_n), where=n_len > 1e-12)
+    given_len = np.linalg.norm(norms_arr, axis=1, keepdims=True)
+    unit_norms = np.where(given_len > 1e-8, norms_arr / np.maximum(given_len, 1e-12), geo_norms)
+
+    all_pts = verts_arr.reshape(-1, 3)
+    raw_span = np.ptp(all_pts, axis=0)
+    max_span = float(np.max(raw_span)) if raw_span.size else 0.0
+    if scale_to_meters is None:
+        scale_eff = 0.001 if max_span > 4.0 else 1.0
+    else:
+        scale_eff = float(scale_to_meters)
+
+    verts_m = verts_arr * scale_eff
+    centroid = np.mean(verts_m.reshape(-1, 3), axis=0)
+    verts_m = verts_m - centroid[None, None, :]
+    span_xyz = np.ptp(verts_m.reshape(-1, 3), axis=0)
+
+    return {
+        "vertices": verts_m,
+        "normals": unit_norms,
+        "n_triangles": int(verts_m.shape[0]),
+        "span_xyz_m": [round(float(v), 4) for v in span_xyz],
+        "scale_applied": float(scale_eff),
+        "format": fmt_tag,
+    }
+
+
+def _box_ascii_triangles(cx: float, cy: float, cz: float, lx: float, wy: float, hz: float) -> list[str]:
+    hx, hy, hz_half = 0.5 * lx, 0.5 * wy, 0.5 * hz
+    v = [
+        (cx - hx, cy - hy, cz - hz_half),
+        (cx + hx, cy - hy, cz - hz_half),
+        (cx + hx, cy + hy, cz - hz_half),
+        (cx - hx, cy + hy, cz - hz_half),
+        (cx - hx, cy - hy, cz + hz_half),
+        (cx + hx, cy - hy, cz + hz_half),
+        (cx + hx, cy + hy, cz + hz_half),
+        (cx - hx, cy + hy, cz + hz_half),
+    ]
+    faces = [
+        ((0, 0, -1), (0, 2, 1), (0, 3, 2)),
+        ((0, 0, 1), (4, 5, 6), (4, 6, 7)),
+        ((0, -1, 0), (0, 1, 5), (0, 5, 4)),
+        ((0, 1, 0), (2, 3, 7), (2, 7, 6)),
+        ((-1, 0, 0), (0, 4, 7), (0, 7, 3)),
+        ((1, 0, 0), (1, 2, 6), (1, 6, 5)),
+    ]
+    lines: list[str] = []
+    for n, t1, t2 in faces:
+        for tri in (t1, t2):
+            lines.append(f"  facet normal {n[0]:.4f} {n[1]:.4f} {n[2]:.4f}")
+            lines.append("    outer loop")
+            for vi in tri:
+                vx, vy, vz = v[vi]
+                lines.append(f"      vertex {vx:.5f} {vy:.5f} {vz:.5f}")
+            lines.append("    endloop")
+            lines.append("  endfacet")
+    return lines
+
+
+def generate_sample_drone_stl_bytes(drone_type: str = "quadcopter") -> bytes:
+    """Generate a procedural ASCII STL CAD mesh of an FPV quadcopter frame + battery + motors."""
+    lines = [f"solid cuas_{drone_type}"]
+    # Central fuselage box + top battery pack
+    lines.extend(_box_ascii_triangles(0.0, 0.0, 0.0, 0.22, 0.12, 0.08))
+    lines.extend(_box_ascii_triangles(-0.01, 0.0, 0.065, 0.14, 0.075, 0.05))
+    # 4 motor hubs and diagonal arm segments
+    for sx in (-1.0, 1.0):
+        for sy in (-1.0, 1.0):
+            mx, my = sx * 0.16, sy * 0.16
+            lines.extend(_box_ascii_triangles(mx, my, 0.015, 0.042, 0.042, 0.042))
+            lines.extend(_box_ascii_triangles(0.5 * mx, 0.5 * my, 0.0, 0.12, 0.025, 0.020))
+    lines.append(f"endsolid cuas_{drone_type}")
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def project_stl_mesh_vulnerability(
+    mesh: dict[str, Any],
+    aspect_mode: str = "head_on_frontal",
+    drone_pitch_deg: float = -15.0,
+    drone_yaw_deg: float = 0.0,
+    drone_roll_deg: float = 0.0,
+    grid_res: int = 48,
+) -> dict[str, Any]:
+    """Ray-cast a 3D STL mesh along the shot-cloud LOS to extract presented area, depths, and face obliquity."""
+    M, _, yaw_deg, pitch_deg, roll_deg = _euler_los_rotation_matrix(
+        aspect_mode=aspect_mode,
+        drone_pitch_deg=drone_pitch_deg,
+        drone_yaw_deg=drone_yaw_deg,
+        drone_roll_deg=drone_roll_deg,
+    )
+    verts_los = np.einsum("ij,nkj->nki", M, np.asarray(mesh["vertices"], dtype=np.float64))
+    norms_los = (M @ np.asarray(mesh["normals"], dtype=np.float64).T).T
+
+    y_all = verts_los[:, :, 1]
+    z_all = verts_los[:, :, 2]
+    y_min, y_max = float(np.min(y_all)), float(np.max(y_all))
+    z_min, z_max = float(np.min(z_all)), float(np.max(z_all))
+    pad = 0.005
+    y_min -= pad
+    y_max += pad
+    z_min -= pad
+    z_max += pad
+
+    g = max(16, int(grid_res))
+    y_edges = np.linspace(y_min, y_max, g + 1)
+    z_edges = np.linspace(z_min, z_max, g + 1)
+    yc = 0.5 * (y_edges[:-1] + y_edges[1:])
+    zc = 0.5 * (z_edges[:-1] + z_edges[1:])
+    dy_cell = (y_max - y_min) / g
+    dz_cell = (z_max - z_min) / g
+
+    depth_grid = np.full((g, g), np.inf, dtype=np.float64)
+    obliq_grid = np.full((g, g), np.nan, dtype=np.float64)
+    zone_grid = np.zeros((g, g), dtype=np.int32)  # 0=miss, 1=fuselage_core, 2=battery_payload, 3=rotors_arms
+
+    for ti in range(verts_los.shape[0]):
+        tri = verts_los[ti]
+        x0, y0, z0 = tri[0]
+        x1, y1, z1 = tri[1]
+        x2, y2, z2 = tri[2]
+
+        denom = (z1 - z2) * (y0 - y2) + (y2 - y1) * (z0 - z2)
+        if abs(denom) < 1e-12:
+            continue
+
+        tri_ymin, tri_ymax = min(y0, y1, y2), max(y0, y1, y2)
+        tri_zmin, tri_zmax = min(z0, z1, z2), max(z0, z1, z2)
+        iy0 = max(0, int(math.floor((tri_ymin - y_min) / max(dy_cell, 1e-9))))
+        iy1 = min(g - 1, int(math.ceil((tri_ymax - y_min) / max(dy_cell, 1e-9))))
+        iz0 = max(0, int(math.floor((tri_zmin - z_min) / max(dz_cell, 1e-9))))
+        iz1 = min(g - 1, int(math.ceil((tri_zmax - z_min) / max(dz_cell, 1e-9))))
+        if iy1 < iy0 or iz1 < iz0:
+            continue
+
+        yy, zz = np.meshgrid(yc[iy0 : iy1 + 1], zc[iz0 : iz1 + 1], indexing="xy")
+        w0 = ((z1 - z2) * (yy - y2) + (y2 - y1) * (zz - z2)) / denom
+        w1 = ((z2 - z0) * (yy - y2) + (y0 - y2) * (zz - z2)) / denom
+        w2 = 1.0 - w0 - w1
+        inside = (w0 >= -1e-4) & (w1 >= -1e-4) & (w2 >= -1e-4)
+        if not np.any(inside):
+            continue
+
+        x_hit = w0 * x0 + w1 * x1 + w2 * x2
+        # Front-most surface relative to incoming shot cloud along LOS (-X forward => minimum X or closest normal)
+        sub_depth = depth_grid[iz0 : iz1 + 1, iy0 : iy1 + 1]
+        closer = inside & (x_hit < sub_depth)
+        if not np.any(closer):
+            continue
+
+        nx = min(1.0, abs(float(norms_los[ti, 0])))
+        theta_deg = math.degrees(math.acos(nx))
+        sub_depth[closer] = x_hit[closer]
+        obliq_grid[iz0 : iz1 + 1, iy0 : iy1 + 1][closer] = theta_deg
+
+        rad_norm = np.hypot(yy[closer], zz[closer]) / max(0.5 * max(y_max - y_min, z_max - z_min), 1e-4)
+        z_vals = np.where(rad_norm <= 0.35, np.where(zz[closer] >= 0.025, 2, 1), 3)
+        zone_grid[iz0 : iz1 + 1, iy0 : iy1 + 1][closer] = z_vals
+
+    hit_mask = np.isfinite(depth_grid)
+    n_hit_cells = int(np.sum(hit_mask))
+    cell_area = dy_cell * dz_cell
+    presented_area_m2 = float(n_hit_cells * cell_area)
+
+    if n_hit_cells > 0:
+        iz_idx, iy_idx = np.nonzero(hit_mask)
+        pts_hit = np.column_stack([yc[iy_idx], zc[iz_idx]])
+        sil_poly = _convex_hull_2d(pts_hit).tolist() if len(pts_hit) >= 3 else pts_hit.tolist()
+        mean_obliq = float(np.nanmean(obliq_grid[hit_mask]))
+    else:
+        sil_poly = []
+        mean_obliq = 0.0
+
+    return {
+        "aspect_mode": aspect_mode,
+        "yaw_deg": yaw_deg,
+        "pitch_deg": pitch_deg,
+        "roll_deg": roll_deg,
+        "grid_res": g,
+        "y_bounds": [round(y_min, 4), round(y_max, 4)],
+        "z_bounds": [round(z_min, 4), round(z_max, 4)],
+        "y_edges": y_edges,
+        "z_edges": z_edges,
+        "depth_x_grid": depth_grid,
+        "obliquity_grid": obliq_grid,
+        "zone_grid": zone_grid,
+        "presented_area_m2": round(presented_area_m2, 6),
+        "presented_area_cm2": round(presented_area_m2 * 10000.0, 1),
+        "mean_obliquity_deg": round(mean_obliq, 2),
+        "silhouette_polygon": sil_poly,
+        "n_hit_cells": n_hit_cells,
+    }
+
+
+def evaluate_stl_pellet_impacts_batch(
+    y_rel_arr: np.ndarray,
+    z_rel_arr: np.ndarray,
+    stl_proj: dict[str, Any],
+    pellet_velocity_arr: np.ndarray,
+    pellet_mass_kg: float,
+    pellet_diameter_m: float,
+    pellet_density_g_cm3: float = 11.3,
+    use_v50_ballistic_limit: bool = True,
+    use_oblique_ricochet: bool = True,
+    rng: Any | None = None,
+) -> dict[str, Any]:
+    """Evaluate batch pellet impacts against a ray-cast STL vulnerability map using local face obliquity."""
+    y = np.asarray(y_rel_arr, dtype=np.float64)
+    z = np.asarray(z_rel_arr, dtype=np.float64)
+    v = np.asarray(pellet_velocity_arr, dtype=np.float64)
+    n_tot = int(y.size)
+    is_hit = np.zeros(n_tot, dtype=bool)
+    is_lethal = np.zeros(n_tot, dtype=bool)
+    ricochet_mask = np.zeros(n_tot, dtype=bool)
+    components = ["miss"] * n_tot
+
+    y0, y1 = float(stl_proj["y_bounds"][0]), float(stl_proj["y_bounds"][1])
+    z0, z1 = float(stl_proj["z_bounds"][0]), float(stl_proj["z_bounds"][1])
+    g = int(stl_proj["grid_res"])
+    zone_grid = np.asarray(stl_proj["zone_grid"])
+    obliq_grid = np.asarray(stl_proj["obliquity_grid"])
+    zone_names = {1: "fuselage_core", 2: "battery_payload", 3: "structural_arm"}
+
+    in_box = (y >= y0) & (y < y1) & (z >= z0) & (z < z1)
+    cand = np.flatnonzero(in_box)
+    for raw_i in cand:
+        idx = int(raw_i)
+        iy = min(g - 1, max(0, int((y[idx] - y0) / max(y1 - y0, 1e-9) * g)))
+        iz = min(g - 1, max(0, int((z[idx] - z0) / max(z1 - z0, 1e-9) * g)))
+        z_code = int(zone_grid[iz, iy])
+        if z_code <= 0:
+            continue
+        comp = zone_names.get(z_code, "fuselage_core")
+        theta_deg = float(obliq_grid[iz, iy]) if np.isfinite(obliq_grid[iz, iy]) else 0.0
+        is_hit[idx] = True
+        components[idx] = comp
+
+        if use_v50_ballistic_limit:
+            v50_res = compute_component_v50_perforation(
+                comp,
+                pellet_velocity_mps=float(v[idx]),
+                pellet_mass_kg=pellet_mass_kg,
+                pellet_diameter_m=pellet_diameter_m,
+                pellet_density_g_cm3=pellet_density_g_cm3,
+                obliquity_deg=theta_deg,
+                enable_ricochet=use_oblique_ricochet,
+            )
+            if v50_res["ricochet"]:
+                ricochet_mask[idx] = True
+            u = float(rng.random()) if rng is not None else 0.5
+            is_lethal[idx] = bool(u < float(v50_res["p_perforation"]))
+        else:
+            ke_j = 0.5 * pellet_mass_kg * (float(v[idx]) ** 2)
+            e_req = 15.0 if comp == "battery_payload" else (20.0 if comp == "fuselage_core" else 28.0)
+            is_lethal[idx] = bool(ke_j >= e_req)
+
+    return {
+        "is_hit": is_hit,
+        "is_lethal": is_lethal,
+        "ricochet": ricochet_mask,
+        "component": components,
+        "n_hits": int(np.sum(is_hit)),
+        "n_lethal": int(np.sum(is_lethal)),
+        "n_ricochets": int(np.sum(ricochet_mask)),
     }
 
 

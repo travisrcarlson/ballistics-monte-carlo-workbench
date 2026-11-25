@@ -119,7 +119,10 @@ def create_experimental_benchmarks_figure(exp_res: dict[str, Any]) -> go.Figure:
     return fig
 
 
-def create_sprt_stopping_boundaries_figure(doe_res: dict[str, Any]) -> go.Figure:
+def create_sprt_stopping_boundaries_figure(
+    doe_res: dict[str, Any],
+    live_sprt: dict[str, Any] | None = None,
+) -> go.Figure:
     """Plot Wald Sequential Probability Ratio Test (SPRT) accept/reject decision funnel vs rounds fired."""
     bounds = doe_res.get("sprt_bounds", [])
     ns = [b["n_rounds"] for b in bounds]
@@ -129,11 +132,138 @@ def create_sprt_stopping_boundaries_figure(doe_res: dict[str, Any]) -> go.Figure
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=ns, y=hi, mode="lines", name=f"Accept Threshold (Pk ≥ {doe_res.get('sprt_p1', 0.85):.0%})", line=dict(color="#16a34a", width=3)))
     fig.add_trace(go.Scatter(x=ns, y=lo, mode="lines", name=f"Reject Threshold (Pk ≤ {doe_res.get('sprt_p0', 0.65):.0%})", line=dict(color="#dc2626", width=3)))
+    if live_sprt and live_sprt.get("trajectory"):
+        traj = live_sprt["trajectory"]
+        fig.add_trace(
+            go.Scatter(
+                x=[t["n"] for t in traj],
+                y=[t["cum_kills"] for t in traj],
+                mode="lines+markers",
+                name=f"Live Trials ({live_sprt.get('decision', 'CONTINUE')})",
+                line=dict(color="#38bdf8", width=3),
+                marker=dict(size=9, color="#facc15"),
+            )
+        )
     fig.update_layout(
         title="Wald SPRT Sequential Live-Fire Early-Stopping Funnel",
         xaxis_title="Cumulative Rounds Fired (n)",
         yaxis_title="Cumulative Drone Kills Required",
         height=350,
         margin=dict(l=45, r=25, t=50, b=40),
+    )
+    return fig
+
+
+def create_stl_vulnerability_figure(stl_proj: dict[str, Any]) -> go.Figure:
+    """Visualize ray-cast 3D STL CAD face obliquity angles and silhouette presented area."""
+    import numpy as np
+    from plotly.subplots import make_subplots
+
+    y_edges = np.asarray(stl_proj["y_edges"], dtype=np.float64)
+    z_edges = np.asarray(stl_proj["z_edges"], dtype=np.float64)
+    yc = 0.5 * (y_edges[:-1] + y_edges[1:])
+    zc = 0.5 * (z_edges[:-1] + z_edges[1:])
+    obliq = np.asarray(stl_proj["obliquity_grid"], dtype=np.float64)
+    depth = np.asarray(stl_proj["depth_x_grid"], dtype=np.float64)
+    depth_plot = np.where(np.isfinite(depth), depth, np.nan)
+
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        subplot_titles=("Ray-Cast Face Obliquity Angle θ (deg)", "LOS Penetration Depth Profile x (m)"),
+        horizontal_spacing=0.10,
+    )
+    fig.add_trace(
+        go.Heatmap(
+            x=yc,
+            y=zc,
+            z=obliq,
+            colorscale="Turbo",
+            zmin=0.0,
+            zmax=80.0,
+            colorbar=dict(title="θ°", x=0.45),
+            name="Obliquity (deg)",
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Heatmap(
+            x=yc,
+            y=zc,
+            z=depth_plot,
+            colorscale="Viridis",
+            colorbar=dict(title="X (m)", x=1.0),
+            name="Depth X (m)",
+        ),
+        row=1,
+        col=2,
+    )
+    fig.update_layout(
+        title=f"3D STL CAD Mesh Vulnerability — Area={stl_proj.get('presented_area_cm2', 0.0):.1f} cm² | Mean θ={stl_proj.get('mean_obliquity_deg', 0.0):.1f}°",
+        height=390,
+        margin=dict(l=45, r=35, t=55, b=40),
+    )
+    fig.update_yaxes(scaleanchor="x", scaleratio=1, row=1, col=1)
+    fig.update_yaxes(scaleanchor="x2", scaleratio=1, row=1, col=2)
+    return fig
+
+
+def create_pattern_board_corners_overlay_figure(
+    image_bytes: bytes,
+    corners_px: list[tuple[float, float]] | None = None,
+    detected_holes_px: list[tuple[float, float]] | None = None,
+    title: str = "Pattern-Board Rectification & Hole Overlay",
+) -> go.Figure:
+    """Render uploaded pattern board photo overlaid with detected corner fiducials and pellet holes."""
+    import io
+    import numpy as np
+
+    buf = io.BytesIO(image_bytes)
+    try:
+        from PIL import Image
+
+        arr = np.asarray(Image.open(buf).convert("RGB"))
+    except Exception:
+        from matplotlib import image as mpimg
+
+        buf.seek(0)
+        raw = np.asarray(mpimg.imread(buf))
+        if raw.max() <= 1.5:
+            raw = np.clip(raw * 255.0, 0, 255).astype(np.uint8)
+        arr = raw[..., :3] if raw.ndim == 3 else np.stack([raw, raw, raw], axis=-1)
+
+    h_px, w_px = arr.shape[:2]
+    fig = go.Figure()
+    fig.add_trace(go.Image(z=arr))
+    if corners_px and len(corners_px) == 4:
+        xs = [float(c[0]) for c in corners_px] + [float(corners_px[0][0])]
+        ys = [float(c[1]) for c in corners_px] + [float(corners_px[0][1])]
+        fig.add_trace(
+            go.Scatter(
+                x=xs,
+                y=ys,
+                mode="lines+markers",
+                name="Rectification Corners",
+                line=dict(color="#10b981", width=2.5),
+                marker=dict(size=10, color="#10b981", symbol="square-open"),
+            )
+        )
+    if detected_holes_px:
+        fig.add_trace(
+            go.Scatter(
+                x=[float(p[0]) for p in detected_holes_px],
+                y=[float(p[1]) for p in detected_holes_px],
+                mode="markers",
+                name=f"Detected Holes ({len(detected_holes_px)})",
+                marker=dict(size=7, color="#ef4444", symbol="circle-open", line=dict(width=1.8)),
+            )
+        )
+    fig.update_layout(
+        title=title,
+        xaxis=dict(range=[0, w_px], showgrid=False),
+        yaxis=dict(range=[h_px, 0], scaleanchor="x", scaleratio=1, showgrid=False),
+        height=400,
+        margin=dict(l=30, r=25, t=48, b=30),
     )
     return fig

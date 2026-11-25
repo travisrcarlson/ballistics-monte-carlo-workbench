@@ -596,15 +596,15 @@ def _run_physics_benchmarks_b01_b18(seed: int = 42) -> tuple[list[dict[str, Any]
     rows.append(_make_benchmark_row(
         benchmark_id="B-18",
         domain="Literature Governance",
-        title="81-source provenance linkage & flagged formula registry integrity",
+        title="87-source provenance linkage & flagged formula registry integrity",
         module="ammo_mc.literature",
-        source_ids=["S01", "S81"],
+        source_ids=["S01", "S87"],
         unit="%",
         computed=float(lit_summary["linked_source_coverage_pct"]),
         reference=100.0,
         tolerance=1e-9,
         extra_passed=(
-            int(lit_summary["total_sources"]) == 81
+            int(lit_summary["total_sources"]) == 87
             and int(lit_summary["total_formulas"]) == 96
             and sorted(lit_summary["flagged_formula_ids"]) == ["TB-12", "TF-12", "TP-01"]
         ),

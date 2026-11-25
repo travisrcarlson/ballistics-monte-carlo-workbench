@@ -67,8 +67,11 @@ from ammo_mc.small_arms import (
 from ammo_mc.cuas_scientific_vv import (
     calibrate_doppler_radar_drag,
     compute_epistemic_aleatory_uq_envelope,
+    detect_and_parse_instrument_file,
+    evaluate_sprt_live_sequence,
     generate_sample_blind_holdout_dataset,
     generate_sample_doppler_radar_csv,
+    generate_sample_labradar_native_csv,
     generate_sample_shotstring_csv,
     parse_weather_and_shotstring_csv,
     plan_range_validation_doe,
@@ -88,7 +91,7 @@ app = FastAPI(
         "Production REST API for stochastic ammunition effects, trajectory dispersion, "
         "fuze reliability, blast/fragmentation hazard modeling, and Counter-UAS trade studies."
     ),
-    version="1.3.0",
+    version="1.8.0",
 )
 
 app.add_middleware(
@@ -142,7 +145,7 @@ def _verify_api_auth(
 
 class HealthResponse(BaseModel):
     status: str = "ok"
-    version: str = "1.3.0"
+    version: str = "1.8.0"
     uptime_seconds: float
     use_limitation: str = USE_LIMITATION_NOTICE
 
@@ -173,7 +176,7 @@ def get_health() -> HealthResponse:
     """Return API health status, version, and official use limitation notice."""
     return HealthResponse(
         status="ok",
-        version="1.3.0",
+        version="1.8.0",
         uptime_seconds=round(time.time() - START_TIME, 2),
         use_limitation=USE_LIMITATION_NOTICE,
     )
@@ -352,6 +355,8 @@ class CuasArrayRequest(BaseModel):
     use_rotor_solidity: bool = False
     use_v50_ballistic_limit: bool = False
     enable_ray_shielding: bool = False
+    use_oblique_ricochet: bool = False
+    shot_cup_separation_m: float = 0.0
     pattern_distribution: str = "gaussian"
     flyer_fraction: float = 0.12
     n_volleys: int = 20
@@ -422,6 +427,7 @@ class CuasUnifiedRaidRequest(BaseModel):
     weapon_max_range_m: float = 65.0
     n_mc_trials: int = 20
     seed: int = 42
+    physics_fidelity: Optional[dict[str, Any]] = None
 
 
 class CuasLogisticsRequest(BaseModel):
@@ -493,6 +499,7 @@ class CuasAdversarialRequest(BaseModel):
     allow_hybrid: bool = False
     robust_uncertainty_mode: bool = False
     calibration_profile: Optional[dict[str, Any]] = None
+    physics_fidelity: Optional[dict[str, Any]] = None
 
 
 class CuasReportRequest(BaseModel):
@@ -623,6 +630,7 @@ def post_cuas_unified_raid(req: CuasUnifiedRaidRequest) -> dict[str, Any]:
         weapon_max_range_m=req.weapon_max_range_m,
         n_mc_trials=req.n_mc_trials,
         seed=req.seed,
+        physics_fidelity=req.physics_fidelity,
     )
     return _to_json_safe(res)
 
@@ -663,6 +671,7 @@ class CuasRlPolicyRequest(BaseModel):
     pop_size: int = 12
     n_eval_episodes: int = 12
     seed: int = 42
+    physics_fidelity: Optional[dict[str, Any]] = None
 
 
 class CuasBattlespaceMlRequest(BaseModel):
@@ -681,6 +690,7 @@ class CuasTrackReplayRequest(BaseModel):
     breach_radius_m: float = 12.0
     n_mc_trials: int = 25
     seed: int = 42
+    physics_fidelity: Optional[dict[str, Any]] = None
 
 
 class CuasSwapCRequest(BaseModel):
@@ -706,6 +716,7 @@ class CuasWizardRequest(BaseModel):
     mount_class: str = "light_ugv"
     budget_priority: str = "balanced"
     seed: int = 42
+    physics_fidelity: Optional[dict[str, Any]] = None
 
 
 class CuasDuelRequest(BaseModel):
@@ -714,6 +725,7 @@ class CuasDuelRequest(BaseModel):
     mount_load_limit_kn: float = 4.0
     n_episodes: int = 24
     seed: int = 42
+    physics_fidelity: Optional[dict[str, Any]] = None
 
 
 @app.post("/cuas/rl-policy", tags=["C-UAS"], dependencies=[Depends(_verify_api_auth)])
@@ -749,6 +761,7 @@ def post_cuas_track_replay(req: CuasTrackReplayRequest) -> dict[str, Any]:
             breach_radius_m=req.breach_radius_m,
             n_mc_trials=req.n_mc_trials,
             seed=req.seed,
+            physics_fidelity=req.physics_fidelity,
         )
         return _to_json_safe(res)
     except ValueError as exc:
@@ -980,6 +993,7 @@ class CalibratePhotoPatternRequest(BaseModel):
     ammunition_preset: str = "12G_NO4_BUCK_C_UAS"
     threshold_sigma: float = 2.6
     corner_points_px: Optional[list[tuple[float, float]]] = None
+    auto_detect_fiducials: bool = False
 
 
 class CalibrateLethalityRequest(BaseModel):
@@ -1055,6 +1069,7 @@ def post_calibrate_pattern_photo(req: CalibratePhotoPatternRequest) -> dict[str,
                 ammunition_preset=req.ammunition_preset,
                 threshold_sigma=req.threshold_sigma,
                 corner_points_px=req.corner_points_px,
+                auto_detect_fiducials=req.auto_detect_fiducials,
             )
         )
     except ValueError as exc:
@@ -1259,6 +1274,101 @@ def post_calibrate_shotstring(req: CuasShotStringRequest) -> dict[str, Any]:
     return _to_json_safe(res)
 
 
+class CuasSprtLiveRequest(BaseModel):
+    outcomes: list[int] = Field(default_factory=lambda: [1, 1, 1, 1, 1, 1])
+    sprt_p0: float = 0.65
+    sprt_p1: float = 0.85
+    alpha: float = 0.05
+    power: float = 0.80
+    range_m: float = 45.0
+    ammunition_preset: str = "12G_NO4_BUCK_C_UAS"
+    choke: str = "Modified"
+
+
+class CuasParseInstrumentRequest(BaseModel):
+    filename: str = "labradar_sample.csv"
+    content_base64: Optional[str] = None
+    csv_text: Optional[str] = None
+
+
+class CuasStlVulnerabilityRequest(BaseModel):
+    stl_base64: Optional[str] = None
+    drone_type: str = "quadcopter"
+    aspect_mode: str = "head_on_frontal"
+    drone_pitch_deg: float = -15.0
+    drone_yaw_deg: float = 0.0
+    drone_roll_deg: float = 0.0
+    grid_res: int = 36
+
+
+@app.post("/cuas/vv/sprt-live", tags=["Scientific V&V"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_vv_sprt_live(req: CuasSprtLiveRequest) -> dict[str, Any]:
+    """Evaluate live sequential shot-by-shot Wald SPRT trajectory and Clopper-Pearson intervals."""
+    return _to_json_safe(evaluate_sprt_live_sequence(**req.model_dump()))
+
+
+@app.post("/cuas/calibrate/parse-instrument", tags=["Calibration"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_parse_instrument(req: CuasParseInstrumentRequest) -> dict[str, Any]:
+    """Auto-detect and parse native LabRadar, Garmin Xero C1, Kestrel LiNK, or PX4 telemetry."""
+    import base64
+
+    if req.content_base64:
+        raw = base64.b64decode(req.content_base64)
+    elif req.csv_text is not None:
+        raw = req.csv_text.encode("utf-8")
+    else:
+        raw = generate_sample_labradar_native_csv().encode("utf-8")
+    return _to_json_safe(detect_and_parse_instrument_file(req.filename, raw))
+
+
+@app.get("/cuas/calibrate/fiducial-board-pdf", tags=["Calibration", "Export"], dependencies=[Depends(_verify_api_auth)])
+def get_cuas_fiducial_board_pdf(
+    board_width_m: float = Query(default=1.0),
+    board_height_m: float = Query(default=1.0),
+) -> Response:
+    """Download printable 4-fiducial checkerboard patterning board PDF."""
+    from ammo_mc.cuas_calibration_twin import generate_printable_fiducial_board_pdf
+
+    pdf_bytes = generate_printable_fiducial_board_pdf(board_width_m=board_width_m, board_height_m=board_height_m)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=cuas_fiducial_pattern_board.pdf"},
+    )
+
+
+@app.post("/cuas/geometry/stl-vulnerability", tags=["C-UAS"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_stl_vulnerability(req: CuasStlVulnerabilityRequest) -> dict[str, Any]:
+    """Parse 3D STL CAD mesh and compute aspect-projected presented area & oblique vulnerability."""
+    import base64
+    from ammo_mc.small_arms import (
+        generate_sample_drone_stl_bytes,
+        parse_stl_mesh,
+        project_stl_mesh_vulnerability,
+    )
+
+    stl_bytes = base64.b64decode(req.stl_base64) if req.stl_base64 else generate_sample_drone_stl_bytes(req.drone_type)
+    mesh = parse_stl_mesh(stl_bytes)
+    proj = project_stl_mesh_vulnerability(
+        mesh,
+        aspect_mode=req.aspect_mode,
+        drone_pitch_deg=req.drone_pitch_deg,
+        drone_yaw_deg=req.drone_yaw_deg,
+        drone_roll_deg=req.drone_roll_deg,
+        grid_res=req.grid_res,
+    )
+    return _to_json_safe(
+        {
+            "n_triangles": mesh["n_triangles"],
+            "format": mesh["format"],
+            "aspect_mode": req.aspect_mode,
+            "presented_area_cm2": proj["presented_area_cm2"],
+            "span_xyz_m": mesh["span_xyz_m"],
+            "grid_res": proj["grid_res"],
+        }
+    )
+
+
 @app.post("/export/calibration-certificate", tags=["Calibration", "Export"], dependencies=[Depends(_verify_api_auth)])
 def post_export_calibration_certificate(req: CalibrateDesignDeltaRequest) -> Response:
     """Render and download a landscape PDF Empirical Calibration Certificate."""
@@ -1358,6 +1468,7 @@ class BriefingExportRequest(BaseModel):
     source_ids: Optional[list[str]] = None
     adversarial_result: Optional[dict[str, Any]] = None
     calibration_result: Optional[dict[str, Any]] = None
+    vv_result: Optional[dict[str, Any]] = None
 
 
 @app.post("/cuas/briefing/pdf", tags=["C-UAS", "Export"], dependencies=[Depends(_verify_api_auth)])

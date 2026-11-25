@@ -400,6 +400,83 @@ def _make_calibration_certificate_fig(cal_res: dict[str, Any]) -> Figure:
     return fig
 
 
+def _make_scientific_vv_chart_fig(vv_res: dict[str, Any]) -> Figure:
+    """Render Scientific V&V, UQ P-Box & Experimental Benchmark (E-01..E-06) briefing slide."""
+    fig = Figure(figsize=(11.0, 6.2), facecolor="#0F172A")
+    ax1 = fig.add_subplot(1, 2, 1, facecolor="#1E293B")
+    uq = vv_res.get("uq_envelope") or vv_res.get("uq_results")
+    hold = vv_res.get("blind_holdout") or vv_res.get("holdout")
+    if isinstance(uq, dict) and uq.get("band_rows"):
+        rows = uq["band_rows"]
+        ds = [float(r["distance_m"]) for r in rows]
+        p05 = [float(r["pk_p05_pct"]) for r in rows]
+        p50 = [float(r["pk_median_pct"]) for r in rows]
+        p95 = [float(r["pk_p95_pct"]) for r in rows]
+        ax1.fill_between(ds, p05, p95, color="#38BDF8", alpha=0.25, label="90% UQ P-Box (P05–P95)")
+        ax1.plot(ds, p50, "-o", color="#38BDF8", linewidth=2.4, label=f"Median R80={uq.get('r80_median_m', '?')} m")
+        ax1.axhline(80.0, color="#10B981", linestyle="--", linewidth=1.2, label="80% Target")
+        ax1.set_ylim(0, 105)
+        ax1.set_xlabel("Slant Range (m)", color="#CBD5E1")
+        ax1.set_ylabel("Kill Probability (%)", color="#CBD5E1")
+        ax1.set_title("Epistemic × Aleatory UQ Envelope", color="#F8FAFC", fontsize=11, fontweight="bold")
+        ax1.legend(loc="lower left", facecolor="#0F172A", labelcolor="#E2E8F0", fontsize=8)
+    elif isinstance(hold, dict) and hold.get("holdout_pattern_rows"):
+        hrows = hold["holdout_pattern_rows"]
+        rs = [float(r["range_m"]) for r in hrows]
+        ax1.plot(rs, [float(r["observed_sigma_m"]) for r in hrows], "o-", color="#EF4444", label="Observed σ")
+        ax1.plot(rs, [float(r["nominal_pred_sigma_m"]) for r in hrows], "--", color="#94A3B8", label="Nominal σ")
+        ax1.plot(rs, [float(r["calibrated_pred_sigma_m"]) for r in hrows], "-s", color="#10B981", label="Calibrated σ")
+        ax1.set_xlabel("Holdout Range (m)", color="#CBD5E1")
+        ax1.set_ylabel("Rayleigh Spread σ (m)", color="#CBD5E1")
+        ax1.set_title("Blind Holdout Cross-Validation", color="#F8FAFC", fontsize=11, fontweight="bold")
+        ax1.legend(loc="upper left", facecolor="#0F172A", labelcolor="#E2E8F0", fontsize=8)
+    else:
+        ax1.axis("off")
+        ax1.text(0.5, 0.5, "Experimental Benchmark Suite Active\n(Run UQ P-Box / Holdout to populate curve)", ha="center", va="center", color="#94A3B8", fontsize=10.5)
+    ax1.tick_params(colors="#CBD5E1")
+    ax1.grid(color="#334155", alpha=0.45)
+
+    ax2 = fig.add_subplot(1, 2, 2, facecolor="#0F172A")
+    ax2.axis("off")
+    bms = (vv_res.get("experimental_benchmarks") or vv_res).get("benchmarks", [])
+    if bms:
+        t_rows = [
+            [
+                str(b.get("benchmark_id", "")),
+                str(b.get("domain", ""))[:22],
+                str(b.get("computed", "")),
+                str(b.get("reference", "")),
+                str(b.get("status", "")),
+            ]
+            for b in bms[:8]
+        ]
+        tb = ax2.table(
+            cellText=t_rows,
+            colLabels=["ID", "Domain", "Computed", "Ref", "Status"],
+            loc="center",
+            bbox=[0.0, 0.12, 1.0, 0.76],
+        )
+        tb.auto_set_font_size(False)
+        tb.set_fontsize(8.5)
+        for (ri, _), cell in tb.get_celld().items():
+            cell.set_edgecolor("#334155")
+            if ri == 0:
+                cell.set_facecolor("#1E3A8A")
+                cell.set_text_props(color="#FFFFFF", fontweight="bold")
+            else:
+                cell.set_facecolor("#1E293B" if ri % 2 == 1 else "#0F172A")
+                cell.set_text_props(color="#E2E8F0")
+    sm = (vv_res.get("experimental_benchmarks") or vv_res).get("summary", {})
+    ax2.set_title(
+        f"ASME V&V 20 & Experimental Suite ({sm.get('passed', len(bms))}/{sm.get('total', len(bms))} PASS)",
+        color="#10B981",
+        fontsize=11,
+        fontweight="bold",
+    )
+    fig.tight_layout(pad=2.0)
+    return fig
+
+
 def _resolve_citations(source_ids: list[str] | None) -> list[dict[str, Any]]:
     cat = get_literature_catalog()
     by_id = {r["source_id"]: r for r in cat}
@@ -419,6 +496,7 @@ def _collect_briefing_sections(
     source_ids: list[str] | None = None,
     adversarial_result: dict[str, Any] | None = None,
     calibration_result: dict[str, Any] | None = None,
+    vv_result: dict[str, Any] | None = None,
 ) -> tuple[list[tuple[str, str, str]], list[tuple[str, Figure]], list[dict[str, Any]]]:
     kpis: list[tuple[str, str, str]] = []
     if simulator_summary:
@@ -466,6 +544,18 @@ def _collect_briefing_sections(
                 f"{tw.get('spread_factor', 1.0):.2f}x / {tw.get('drone_ecrit_scale', 1.0):.2f}x / {dr.get('r80_drift_m', 0.0):+.1f} m",
             )
         )
+    if vv_result:
+        exp_bm = vv_result.get("experimental_benchmarks") or vv_result
+        bm_sm = exp_bm.get("summary", {})
+        uq_b = vv_result.get("uq_envelope") or vv_result.get("uq_results") or {}
+        r80_str = f"R80 CI [{uq_b.get('r80_p05_m', '?')}, {uq_b.get('r80_p95_m', '?')}] m" if uq_b else "E-01..E-06 Suite"
+        kpis.append(
+            (
+                "Scientific V&V (ASME V&V 20)",
+                "Benchmarks / UQ Envelope",
+                f"{bm_sm.get('passed', 0)}/{bm_sm.get('total', 0)} PASS | {r80_str}",
+            )
+        )
     if not kpis:
         kpis.append(("Workbench Baseline", "Status", "Ready — execute modules to populate quantitative KPIs"))
 
@@ -484,6 +574,8 @@ def _collect_briefing_sections(
         figs.append(("Adversarial ML Co-Evolution & Nash Drivers", _make_adversarial_ml_chart_fig(adversarial_result)))
     if calibration_result:
         figs.append(("Empirical Calibration & Digital Twin Drift", _make_calibration_certificate_fig(calibration_result)))
+    if vv_result:
+        figs.append(("Scientific V&V, UQ P-Box & Benchmarks (E-01..E-06)", _make_scientific_vv_chart_fig(vv_result)))
 
     citations = _resolve_citations(source_ids)
     figs.append(("Scientific Literature & Provenance Citations", _make_sources_figure(citations)))
@@ -502,6 +594,7 @@ def generate_executive_briefing_pdf(
     source_ids: list[str] | None = None,
     adversarial_result: dict[str, Any] | None = None,
     calibration_result: dict[str, Any] | None = None,
+    vv_result: dict[str, Any] | None = None,
 ) -> bytes:
     """Render multi-page landscape executive PDF briefing into raw bytes."""
     _, figs, _ = _collect_briefing_sections(
@@ -516,6 +609,7 @@ def generate_executive_briefing_pdf(
         source_ids=source_ids,
         adversarial_result=adversarial_result,
         calibration_result=calibration_result,
+        vv_result=vv_result,
     )
     buf = io.BytesIO()
     with PdfPages(buf) as pdf:
@@ -536,6 +630,7 @@ def generate_executive_briefing_pptx(
     source_ids: list[str] | None = None,
     adversarial_result: dict[str, Any] | None = None,
     calibration_result: dict[str, Any] | None = None,
+    vv_result: dict[str, Any] | None = None,
 ) -> bytes:
     """Build native 16:9 widescreen PowerPoint (.pptx) deck with charts, tables & citations."""
     kpis, figs, citations = _collect_briefing_sections(
@@ -550,6 +645,7 @@ def generate_executive_briefing_pptx(
         source_ids=source_ids,
         adversarial_result=adversarial_result,
         calibration_result=calibration_result,
+        vv_result=vv_result,
     )
     prs = Presentation()
     prs.slide_width = Inches(13.333)

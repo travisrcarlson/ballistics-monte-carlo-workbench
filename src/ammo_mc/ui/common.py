@@ -354,6 +354,8 @@ def _cached_antidrone_array_mc(
     enable_ray_shielding: bool = False,
     pattern_distribution: str = "gaussian",
     flyer_fraction: float = 0.12,
+    shot_cup_separation_m: float = 0.0,
+    use_oblique_ricochet: bool = False,
 ) -> dict[str, Any]:
     custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
     custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
@@ -403,6 +405,8 @@ def _cached_antidrone_array_mc(
         enable_ray_shielding=enable_ray_shielding,
         pattern_distribution=pattern_distribution,
         flyer_fraction=flyer_fraction,
+        shot_cup_separation_m=shot_cup_separation_m,
+        use_oblique_ricochet=use_oblique_ricochet,
     )
 
 
@@ -452,6 +456,8 @@ def _cached_antidrone_range_envelope(
     enable_ray_shielding: bool = False,
     pattern_distribution: str = "gaussian",
     flyer_fraction: float = 0.12,
+    shot_cup_separation_m: float = 0.0,
+    use_oblique_ricochet: bool = False,
 ) -> dict[str, Any]:
     custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
     custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
@@ -502,6 +508,8 @@ def _cached_antidrone_range_envelope(
         enable_ray_shielding=enable_ray_shielding,
         pattern_distribution=pattern_distribution,
         flyer_fraction=flyer_fraction,
+        shot_cup_separation_m=shot_cup_separation_m,
+        use_oblique_ricochet=use_oblique_ricochet,
     )
 
 
@@ -550,6 +558,8 @@ def _cached_antidrone_range_speed_heatmap(
     enable_ray_shielding: bool = False,
     pattern_distribution: str = "gaussian",
     flyer_fraction: float = 0.12,
+    shot_cup_separation_m: float = 0.0,
+    use_oblique_ricochet: bool = False,
 ) -> dict[str, Any]:
     custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
     custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
@@ -599,6 +609,8 @@ def _cached_antidrone_range_speed_heatmap(
         enable_ray_shielding=enable_ray_shielding,
         pattern_distribution=pattern_distribution,
         flyer_fraction=flyer_fraction,
+        shot_cup_separation_m=shot_cup_separation_m,
+        use_oblique_ricochet=use_oblique_ricochet,
     )
 
 
@@ -1158,6 +1170,7 @@ def _cached_unified_raid(
     swarm_package_json: str = "",
     outer_layer_type: str = "none",
     calibration_profile_json: str = "",
+    physics_fidelity_json: str = "",
 ) -> dict[str, Any]:
     from ammo_mc.cuas_raid import simulate_unified_tactical_raid_mc
     from ammo_mc.terrain_dem import TerrainDEMGrid
@@ -1188,6 +1201,7 @@ def _cached_unified_raid(
         swarm_package=json.loads(swarm_package_json) if swarm_package_json else None,
         outer_layer_type=outer_layer_type,
         calibration_profile=json.loads(calibration_profile_json) if calibration_profile_json else None,
+        physics_fidelity=json.loads(physics_fidelity_json) if physics_fidelity_json else None,
     )
 
 
@@ -1207,11 +1221,13 @@ def _cached_adversarial_coevolution(
     allow_hybrid: bool = False,
     robust_uncertainty_mode: bool = False,
     calibration_profile_json: str = "",
+    physics_fidelity_json: str = "",
 ) -> dict[str, Any]:
     from ammo_mc.cuas_adversarial import run_adversarial_coevolution_ml
 
     stage1_profile = json.loads(stage1_profile_json) if stage1_profile_json else None
     cal_profile = json.loads(calibration_profile_json) if calibration_profile_json else None
+    pf = json.loads(physics_fidelity_json) if physics_fidelity_json else None
     return run_adversarial_coevolution_ml(
         n_generations=n_generations,
         n_mc_episodes=n_mc_episodes,
@@ -1227,6 +1243,7 @@ def _cached_adversarial_coevolution(
         allow_hybrid=allow_hybrid,
         robust_uncertainty_mode=robust_uncertainty_mode,
         calibration_profile=cal_profile,
+        physics_fidelity=pf,
     )
 
 
@@ -1239,6 +1256,7 @@ def _cached_turret_sizing_wizard(
     budget_priority: str = "balanced",
     seed: int = 42,
     calibration_profile_json: str = "",
+    physics_fidelity_json: str = "",
 ) -> dict[str, Any]:
     from ammo_mc.cuas_wizard import run_turret_sizing_wizard
 
@@ -1250,6 +1268,7 @@ def _cached_turret_sizing_wizard(
         budget_priority=budget_priority,
         seed=seed,
         calibration_profile=json.loads(calibration_profile_json) if calibration_profile_json else None,
+        physics_fidelity=json.loads(physics_fidelity_json) if physics_fidelity_json else None,
     )
 
 
@@ -1260,6 +1279,7 @@ def _cached_train_rl_policy(
     pop_size: int,
     n_eval_episodes: int,
     seed: int = 42,
+    physics_fidelity_json: str = "",
 ) -> dict[str, Any]:
     from ammo_mc.cuas_rl_policy import train_fire_control_policy_es
 
@@ -1270,6 +1290,7 @@ def _cached_train_rl_policy(
         pop_size=pop_size,
         n_eval_episodes=n_eval_episodes,
         seed=seed,
+        physics_fidelity=json.loads(physics_fidelity_json) if physics_fidelity_json else None,
     )
 
 
@@ -1300,6 +1321,7 @@ def _cached_recorded_track_replay(
     breach_radius_m: float,
     n_mc_trials: int = 40,
     seed: int = 42,
+    physics_fidelity_json: str = "",
 ) -> dict[str, Any]:
     from ammo_mc.cuas_track_replay import simulate_recorded_track_engagement_mc
 
@@ -1310,6 +1332,7 @@ def _cached_recorded_track_replay(
         breach_radius_m=breach_radius_m,
         n_mc_trials=n_mc_trials,
         seed=seed,
+        physics_fidelity=json.loads(physics_fidelity_json) if physics_fidelity_json else None,
     )
 
 
@@ -1419,6 +1442,7 @@ def _cached_hil_policy_trace(
     calibration_profile_json: str = "",
     dt_ms: float = 100.0,
     breach_radius_m: float = 12.0,
+    physics_fidelity_json: str = "",
 ) -> dict[str, Any]:
     from ammo_mc.cuas_rl_policy import run_hil_fire_control_trace
 
@@ -1429,6 +1453,7 @@ def _cached_hil_policy_trace(
         calibration_profile=json.loads(calibration_profile_json) if calibration_profile_json else None,
         dt_ms=dt_ms,
         breach_radius_m=breach_radius_m,
+        physics_fidelity=json.loads(physics_fidelity_json) if physics_fidelity_json else None,
     )
 
 
@@ -1443,6 +1468,44 @@ def get_active_calibration_profile() -> dict[str, Any] | None:
         return None
     twin = st.session_state.get("_calibrated_digital_twin")
     return dict(twin) if isinstance(twin, dict) and twin else None
+
+
+def get_active_physics_fidelity() -> dict[str, Any] | None:
+    """Return High-Fidelity Terminal Physics preset dict when sidebar switch is active, else None."""
+    if not st.session_state.get("ui_high_fidelity_physics", False):
+        return None
+    from ammo_mc.small_arms import get_default_physics_fidelity_profile
+
+    return get_default_physics_fidelity_profile(True)
+
+
+def get_effective_calibration_profile() -> dict[str, Any] | None:
+    """Return active twin merged with `_physics_fidelity` when sidebar HF switch is ON (non-mutating)."""
+    cal = get_active_calibration_profile()
+    pf = get_active_physics_fidelity()
+    if cal is None and pf is None:
+        return None
+    out = dict(cal) if cal is not None else {}
+    if pf is not None:
+        out["_physics_fidelity"] = dict(pf)
+    return out
+
+
+def render_physics_fidelity_sidebar_control() -> None:
+    """Render global Nominal Fast vs High-Fidelity Terminal Realism sidebar switch."""
+    active = bool(
+        st.toggle(
+            "🔬 High-Fidelity Terminal Physics",
+            value=bool(st.session_state.get("ui_high_fidelity_physics", False)),
+            key="ui_high_fidelity_physics",
+            help=(
+                "Propagates swept rotor blade solidity, V50 & oblique ricochet, 3D ray shielding, "
+                "non-Gaussian flyer dispersion, and 2.5 m shot-cup delay across all C-UAS stages."
+            ),
+        )
+    )
+    if active:
+        st.caption("Active: Rotor solidity · V50/Ricochet · Ray shield · Flyers · 2.5 m wad")
 
 
 def _on_saved_cal_profile_change() -> None:

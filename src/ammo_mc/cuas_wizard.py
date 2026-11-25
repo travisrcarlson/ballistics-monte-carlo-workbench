@@ -234,9 +234,13 @@ def run_turret_sizing_wizard(
     budget_priority: str = "balanced",
     seed: int = 42,
     calibration_profile: dict[str, Any] | None = None,
+    physics_fidelity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Size and rank Top 3 feasible C-UAS multi-barrel shotgun turret configurations from 3 inputs."""
     _ = seed  # Deterministic analytical envelope & SWaP-C sizing
+    cp_eff = dict(calibration_profile or {})
+    if physics_fidelity is not None and isinstance(physics_fidelity, dict):
+        cp_eff["_physics_fidelity"] = dict(physics_fidelity)
     mc_spec = MOUNT_CLASS_SPECS.get(mount_class, MOUNT_CLASS_SPECS["light_ugv"])
     drone_specs = get_drone_target_specs()
     d_spec = drone_specs.get(drone_model, drone_specs["fpv_quad_small"])
@@ -260,7 +264,7 @@ def run_turret_sizing_wizard(
             firing_mode=cfg["firing_mode"],
             ripple_delay_ms=cfg["ripple_delay_ms"],
             hybrid_mode=bool(cfg.get("hybrid_mode", False)),
-            calibration_profile=calibration_profile,
+            calibration_profile=cp_eff if cp_eff else None,
         )
         sw_sm = swap["summary"]
         mass_ok = sw_sm["total_mass_kg"] <= mc_spec["max_mass_kg"]
@@ -291,7 +295,7 @@ def run_turret_sizing_wizard(
                 base_cd=float(a_sel.get("effective_cd", 0.47)),
                 aspect_mode="head_on_frontal",
                 aspect_geom=aspect_geom,
-                calibration_profile=calibration_profile,
+                calibration_profile=cp_eff if cp_eff else None,
             )
             curt_fac = 0.96 if cfg["pointing_mode"] == "divergent_curtain" else 1.0
             return round(min(99.8, 100.0 * pk * spd_pen * curt_fac), 1)
@@ -384,6 +388,8 @@ def run_red_vs_blue_duel_diagnostic(
     mount_load_limit_kn: float = 4.0,
     n_episodes: int = 30,
     seed: int = 42,
+    calibration_profile: dict[str, Any] | None = None,
+    physics_fidelity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Pit a Blue turret against a Red threat and diagnose exact breach root causes & prescriptions."""
     blue_n = normalize_blue_config(blue_config, max_barrels=12)
@@ -395,6 +401,8 @@ def run_red_vs_blue_duel_diagnostic(
         n_episodes=max(8, int(n_episodes)),
         mount_load_limit_kn=float(mount_load_limit_kn),
         seed=seed,
+        calibration_profile=calibration_profile,
+        physics_fidelity=physics_fidelity,
     )
     swap = estimate_turret_swap_c(
         n_barrels=blue_n["n_barrels"],

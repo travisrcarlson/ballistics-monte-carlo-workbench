@@ -24,7 +24,30 @@ from .catalogs import (
     get_drone_target_specs,
     get_shotgun_presets,
 )
-from .geometry import compute_drone_projected_geometry, evaluate_drone_impact
+from .geometry import compute_drone_projected_geometry, evaluate_drone_impact, evaluate_drone_impact_batch
+
+
+def get_default_physics_fidelity_profile(high_fidelity: bool = False) -> dict[str, Any]:
+    """Return canonical C-UAS high-fidelity physics configuration preset."""
+    if high_fidelity:
+        return {
+            "use_rotor_solidity": True,
+            "use_v50_ballistic_limit": True,
+            "enable_ray_shielding": True,
+            "pattern_distribution": "core_flyer_mixture",
+            "flyer_fraction": 0.14,
+            "shot_cup_separation_m": 2.5,
+            "use_oblique_ricochet": True,
+        }
+    return {
+        "use_rotor_solidity": False,
+        "use_v50_ballistic_limit": False,
+        "enable_ray_shielding": False,
+        "pattern_distribution": "gaussian",
+        "flyer_fraction": 0.12,
+        "shot_cup_separation_m": 0.0,
+        "use_oblique_ricochet": False,
+    }
 
 def generate_multishotgun_array_layout(
     layout_type: str = "circular",
@@ -635,10 +658,34 @@ def simulate_anti_drone_multishotgun_mc(
     enable_ray_shielding: bool = False,
     pattern_distribution: str = "gaussian",
     flyer_fraction: float = 0.12,
+    shot_cup_separation_m: float = 0.0,
+    use_oblique_ricochet: bool = False,
 ) -> dict[str, Any]:
     """Execute Monte Carlo simulation of an anti-drone defense volley using a multi-shotgun array."""
     rng = np.random.default_rng(seed)
     cp = dict(calibration_profile or {})
+    pf = cp.get("_physics_fidelity") if isinstance(cp.get("_physics_fidelity"), dict) else {}
+    if pf:
+        if not use_rotor_solidity:
+            use_rotor_solidity = bool(pf.get("use_rotor_solidity", False))
+        if not use_v50_ballistic_limit:
+            use_v50_ballistic_limit = bool(pf.get("use_v50_ballistic_limit", False))
+        if not enable_ray_shielding:
+            enable_ray_shielding = bool(pf.get("enable_ray_shielding", False))
+        if not use_oblique_ricochet:
+            use_oblique_ricochet = bool(pf.get("use_oblique_ricochet", False))
+        if str(pattern_distribution) == "gaussian" and pf.get("pattern_distribution"):
+            pattern_distribution = str(pf["pattern_distribution"])
+            flyer_fraction = float(pf.get("flyer_fraction", flyer_fraction))
+        if shot_cup_separation_m == 0.0 and pf.get("shot_cup_separation_m"):
+            shot_cup_separation_m = float(pf["shot_cup_separation_m"])
+
+    if str(pattern_distribution) == "gaussian" and cp.get("pattern_distribution") and str(cp.get("pattern_distribution")) != "gaussian":
+        pattern_distribution = str(cp["pattern_distribution"])
+        if cp.get("flyer_fraction") is not None:
+            flyer_fraction = float(cp["flyer_fraction"])
+
+    eff_cup_sep_m = float(shot_cup_separation_m) if shot_cup_separation_m > 0 else float(cp.get("shot_cup_separation_m", 0.0) or 0.0)
     cal_mv_scale = max(0.50, min(1.50, float(cp.get("mv_scale", 1.0) or 1.0)))
     cal_spread_factor = max(0.35, float(cp.get("spread_factor", 1.0) or 1.0))
     cal_spread_exp = max(0.80, min(1.80, float(cp.get("spread_exponent", 1.15) or 1.15)))
@@ -761,7 +808,7 @@ def simulate_anti_drone_multishotgun_mc(
     fire_times_s = compute_balanced_pair_fire_times(barrels, firing_mode=firing_mode, ripple_delay_ms=ripple_delay_ms)
 
     # 4. Aerodynamic Integration Helper (Compton Mach-Only vs Compressible Re+M + Head/Tailwind)
-    rho_air = float(temp_fx["air_density_kg_m3"])
+    rho_air = float(cp["air_density_kg_m3"]) if cp.get("air_density_kg_m3") is not None else float(temp_fx["air_density_kg_m3"])
     mu_air = float(temp_fx["air_viscosity_pa_s"])
     a_sound = float(temp_fx["speed_of_sound_mps"])
     use_mach_only = str(drag_model).lower().strip() == "mach_only_smooth_sphere"
@@ -835,6 +882,7 @@ def simulate_anti_drone_multishotgun_mc(
     all_energy_on_drone: list[float] = []
     all_impulse_on_drone: list[float] = []
     blade_pass_through_count = 0
+    ricochet_count_total = 0
     flyer_count_total = 0
     v50_samples: list[float] = []
     component_kills_tally: dict[str, int] = {"fuselage_core": 0, "battery_payload": 0, "warhead_pg7m": 0, "rotors_motors": 0, "structural_arms": 0}
@@ -905,8 +953,9 @@ def simulate_anti_drone_multishotgun_mc(
         sigma_ref = 0.381 / math.sqrt(-2.0 * math.log(1.0 - p_bench))
         theta_choke = sigma_ref / 36.58
         theta_chokes_list.append(theta_choke * wash_turb * b_temp_fx["temp_spread_mult"] * cal_spread_factor)
+        r_spread = max(0.5, float(target_distance_m) - min(eff_cup_sep_m, 0.65 * float(target_distance_m))) if eff_cup_sep_m > 0.0 else float(target_distance_m)
         sigma_radial = (
-            (0.01852 / 4.0 + theta_choke * target_distance_m * ((target_distance_m / 36.58) ** (cal_spread_exp - 1.0)))
+            (0.01852 / 4.0 + theta_choke * r_spread * ((r_spread / 36.58) ** (cal_spread_exp - 1.0)))
             * wash_turb
             * b_temp_fx["temp_spread_mult"]
             * cal_spread_factor
@@ -989,104 +1038,91 @@ def simulate_anti_drone_multishotgun_mc(
 
             use_hf_impact = bool(use_rotor_solidity or use_v50_ballistic_limit or enable_ray_shielding)
 
-            for p_idx in range(b_pellets):
-                t_flight = float(t_flight_vec[p_idx])
-                v_impact = float(v_impact_vec[p_idx])
-                t_arrival = t_fire + t_flight
+            # Vectorized impact kinematics & batch component evaluation per barrel
+            wind_lag_vec = float(crosswind_mps) * np.maximum(
+                0.0, t_flight_vec - max(0.0, float(target_distance_m)) / np.maximum(v0_vec, 1e-3)
+            )
+            diff_grav_vec = -0.5 * 9.80665 * ((t_flight_vec ** 2) - (t_flight_nominal ** 2))
+            y_impact_vec = y_bore + dy_vec + wind_lag_vec
+            z_impact_vec = z_bore + dz_vec + diff_grav_vec
+            t_arr_vec = t_fire + t_flight_vec
+            dt_target_vec = (t_arr_vec - t_flight_nominal) * (v_impact_vec / np.maximum(v_impact_vec - v_drone_x, 10.0))
+            y_rel_vec = y_impact_vec - v_drone_y * dt_target_vec
+            z_rel_vec = z_impact_vec - v_drone_z * dt_target_vec
+            ke_vec = 0.5 * b_m_kg * (v_impact_vec ** 2)
+            imp_vec = b_m_kg * v_impact_vec
 
-                # Radial dispersion + Didion crosswind lag drift + differential gravity drop
-                wind_lag_y = didion_crosswind_drift_m(crosswind_mps, t_flight, target_distance_m, float(v0_vec[p_idx]))
-                diff_grav_z = -0.5 * 9.80665 * ((t_flight ** 2) - (t_flight_nominal ** 2))
-                y_impact_raw = y_bore + float(dy_vec[p_idx]) + wind_lag_y
-                z_impact_raw = z_bore + float(dz_vec[p_idx]) + diff_grav_z
+            batch_res = evaluate_drone_impact_batch(
+                y_rel_vec / cal_avuln_lin,
+                z_rel_vec / cal_avuln_lin,
+                drone_spec,
+                ke_vec,
+                aspect_geometry=aspect_geom,
+                pellet_velocity_arr=v_impact_vec if use_hf_impact else None,
+                pellet_mass_kg=b_m_kg,
+                pellet_diameter_m=b_d_m,
+                pellet_density_g_cm3=bk["density_g_cm3"],
+                use_rotor_solidity=use_rotor_solidity,
+                use_v50_ballistic_limit=use_v50_ballistic_limit,
+                enable_ray_shielding=enable_ray_shielding,
+                use_oblique_ricochet=use_oblique_ricochet,
+                rng=rng,
+            )
+            blade_pass_through_count += int(batch_res["blade_pass_through_count"])
+            ricochet_count_total += int(batch_res["ricochet_count"])
+            if batch_res["v50_samples"]:
+                v50_samples.extend(batch_res["v50_samples"])
 
-                # Moving target displacement relative to nominal lead at arrival time
-                dt_target = (t_arrival - t_flight_nominal) * (v_impact / max(v_impact - v_drone_x, 10.0))
-                tgt_offset_y = v_drone_y * dt_target
-                tgt_offset_z = v_drone_z * dt_target
+            hit_mask_b = batch_res["is_hit"]
+            lethal_mask_b = batch_res["is_lethal"]
+            comp_list_b = batch_res["component"]
+            n_hits_b = int(np.sum(hit_mask_b))
+            if n_hits_b > 0:
+                v_hits += n_hits_b
+                barrel_stats_map[b_id]["hits_on_drone"] += n_hits_b
+                v_energy += float(np.sum(ke_vec[hit_mask_b]))
+                v_impulse += float(np.sum(imp_vec[hit_mask_b]))
 
-                y_rel = y_impact_raw - tgt_offset_y
-                z_rel = z_impact_raw - tgt_offset_z
+                for p_i in np.flatnonzero(hit_mask_b & lethal_mask_b):
+                    comp = comp_list_b[int(p_i)]
+                    v_lethal += 1
+                    barrel_stats_map[b_id]["lethal_hits"] += 1
+                    if comp == "fuselage_core":
+                        v_fuselage_lethal += 1
+                        barrel_stats_map[b_id]["fuselage_hits"] += 1
+                        component_kills_tally["fuselage_core"] += 1
+                    elif comp == "battery_payload":
+                        v_battery_lethal += 1
+                        barrel_stats_map[b_id]["fuselage_hits"] += 1
+                        component_kills_tally["battery_payload"] += 1
+                    elif comp == "warhead_pg7m":
+                        v_warhead_lethal += 1
+                        barrel_stats_map[b_id]["fuselage_hits"] += 1
+                        component_kills_tally["warhead_pg7m"] += 1
+                    elif comp.startswith("rotor_"):
+                        v_rotors_killed.add(comp)
+                        barrel_stats_map[b_id]["rotor_hits"] += 1
+                        component_kills_tally["rotors_motors"] += 1
+                    elif comp.startswith("motor_"):
+                        r_id = comp.replace("motor_", "rotor_")
+                        v_rotors_killed.add(r_id)
+                        barrel_stats_map[b_id]["rotor_hits"] += 1
+                        component_kills_tally["rotors_motors"] += 1
+                    elif comp == "structural_arm":
+                        component_kills_tally["structural_arms"] += 1
 
-                ke_pellet = 0.5 * b_m_kg * (v_impact ** 2)
-                imp_pellet = b_m_kg * v_impact
-
-                # Component hit check (incorporate empirical A_vuln area scaling cleanly)
-                if use_hf_impact:
-                    hit_info = evaluate_drone_impact(
-                        y_rel / cal_avuln_lin,
-                        z_rel / cal_avuln_lin,
-                        drone_spec,
-                        ke_pellet,
-                        aspect_geometry=aspect_geom,
-                        pellet_velocity_mps=v_impact,
-                        pellet_mass_kg=b_m_kg,
-                        pellet_diameter_m=b_d_m,
-                        pellet_density_g_cm3=bk["density_g_cm3"],
-                        use_rotor_solidity=use_rotor_solidity,
-                        use_v50_ballistic_limit=use_v50_ballistic_limit,
-                        enable_ray_shielding=enable_ray_shielding,
-                        rng=rng,
-                    )
-                    if hit_info.get("blade_pass_through"):
-                        blade_pass_through_count += 1
-                    if hit_info.get("v50_mps") is not None:
-                        v50_samples.append(float(hit_info["v50_mps"]))
-                else:
-                    hit_info = evaluate_drone_impact(
-                        y_rel / cal_avuln_lin,
-                        z_rel / cal_avuln_lin,
-                        drone_spec,
-                        ke_pellet,
-                        aspect_geometry=aspect_geom,
-                    )
-
-                if hit_info["is_hit"]:
-                    v_hits += 1
-                    barrel_stats_map[b_id]["hits_on_drone"] += 1
-                    v_energy += ke_pellet
-                    v_impulse += imp_pellet
-
-                    comp = hit_info["component"]
-                    if hit_info["is_lethal"]:
-                        v_lethal += 1
-                        barrel_stats_map[b_id]["lethal_hits"] += 1
-                        if comp == "fuselage_core":
-                            v_fuselage_lethal += 1
-                            barrel_stats_map[b_id]["fuselage_hits"] += 1
-                            component_kills_tally["fuselage_core"] += 1
-                        elif comp == "battery_payload":
-                            v_battery_lethal += 1
-                            barrel_stats_map[b_id]["fuselage_hits"] += 1
-                            component_kills_tally["battery_payload"] += 1
-                        elif comp == "warhead_pg7m":
-                            v_warhead_lethal += 1
-                            barrel_stats_map[b_id]["fuselage_hits"] += 1
-                            component_kills_tally["warhead_pg7m"] += 1
-                        elif comp.startswith("rotor_"):
-                            v_rotors_killed.add(comp)
-                            barrel_stats_map[b_id]["rotor_hits"] += 1
-                            component_kills_tally["rotors_motors"] += 1
-                        elif comp.startswith("motor_"):
-                            r_id = comp.replace("motor_", "rotor_")
-                            v_rotors_killed.add(r_id)
-                            barrel_stats_map[b_id]["rotor_hits"] += 1
-                            component_kills_tally["rotors_motors"] += 1
-                        elif comp == "structural_arm":
-                            component_kills_tally["structural_arms"] += 1
-
-                # Record sample volley for visualization (first volley)
-                if v_idx == 0:
-                    sample_scatter["y"].append(round(y_rel, 4))
-                    sample_scatter["z"].append(round(z_rel, 4))
-                    sample_scatter["barrel_id"].append(b_id)
-                    sample_scatter["is_hit"].append(hit_info["is_hit"])
-                    sample_scatter["is_lethal"].append(hit_info["is_lethal"])
-                    sample_scatter["component"].append(hit_info["component"])
-                    sample_scatter["striking_energy_j"].append(round(ke_pellet, 2))
-                    sample_scatter["striking_impulse_ns"].append(round(imp_pellet, 4))
-                    sample_scatter["striking_velocity_mps"].append(round(v_impact, 1))
-                    sample_scatter["flight_time_s"].append(round(t_arrival, 4))
+            # Record sample volley for visualization (first volley)
+            if v_idx == 0:
+                sample_scatter["y"].extend(round(float(val), 4) for val in y_rel_vec)
+                sample_scatter["z"].extend(round(float(val), 4) for val in z_rel_vec)
+                sample_scatter["barrel_id"].extend([b_id] * b_pellets)
+                sample_scatter["is_hit"].extend(bool(val) for val in hit_mask_b)
+                sample_scatter["is_lethal"].extend(bool(val) for val in lethal_mask_b)
+                sample_scatter["component"].extend(comp_list_b)
+                sample_scatter["striking_energy_j"].extend(round(float(val), 2) for val in ke_vec)
+                sample_scatter["striking_impulse_ns"].extend(round(float(val), 4) for val in imp_vec)
+                sample_scatter["striking_velocity_mps"].extend(round(float(val), 1) for val in v_impact_vec)
+                sample_scatter["flight_time_s"].extend(round(float(val), 4) for val in t_arr_vec)
 
         if v_hits >= 1:
             hits_volley_count += 1
@@ -1232,14 +1268,24 @@ def simulate_anti_drone_multishotgun_mc(
             "annex_c_analytical": annex_c_analytical,
             "physics_fidelity_mode": (
                 "high_fidelity"
-                if (use_rotor_solidity or use_v50_ballistic_limit or enable_ray_shielding or str(pattern_distribution) != "gaussian")
+                if (
+                    use_rotor_solidity
+                    or use_v50_ballistic_limit
+                    or enable_ray_shielding
+                    or use_oblique_ricochet
+                    or eff_cup_sep_m > 0.0
+                    or str(pattern_distribution) != "gaussian"
+                )
                 else "standard"
             ),
             "use_rotor_solidity": bool(use_rotor_solidity),
             "use_v50_ballistic_limit": bool(use_v50_ballistic_limit),
             "enable_ray_shielding": bool(enable_ray_shielding),
+            "use_oblique_ricochet": bool(use_oblique_ricochet),
+            "shot_cup_separation_m": round(float(eff_cup_sep_m), 2),
             "pattern_distribution": str(pattern_distribution),
             "blade_pass_through_count": int(blade_pass_through_count),
+            "ricochet_count": int(ricochet_count_total),
             "flyer_count": int(flyer_count_total),
             "mean_v50_mps": round(float(np.mean(v50_samples)), 1) if v50_samples else None,
         },
@@ -1513,6 +1559,8 @@ def evaluate_antidrone_effective_range_envelope(
     enable_ray_shielding: bool = False,
     pattern_distribution: str = "gaussian",
     flyer_fraction: float = 0.12,
+    shot_cup_separation_m: float = 0.0,
+    use_oblique_ricochet: bool = False,
 ) -> dict[str, Any]:
     """Sweep slant range for an anti-drone array to derive P_kill(R), R80, and R50 thresholds."""
     stations = sorted(float(d) for d in (distance_stations_m or [15.0, 25.0, 35.0, 45.0, 55.0, 65.0, 75.0, 85.0]))
@@ -1564,6 +1612,8 @@ def evaluate_antidrone_effective_range_envelope(
                 enable_ray_shielding=enable_ray_shielding,
                 pattern_distribution=pattern_distribution,
                 flyer_fraction=flyer_fraction,
+                shot_cup_separation_m=shot_cup_separation_m,
+                use_oblique_ricochet=use_oblique_ricochet,
             )
             sm = sim["summary"]
             records.append({
@@ -1665,6 +1715,8 @@ def evaluate_antidrone_range_speed_heatmap(
     enable_ray_shielding: bool = False,
     pattern_distribution: str = "gaussian",
     flyer_fraction: float = 0.12,
+    shot_cup_separation_m: float = 0.0,
+    use_oblique_ricochet: bool = False,
 ) -> dict[str, Any]:
     """Compute a 2D Speed x Slant-Range P_kill engagement envelope heatmap."""
     d_stations = sorted(float(d) for d in (distance_stations_m or [15.0, 25.0, 35.0, 45.0, 60.0, 75.0]))
@@ -1725,6 +1777,8 @@ def evaluate_antidrone_range_speed_heatmap(
                 enable_ray_shielding=enable_ray_shielding,
                 pattern_distribution=pattern_distribution,
                 flyer_fraction=flyer_fraction,
+                shot_cup_separation_m=shot_cup_separation_m,
+                use_oblique_ricochet=use_oblique_ricochet,
             )
             sm = sim["summary"]
             pk = float(sm["kill_probability_pct"])

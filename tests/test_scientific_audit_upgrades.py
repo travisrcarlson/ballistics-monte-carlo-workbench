@@ -197,15 +197,15 @@ def test_small_arms_terrain_and_calibration_fixes() -> None:
 
 
 def test_extended_vv_benchmarks_certificates_api_and_cli(tmp_path: Path) -> None:
-    assert ammo_mc.__version__ == "1.3.0"
+    assert ammo_mc.__version__ == "1.8.0"
 
     kb = get_kb()
     assert len(kb.formulas_by_id) == 96
-    assert len(kb.sources) == 81
+    assert len(kb.sources) == 87
     assert {f["formula_id"] for f in kb.formulas if f.get("is_flagged")} == {"TB-12", "TF-12", "TP-01"}
 
     lit = build_literature_audit_summary()
-    assert lit["total_sources"] == 81
+    assert lit["total_sources"] == 87
     assert lit["linked_source_coverage_pct"] == 100.0
     assert sorted(lit["flagged_formula_ids"]) == ["TB-12", "TF-12", "TP-01"]
 
@@ -224,7 +224,7 @@ def test_extended_vv_benchmarks_certificates_api_and_cli(tmp_path: Path) -> None
     client = TestClient(app)
     res_h = client.get("/health")
     assert res_h.status_code == 200
-    assert res_h.json()["version"] == "1.3.0"
+    assert res_h.json()["version"] == "1.8.0"
 
     res_b = client.get("/validate/benchmarks?seed=42&n_mc=20000")
     assert res_b.status_code == 200

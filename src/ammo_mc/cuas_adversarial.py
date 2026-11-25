@@ -863,6 +863,7 @@ def evaluate_red_vs_blue_matchup_mc(
     _geom_cache: dict[tuple[str, str], float] | None = None,
     calibration_profile: dict[str, Any] | None = None,
     robust_uncertainty_mode: bool = False,
+    physics_fidelity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Evaluate one (Blue turret, Red swarm) pairing with coupled recoil, FCS & swarm MC."""
     rng = np.random.default_rng(seed)
@@ -965,6 +966,9 @@ def evaluate_red_vs_blue_matchup_mc(
     r_eq_sq = area_vuln / math.pi
 
     cal = dict(calibration_profile or {})
+    pf = dict(physics_fidelity) if isinstance(physics_fidelity, dict) else (
+        dict(cal["_physics_fidelity"]) if isinstance(cal.get("_physics_fidelity"), dict) else None
+    )
     use_uncert = bool(robust_uncertainty_mode or calibration_profile is not None)
     spread_factor_nom = float(cal.get("spread_factor", 1.0))
     spread_factor_se = float(cal.get("spread_factor_se", 0.06 if robust_uncertainty_mode else 0.0))
@@ -1007,7 +1011,9 @@ def evaluate_red_vs_blue_matchup_mc(
         bias_wind_m = ((aim_bias_mrad / 1000.0) * R + ep_wind_mps * 0.012 * R) if use_uncert else 0.0
         e_lead_tot = e_maneuver + servo_lag_m + e_lead_draw * sigma_meas + 0.35 * bias_wind_m
 
-        sigma_r = (0.00463 + ring_phys["theta_choke"] * R * ((R / 36.58) ** 0.15)) * ep_spread_mult
+        cup_sep_m = float((pf or {}).get("shot_cup_separation_m", cal.get("shot_cup_separation_m", 0.0)) or 0.0)
+        R_spr = max(0.5, R - min(cup_sep_m, 0.65 * R)) if cup_sep_m > 0.0 else R
+        sigma_r = (0.00463 + ring_phys["theta_choke"] * R_spr * ((R_spr / 36.58) ** 0.15)) * ep_spread_mult
         if blue_n["pointing_mode"] == "divergent_curtain":
             sigma_curt = 0.58 * (float(blue_n["splay_angle_mrad"]) / 1000.0) * R
             sigma_eff = math.hypot(sigma_r, sigma_curt)
@@ -1017,13 +1023,29 @@ def evaluate_red_vs_blue_matchup_mc(
             sigma_eff = sigma_r
 
         sigma_eff_sq = max(sigma_eff ** 2, 1e-6)
-        p_pel_center = 1.0 - math.exp(-r_eq_sq / (2.0 * sigma_eff_sq))
+        r_eq_sq_eff = r_eq_sq * (0.68 if (pf and bool(pf.get("use_rotor_solidity", False))) else 1.0)
+        p_pel_center = 1.0 - math.exp(-r_eq_sq_eff / (2.0 * sigma_eff_sq))
         off_axis_atten = math.exp(-(e_lead_tot ** 2) / (2.0 * sigma_eff_sq))
         density_dilution = sigma_r / max(sigma_eff, sigma_r)
         p_pel = p_pel_center * off_axis_atten * (0.45 + 0.55 * density_dilution)
 
-        energy_fac = 0.55 + 0.45 * min(1.0, max(0.0, ke_j - e_rotor) / max(e_core - e_rotor, 1.0))
-        lam = n_shot_bbls * ring_phys["pellets_per_shot"] * p_pel * 0.80 * energy_fac
+        if pf and bool(pf.get("use_v50_ballistic_limit", False)):
+            from ammo_mc.small_arms import compute_component_v50_perforation
+
+            v50_res = compute_component_v50_perforation(
+                "fuselage_core",
+                pellet_velocity_mps=v_imp,
+                pellet_mass_kg=ring_phys["m_kg"],
+                pellet_diameter_m=math.sqrt((ring_phys["m_kg"] / 11300.0) * 6.0 / math.pi),
+                enable_ricochet=bool(pf.get("use_oblique_ricochet", False)),
+            )
+            energy_fac = 0.30 + 0.70 * float(v50_res["p_perforation"])
+        else:
+            energy_fac = 0.55 + 0.45 * min(1.0, max(0.0, ke_j - e_rotor) / max(e_core - e_rotor, 1.0))
+
+        fly_mult = (1.0 - 0.55 * float(pf.get("flyer_fraction", 0.12))) if (pf and str(pf.get("pattern_distribution", "gaussian")) != "gaussian") else 1.0
+        shld_mult = 0.90 if (pf and bool(pf.get("enable_ray_shielding", False))) else 1.0
+        lam = n_shot_bbls * ring_phys["pellets_per_shot"] * p_pel * 0.80 * energy_fac * fly_mult * shld_mult
         lam = min(lam, 60.0)
         p_surv = 0.0
         term = math.exp(-lam)
@@ -1282,6 +1304,7 @@ def evaluate_red_vs_blue_matchup_mc(
         "red_utility": round(100.0 - blue_utility, 2),
         "cvar20_utility": round(cvar20_u, 2),
         "robust_uncertainty_mode": bool(robust_uncertainty_mode),
+        "physics_fidelity_mode": "high_fidelity" if pf else "standard",
         "hybrid_mode": is_hybrid,
         "zero_breach_pct": round(zero_breach_pct, 1),
         "breach_rate_pct": round(100.0 - zero_breach_pct, 1),
@@ -1433,6 +1456,7 @@ def run_adversarial_coevolution_ml(
     allow_hybrid: bool = False,
     robust_uncertainty_mode: bool = False,
     calibration_profile: dict[str, Any] | None = None,
+    physics_fidelity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run adversarial Red-vs-Blue co-evolution backed by GP Bayesian optimization & LP Nash solver."""
     rng = np.random.default_rng(seed)
@@ -1493,6 +1517,7 @@ def run_adversarial_coevolution_ml(
             _geom_cache=geom_cache,
             calibration_profile=calibration_profile,
             robust_uncertainty_mode=robust_uncertainty_mode,
+            physics_fidelity=physics_fidelity,
         )
         eval_cache[(bi, rj)] = m_res
         feat_vec = encode_matchup_features(b_cfg, r_cfg)
@@ -1733,6 +1758,7 @@ def run_adversarial_coevolution_ml(
             "max_swarm_size": max_swarm_size,
             "allow_hybrid": bool(allow_hybrid),
             "robust_uncertainty_mode": bool(robust_uncertainty_mode),
+            "physics_fidelity_mode": "high_fidelity" if (physics_fidelity or (isinstance(calibration_profile, dict) and calibration_profile.get("_physics_fidelity"))) else "standard",
             "calibrated_digital_twin": bool(calibration_profile is not None),
         },
     }

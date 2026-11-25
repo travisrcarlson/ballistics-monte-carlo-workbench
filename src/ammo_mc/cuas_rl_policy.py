@@ -220,8 +220,10 @@ def evaluate_fire_control_policy_mc(
     n_episodes_per_scenario: int = 12,
     breach_keepout_radius_m: float = 12.0,
     seed: int = 42,
+    physics_fidelity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Evaluate a NeuralFireControlPolicy or named heuristic across a multi-threat swarm curriculum."""
+    pf = dict(physics_fidelity) if isinstance(physics_fidelity, dict) else None
     blue_n = normalize_blue_config(blue_config)
     scenarios = [normalize_red_config(s, max_swarm_size=12) for s in (red_scenarios or get_default_rl_training_curriculum())]
     is_neural = isinstance(policy_or_heuristic, NeuralFireControlPolicy)
@@ -291,7 +293,9 @@ def evaluate_fire_control_policy_mc(
         sigma_meas = max(0.02, sigma_az_rad * R * 1.15)
         e_lead_tot = e_maneuver + servo_lag_m + e_lead_draw * sigma_meas
 
-        sigma_r = 0.00463 + ring_p["theta_choke"] * R * ((R / 36.58) ** 0.15)
+        cup_sep_m = float((pf or {}).get("shot_cup_separation_m", 0.0) or 0.0)
+        R_spr = max(0.5, R - min(cup_sep_m, 0.65 * R)) if cup_sep_m > 0.0 else R
+        sigma_r = 0.00463 + ring_p["theta_choke"] * R_spr * ((R_spr / 36.58) ** 0.15)
         if blue_n["pointing_mode"] == "divergent_curtain":
             sigma_curt = 0.58 * (float(blue_n["splay_angle_mrad"]) / 1000.0) * R
             sigma_eff = math.hypot(sigma_r, sigma_curt)
@@ -301,12 +305,27 @@ def evaluate_fire_control_policy_mc(
             sigma_eff = sigma_r
 
         sigma_eff_sq = max(sigma_eff ** 2, 1e-6)
-        p_pel_center = 1.0 - math.exp(-r_eq_sq_v / (2.0 * sigma_eff_sq))
+        r_eq_eff = r_eq_sq_v * (0.68 if (pf and bool(pf.get("use_rotor_solidity", False))) else 1.0)
+        p_pel_center = 1.0 - math.exp(-r_eq_eff / (2.0 * sigma_eff_sq))
         off_axis_atten = math.exp(-(e_lead_tot ** 2) / (2.0 * sigma_eff_sq))
         density_dilution = sigma_r / max(sigma_eff, sigma_r)
         p_pel = p_pel_center * off_axis_atten * (0.45 + 0.55 * density_dilution)
-        energy_fac = 0.55 + 0.45 * min(1.0, max(0.0, ke_j - e_rotor_v) / max(e_core_v - e_rotor_v, 1.0))
-        lam = min(60.0, n_bbls_shot * ring_p["pellets"] * p_pel * 0.80 * energy_fac)
+        if pf and bool(pf.get("use_v50_ballistic_limit", False)):
+            from ammo_mc.small_arms import compute_component_v50_perforation
+
+            v50_res = compute_component_v50_perforation(
+                "fuselage_core",
+                pellet_velocity_mps=v_imp,
+                pellet_mass_kg=ring_p["m_kg"],
+                pellet_diameter_m=math.sqrt((ring_p["m_kg"] / 11300.0) * 6.0 / math.pi),
+                enable_ricochet=bool(pf.get("use_oblique_ricochet", False)),
+            )
+            energy_fac = 0.30 + 0.70 * float(v50_res["p_perforation"])
+        else:
+            energy_fac = 0.55 + 0.45 * min(1.0, max(0.0, ke_j - e_rotor_v) / max(e_core_v - e_rotor_v, 1.0))
+        fly_m = (1.0 - 0.55 * float(pf.get("flyer_fraction", 0.12))) if (pf and str(pf.get("pattern_distribution", "gaussian")) != "gaussian") else 1.0
+        shld_m = 0.90 if (pf and bool(pf.get("enable_ray_shielding", False))) else 1.0
+        lam = min(60.0, n_bbls_shot * ring_p["pellets"] * p_pel * 0.80 * energy_fac * fly_m * shld_m)
         p_surv = 0.0
         term = math.exp(-lam)
         for k in range(n_crit_v):
@@ -585,6 +604,7 @@ def train_fire_control_policy_es(
     lr: float = 0.12,
     n_eval_episodes: int = 16,
     seed: int = 42,
+    physics_fidelity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Train a NeuralFireControlPolicy with Antithetic Natural Evolution Strategies & benchmark vs heuristics."""
     blue_n = normalize_blue_config(
@@ -619,7 +639,7 @@ def train_fire_control_policy_es(
 
     # Initial Gen-0 baseline check
     pol.set_flat_params(theta)
-    gen0_res = evaluate_fire_control_policy_mc(blue_n, pol, curriculum, n_episodes_per_scenario=ep_train, seed=seed)
+    gen0_res = evaluate_fire_control_policy_mc(blue_n, pol, curriculum, n_episodes_per_scenario=ep_train, seed=seed, physics_fidelity=physics_fidelity)
     best_theta = theta.copy()
     best_score = float(gen0_res["mean_reward"])
     training_history: list[dict[str, Any]] = [
@@ -641,11 +661,11 @@ def train_fire_control_policy_es(
         for i in range(n_pairs):
             pol.set_flat_params(theta + float(sigma_es) * eps[i])
             f_pos[i] = float(
-                evaluate_fire_control_policy_mc(blue_n, pol, curriculum, n_episodes_per_scenario=ep_train, seed=gen_seed)["mean_reward"]
+                evaluate_fire_control_policy_mc(blue_n, pol, curriculum, n_episodes_per_scenario=ep_train, seed=gen_seed, physics_fidelity=physics_fidelity)["mean_reward"]
             )
             pol.set_flat_params(theta - float(sigma_es) * eps[i])
             f_neg[i] = float(
-                evaluate_fire_control_policy_mc(blue_n, pol, curriculum, n_episodes_per_scenario=ep_train, seed=gen_seed)["mean_reward"]
+                evaluate_fire_control_policy_mc(blue_n, pol, curriculum, n_episodes_per_scenario=ep_train, seed=gen_seed, physics_fidelity=physics_fidelity)["mean_reward"]
             )
 
         all_f = np.concatenate([f_pos, f_neg])
@@ -659,7 +679,7 @@ def train_fire_control_policy_es(
         theta = theta + momentum
 
         pol.set_flat_params(theta)
-        cur_eval = evaluate_fire_control_policy_mc(blue_n, pol, curriculum, n_episodes_per_scenario=ep_train, seed=gen_seed)
+        cur_eval = evaluate_fire_control_policy_mc(blue_n, pol, curriculum, n_episodes_per_scenario=ep_train, seed=gen_seed, physics_fidelity=physics_fidelity)
         if float(cur_eval["mean_reward"]) >= best_score:
             best_score = float(cur_eval["mean_reward"])
             best_theta = theta.copy()
@@ -680,10 +700,10 @@ def train_fire_control_policy_es(
     # Full paired benchmark against all 3 heuristic baselines
     bench_seed = seed + 555
     eval_eps = max(8, int(n_eval_episodes))
-    rl_bench = evaluate_fire_control_policy_mc(blue_n, pol, curriculum, n_episodes_per_scenario=eval_eps, seed=bench_seed)
+    rl_bench = evaluate_fire_control_policy_mc(blue_n, pol, curriculum, n_episodes_per_scenario=eval_eps, seed=bench_seed, physics_fidelity=physics_fidelity)
     heur_names = ["minimum_time_to_breach", "nearest_slant_range", "minimum_slew_angle"]
     heur_results = [
-        evaluate_fire_control_policy_mc(blue_n, h_name, curriculum, n_episodes_per_scenario=eval_eps, seed=bench_seed)
+        evaluate_fire_control_policy_mc(blue_n, h_name, curriculum, n_episodes_per_scenario=eval_eps, seed=bench_seed, physics_fidelity=physics_fidelity)
         for h_name in heur_names
     ]
     benchmark_rows = [rl_bench] + heur_results
@@ -765,6 +785,7 @@ def run_hil_fire_control_trace(
     dt_ms: float = 100.0,
     breach_radius_m: float = 12.0,
     seed: int = 42,
+    physics_fidelity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Step a trained RL or heuristic fire-control policy through recorded drone telemetry millisecond-by-millisecond."""
     import csv as _csv
@@ -871,6 +892,7 @@ def run_hil_fire_control_trace(
                 drone_spec=d_spec,
                 base_cd=float(ammo.get("effective_cd", 0.47)),
                 calibration_profile=calibration_profile,
+                physics_fidelity=physics_fidelity,
             )
             candidates.append(
                 {
@@ -969,6 +991,7 @@ def run_hil_fire_control_trace(
                 drone_spec=sel["d_spec"],
                 base_cd=float(ammo.get("effective_cd", 0.47)),
                 calibration_profile=calibration_profile,
+                physics_fidelity=physics_fidelity,
             )
             reason = f"FIRE {burst_cmd}B @ {sel['tid']} ({sel['range_m']:.1f} m, est Pk {pk_est:.0f}%)"
             if pk_est >= 82.0:
