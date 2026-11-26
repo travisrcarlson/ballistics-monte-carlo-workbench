@@ -361,6 +361,7 @@ def _cached_antidrone_array_mc(
     shot_sigma_cv: float = 0.0,
     penetration_model: str = "energy",
     use_markov_kill_tree: bool = False,
+    site_altitude_m: float = 0.0,
 ) -> dict[str, Any]:
     custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
     custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
@@ -417,6 +418,7 @@ def _cached_antidrone_array_mc(
         shot_sigma_cv=shot_sigma_cv,
         penetration_model=penetration_model,
         use_markov_kill_tree=use_markov_kill_tree,
+        site_altitude_m=site_altitude_m,
     )
 
 
@@ -473,6 +475,7 @@ def _cached_antidrone_range_envelope(
     shot_sigma_cv: float = 0.0,
     penetration_model: str = "energy",
     use_markov_kill_tree: bool = False,
+    site_altitude_m: float = 0.0,
 ) -> dict[str, Any]:
     custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
     custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
@@ -530,6 +533,7 @@ def _cached_antidrone_range_envelope(
         shot_sigma_cv=shot_sigma_cv,
         penetration_model=penetration_model,
         use_markov_kill_tree=use_markov_kill_tree,
+        site_altitude_m=site_altitude_m,
     )
 
 
@@ -585,6 +589,7 @@ def _cached_antidrone_range_speed_heatmap(
     shot_sigma_cv: float = 0.0,
     penetration_model: str = "energy",
     use_markov_kill_tree: bool = False,
+    site_altitude_m: float = 0.0,
 ) -> dict[str, Any]:
     custom_specs = json.loads(custom_barrel_specs_json) if custom_barrel_specs_json else None
     custom_drone = json.loads(custom_drone_spec_json) if custom_drone_spec_json else None
@@ -641,6 +646,7 @@ def _cached_antidrone_range_speed_heatmap(
         shot_sigma_cv=shot_sigma_cv,
         penetration_model=penetration_model,
         use_markov_kill_tree=use_markov_kill_tree,
+        site_altitude_m=site_altitude_m,
     )
 
 
@@ -668,6 +674,9 @@ def _cached_closed_loop_fcs(
     dead_time_preset: str = "eo_60hz_1stream",
     use_heavy_tailed_atr: bool = False,
     enable_aspect_rcs_nulls: bool = False,
+    use_iterative_3d_lead_solver: bool = False,
+    site_altitude_m: float = 0.0,
+    target_elevation_deg: float = 15.0,
 ) -> dict[str, Any]:
     return simulate_closed_loop_fcs_engagement_mc(
         sensor_preset=sensor_preset,
@@ -692,6 +701,9 @@ def _cached_closed_loop_fcs(
         dead_time_preset=dead_time_preset,
         use_heavy_tailed_atr=use_heavy_tailed_atr,
         enable_aspect_rcs_nulls=enable_aspect_rcs_nulls,
+        use_iterative_3d_lead_solver=use_iterative_3d_lead_solver,
+        site_altitude_m=site_altitude_m,
+        target_elevation_deg=target_elevation_deg,
     )
 
 
@@ -746,6 +758,8 @@ def _cached_pellet_fallout_sdz(
     enable_wind_shear: bool,
     n_sample_pellets: int = 260,
     seed: int = 42,
+    site_altitude_m: float = 0.0,
+    wind_profile_mode: str = "power_law",
 ) -> dict[str, Any]:
     return simulate_cuas_pellet_fallout_hazard(
         layout_type=layout_type,
@@ -760,6 +774,8 @@ def _cached_pellet_fallout_sdz(
         enable_wind_shear=enable_wind_shear,
         n_sample_pellets=n_sample_pellets,
         seed=seed,
+        site_altitude_m=site_altitude_m,
+        wind_profile_mode=wind_profile_mode,
     )
 
 
@@ -1211,6 +1227,7 @@ def _cached_unified_raid(
     outer_layer_type: str = "none",
     calibration_profile_json: str = "",
     physics_fidelity_json: str = "",
+    wta_policy: str = "nearest_tti",
 ) -> dict[str, Any]:
     from ammo_mc.cuas_raid import simulate_unified_tactical_raid_mc
     from ammo_mc.terrain_dem import TerrainDEMGrid
@@ -1242,6 +1259,7 @@ def _cached_unified_raid(
         outer_layer_type=outer_layer_type,
         calibration_profile=json.loads(calibration_profile_json) if calibration_profile_json else None,
         physics_fidelity=json.loads(physics_fidelity_json) if physics_fidelity_json else None,
+        wta_policy=wta_policy,
     )
 
 
@@ -1455,6 +1473,11 @@ def _cached_collateral_safety_envelope(
     seed: int = 42,
     drone_mass_kg: float = 1.5,
     drone_altitude_m: float = 35.0,
+    site_altitude_m: float = 0.0,
+    wind_profile_mode: str = "power_law",
+    intercept_range_m: float = 40.0,
+    drone_speed_mps: float = 25.0,
+    warhead_blast_radius_m: float = 8.0,
 ) -> dict[str, Any]:
     from ammo_mc.cuas_safety_envelope import evaluate_cuas_collateral_safety_envelope
 
@@ -1475,6 +1498,158 @@ def _cached_collateral_safety_envelope(
         seed=seed,
         drone_mass_kg=drone_mass_kg,
         drone_altitude_m=drone_altitude_m,
+        site_altitude_m=site_altitude_m,
+        wind_profile_mode=wind_profile_mode,
+        intercept_range_m=intercept_range_m,
+        drone_speed_mps=drone_speed_mps,
+        warhead_blast_radius_m=warhead_blast_radius_m,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_l0_epistemic_envelope(
+    ammo_preset: str,
+    choke: str,
+    drone_class: str,
+    n_barrels: int,
+    aim_error_mrad: float,
+    drone_speed_mps: float,
+    drone_altitude_m: float,
+    warhead_blast_radius_m: float,
+    drag_law: str,
+    site_altitude_m: float,
+    temp_c: float,
+    n_outer: int = 64,
+    seed: int = 42,
+) -> dict[str, Any]:
+    from ammo_mc.cuas_v21_science import run_cuas_l0_epistemic_envelope
+
+    return run_cuas_l0_epistemic_envelope(
+        ammo_preset=ammo_preset,
+        choke=choke,
+        drone_class=drone_class,
+        n_barrels=n_barrels,
+        aim_error_mrad=aim_error_mrad,
+        drone_speed_mps=drone_speed_mps,
+        drone_altitude_m=drone_altitude_m,
+        warhead_blast_radius_m=warhead_blast_radius_m,
+        drag_law=drag_law,
+        site_altitude_m=site_altitude_m,
+        temp_c=temp_c,
+        n_outer=n_outer,
+        seed=seed,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_morris_sobol(
+    ammo_preset: str,
+    choke: str,
+    drone_class: str,
+    n_barrels: int,
+    aim_error_mrad: float,
+    drone_speed_mps: float,
+    target_range_m: float,
+    drag_law: str,
+    site_altitude_m: float = 0.0,
+    n_trajectories: int = 20,
+    n_base: int = 64,
+    seed: int = 42,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    from ammo_mc.cuas_v21_science import run_cuas_morris_screening, run_cuas_sobol_sensitivity
+
+    mor = run_cuas_morris_screening(
+        ammo_preset=ammo_preset,
+        choke=choke,
+        drone_class=drone_class,
+        n_barrels=n_barrels,
+        aim_error_mrad=aim_error_mrad,
+        drone_speed_mps=drone_speed_mps,
+        target_range_m=target_range_m,
+        drag_law=drag_law,
+        site_altitude_m=site_altitude_m,
+        n_trajectories=n_trajectories,
+        seed=seed,
+    )
+    sob = run_cuas_sobol_sensitivity(
+        ammo_preset=ammo_preset,
+        choke=choke,
+        drone_class=drone_class,
+        n_barrels=n_barrels,
+        aim_error_mrad=aim_error_mrad,
+        drone_speed_mps=drone_speed_mps,
+        target_range_m=target_range_m,
+        drag_law=drag_law,
+        site_altitude_m=site_altitude_m,
+        n_base=n_base,
+        seed=seed,
+    )
+    return mor, sob
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_doctrine_comparator(
+    ammo_preset: str,
+    choke: str,
+    drone_class: str,
+    n_barrels: int,
+    barrels_per_burst: int,
+    magazine_shells: int,
+    r_start_m: float,
+    drone_speed_mps: float,
+    drone_altitude_m: float,
+    bda_delay_s: float,
+    aim_bias_sigma_mrad: float,
+    ar1_rho: float,
+    n_trials: int = 1000,
+    seed: int = 42,
+    site_altitude_m: float = 0.0,
+) -> dict[str, Any]:
+    from ammo_mc.cuas_v21_science import compare_cuas_engagement_doctrines
+
+    return compare_cuas_engagement_doctrines(
+        ammo_preset=ammo_preset,
+        choke=choke,
+        drone_class=drone_class,
+        n_barrels=n_barrels,
+        barrels_per_burst=barrels_per_burst,
+        magazine_shells=magazine_shells,
+        r_start_m=r_start_m,
+        drone_speed_mps=drone_speed_mps,
+        drone_altitude_m=drone_altitude_m,
+        bda_delay_s=bda_delay_s,
+        aim_bias_sigma_mrad=aim_bias_sigma_mrad,
+        ar1_rho=ar1_rho,
+        n_trials=n_trials,
+        seed=seed,
+        site_altitude_m=site_altitude_m,
+    )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_surrogate_pareto(
+    drone_class: str,
+    drone_speed_mps: float,
+    drone_altitude_m: float,
+    aim_error_mrad: float,
+    site_altitude_m: float,
+    recoil_limit_kn: float,
+    n_doe: int = 44,
+    n_candidates: int = 320,
+    seed: int = 42,
+) -> dict[str, Any]:
+    from ammo_mc.cuas_v21_science import run_cuas_surrogate_pareto_study
+
+    return run_cuas_surrogate_pareto_study(
+        drone_class=drone_class,
+        drone_speed_mps=drone_speed_mps,
+        drone_altitude_m=drone_altitude_m,
+        aim_error_mrad=aim_error_mrad,
+        site_altitude_m=site_altitude_m,
+        recoil_limit_kn=recoil_limit_kn,
+        n_doe=n_doe,
+        n_candidates=n_candidates,
+        seed=seed,
     )
 
 

@@ -378,5 +378,59 @@ def test_ui_v20_rigor_badges_usable_window_and_workbook_vv_tab() -> None:
     assert any("Usable Engagement Window" in e.label for e in at_c1.expander)
 
 
+def test_ui_v21_epistemic_doctrine_pareto_gis_manifest_and_110_vv() -> None:
+    """Verify v2.1.0 UI features across Stages 1-4 and 110/110 Workbook V&V tab."""
+    # Stage 1: L0 epistemic & empirical anchors + manifest drawer + site altitude slider
+    at_s1 = AppTest.from_file(ROOT_APP, default_timeout=90)
+    at_s1.session_state["authenticated"] = True
+    at_s1.query_params["wb"] = "cuas"
+    at_s1.query_params["mod"] = "array"
+    at_s1.run()
+    assert not at_s1.exception
+    assert any("Scenario Manifest" in e.label for e in at_s1.expander)
+    at_s1.checkbox(key="cuas21_show_l0").check()
+    at_s1.checkbox(key="cuas21_show_anchors").check()
+    at_s1.run()
+    assert not at_s1.exception
+
+    # Stage 2: FCS & Doctrine Lab
+    at_s2 = AppTest.from_file(ROOT_APP, default_timeout=90)
+    at_s2.session_state["authenticated"] = True
+    at_s2.query_params["wb"] = "cuas"
+    at_s2.query_params["mod"] = "fcs"
+    at_s2.run()
+    assert not at_s2.exception
+    assert any("Doctrine" in e.label for e in at_s2.expander)
+    assert any(c.key == "cuas21_fcs_iter_lead" for c in at_s2.checkbox)
+
+    # Stage 3: Site Defense GIS with Shotfall & UXO overlay
+    at_s3 = AppTest.from_file(ROOT_APP, default_timeout=90)
+    at_s3.session_state["authenticated"] = True
+    at_s3.query_params["wb"] = "cuas"
+    at_s3.query_params["mod"] = "site_defense"
+    at_s3.run()
+    assert not at_s3.exception
+
+    # Stage 4: Sensitivity (Morris/Sobol) & Surrogate Pareto
+    at_s4 = AppTest.from_file(ROOT_APP, default_timeout=90)
+    at_s4.session_state["authenticated"] = True
+    at_s4.query_params["wb"] = "cuas"
+    at_s4.query_params["mod"] = "sensitivity"
+    at_s4.run()
+    assert not at_s4.exception
+    assert any("Morris" in t.label or "Sobol" in t.label for t in at_s4.tabs)
+    assert any("Pareto" in t.label for t in at_s4.tabs)
+
+    # Validation: 110/110 + 12 Anchors
+    at_val = AppTest.from_file(ROOT_APP, default_timeout=90)
+    at_val.session_state["authenticated"] = True
+    at_val.query_params["wb"] = "validation"
+    at_val.run()
+    assert not at_val.exception
+    assert any("110/110" in t.label for t in at_val.tabs)
+    assert at_val.session_state["cuas_wb_vv_matrix"]["summary"]["canonical_vc_passed"] == 110
+
+
+
 
 

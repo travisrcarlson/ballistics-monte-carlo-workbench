@@ -670,6 +670,9 @@ def build_cuas_site_geojson(
     origin_lon: float = -106.4000,
     sdz_radius_m: float = 280.0,
     heading_deg: float = 0.0,
+    shotfall_contour_xy_m: list[list[float]] | list[tuple[float, float]] | None = None,
+    uxo_ellipse_xy_m: list[list[float]] | list[tuple[float, float]] | None = None,
+    shotfall_label: str = "High-Elevation Shotfall 95% Dispersion",
 ) -> dict[str, Any]:
     """Build RFC 7946 GeoJSON FeatureCollection for multi-turret site defense, obstacles, NFZs, and SDZ."""
     sm = site_res["summary"]
@@ -803,6 +806,45 @@ def build_cuas_site_geojson(
                     },
                 }
             )
+
+    # 7. Optional High-Elevation Wind-Sheared Shotfall 95% Dispersion & Post-Kill UXO Carry-On Ellipse
+    if shotfall_contour_xy_m and len(shotfall_contour_xy_m) >= 3:
+        sf_ring = [
+            list(local_xy_to_lonlat(float(pt[0]), float(pt[1]), origin_lat, origin_lon, heading_deg))
+            for pt in shotfall_contour_xy_m
+        ]
+        if sf_ring[0] != sf_ring[-1]:
+            sf_ring.append(sf_ring[0])
+        features.append(
+            {
+                "type": "Feature",
+                "properties": {
+                    "layer": "shotfall_95_dispersion",
+                    "name": shotfall_label,
+                    "scope_note": "Engineering scoping aid only; not official Range Safety certification.",
+                },
+                "geometry": {"type": "Polygon", "coordinates": [sf_ring]},
+            }
+        )
+
+    if uxo_ellipse_xy_m and len(uxo_ellipse_xy_m) >= 3:
+        uxo_ring = [
+            list(local_xy_to_lonlat(float(pt[0]), float(pt[1]), origin_lat, origin_lon, heading_deg))
+            for pt in uxo_ellipse_xy_m
+        ]
+        if uxo_ring[0] != uxo_ring[-1]:
+            uxo_ring.append(uxo_ring[0])
+        features.append(
+            {
+                "type": "Feature",
+                "properties": {
+                    "layer": "uxo_carryon_ellipse",
+                    "name": "Post-Kill UXO & Ballistic Wreck Carry-On Ellipse (SE-C20)",
+                    "scope_note": "Engineering scoping aid only; EOD standoff subject to Range Safety approval.",
+                },
+                "geometry": {"type": "Polygon", "coordinates": [uxo_ring]},
+            }
+        )
 
     return {
         "type": "FeatureCollection",

@@ -38,7 +38,14 @@ from ammo_mc.vis_cuas_analytics import (
     create_sensitivity_tornado_figure,
 )
 from ammo_mc.vis_cuas_mission import create_logistics_thermal_and_cost_figure
-from ammo_mc.ui.cuas_pkg.helpers import render_verification_and_counter_evidence
+from ammo_mc.vis_cuas_vv import (
+    create_morris_sobol_sensitivity_figure,
+    create_surrogate_pareto_figure,
+)
+from ammo_mc.ui.cuas_pkg.helpers import (
+    render_assumptions_and_provenance_drawer,
+    render_verification_and_counter_evidence,
+)
 
 
 def render_stage4_trade_studies(active_cuas_mod: str, expert: bool, sg_presets_18: dict[str, Any], drone_specs_18: dict[str, Any], aspect_presets_18: dict[str, Any]) -> None:
@@ -145,6 +152,15 @@ def render_stage4_trade_studies(active_cuas_mod: str, expert: bool, sg_presets_1
                 "uq_envelope": _vv_uq,
                 "live_sprt": _vv_sprt,
             }
+        from ammo_mc.cuas_v21_science import build_cuas_scenario_manifest, load_cuas_scenario_manifest
+
+        lg_manifest = st.session_state.get("_active_cuas_manifest") or build_cuas_scenario_manifest(
+            scenario_name=str(rep_name),
+            seed=42,
+            array_config=rep_cfg,
+            target_config={"drone_model": str(lg_drone), "target_range_m": float(lg_dist)},
+            calibrated=bool(_rep_cal_twin),
+        )
         with rep_c2:
             pdf_deck = generate_executive_briefing_pdf(
                 title=str(rep_name),
@@ -157,6 +173,7 @@ def render_stage4_trade_studies(active_cuas_mod: str, expert: bool, sg_presets_1
                 adversarial_result=st.session_state.get("_report_adversarial_result"),
                 calibration_result=_rep_cal_payload,
                 vv_result=_rep_vv_payload,
+                scenario_manifest=lg_manifest,
             )
             st.download_button(
                 "📑 Executive Briefing (.pdf)",
@@ -178,6 +195,7 @@ def render_stage4_trade_studies(active_cuas_mod: str, expert: bool, sg_presets_1
                 adversarial_result=st.session_state.get("_report_adversarial_result"),
                 calibration_result=_rep_cal_payload,
                 vv_result=_rep_vv_payload,
+                scenario_manifest=lg_manifest,
             )
             st.download_button(
                 "📊 PowerPoint Deck (.pptx)",
@@ -196,6 +214,17 @@ def render_stage4_trade_studies(active_cuas_mod: str, expert: bool, sg_presets_1
                 key="cuas18_dl_json_report",
                 width="stretch",
             )
+
+        render_assumptions_and_provenance_drawer(lg_manifest, key_prefix="stage4_log")
+        with st.expander("🔍 Validate / Inspect Uploaded Scenario Manifest (.json / .yaml)", expanded=False):
+            up_man = st.file_uploader("Upload C-UAS Scenario Manifest (.json or .yaml)", type=["json", "yaml", "yml"], key="cuas21_man_upload")
+            if up_man is not None:
+                ok_m, obj_m, msg_m = load_cuas_scenario_manifest(up_man.getvalue().decode("utf-8", errors="replace"))
+                if ok_m:
+                    st.success(msg_m)
+                    st.json(obj_m)
+                else:
+                    st.error(msg_m)
 
         with st.expander("💾 Persistent Scenario Library (Save / Load / Compare Diff)", expanded=False):
             lib = ScenarioLibrary()
@@ -450,13 +479,9 @@ def render_stage4_trade_studies(active_cuas_mod: str, expert: bool, sg_presets_1
             st.plotly_chart(create_layered_defense_figure(layer_res), width="stretch")
             st.dataframe(pd.DataFrame(layer_res["wave_timeline"]), width="stretch")
 
-    # --- TAB 18.11: SENSITIVITY & BOTTLENECK TORNADO ---
+    # --- TAB 18.11: SENSITIVITY, MORRIS/SOBOL & GP SURROGATE PARETO ---
     elif active_cuas_mod == _CUAS18_MODULES[10]:
-        st.markdown("#### 📊 C-UAS Kill-Chain Sensitivity & Engineering Bottleneck Tornado")
-        st.caption(
-            "One-at-a-time ±% perturbation sweep across 8 physical, sensor, C2, and kinematic parameters "
-            "identifying which bottlenecks dominate cumulative Kill-Chain P_kill."
-        )
+        st.markdown("#### 📊 Sensitivity, Global Sobol/Morris Screening & GP Surrogate Pareto Explorer")
         sn1, sn2, sn3 = st.columns(3)
         with sn1:
             sn_drone = st.selectbox("Baseline Threat Drone", list(drone_specs_18.keys()), format_func=lambda k: drone_specs_18[k]["name"], index=0, key="cuas18_sn_dr")
@@ -471,45 +496,124 @@ def render_stage4_trade_studies(active_cuas_mod: str, expert: bool, sg_presets_1
             sn_wx = st.selectbox("Weather Regime", ["clear_day", "overcast_dusk", "night_clear", "heavy_fog_rain"], index=0, key="cuas18_sn_wx")
             sn_fo = st.checkbox("Fiber-Optic Dark Threat", value=False, key="cuas18_sn_fo")
 
-        base_sn_cfg = {
-            "drone_model": str(sn_drone),
-            "aspect_mode": str(sn_aspect),
-            "ammunition_preset": str(sn_ammo),
-            "drone_speed_mps": float(sn_speed),
-            "max_weapon_range_m": float(sn_rmax),
-            "n_barrels": int(sn_nb),
-            "weather": str(sn_wx),
-            "fiber_optic_autonomous": bool(sn_fo),
-        }
-        with st.spinner("Running 17-Point ±% C-UAS Kill-Chain Sensitivity Tornado..."):
-            cuas_tor = _cached_cuas_tornado(
-                baseline_cfg_json=json.dumps(base_sn_cfg, sort_keys=True),
-                perturbation_pct=float(sn_pct),
-                n_trials=75,
-                seed=42,
+        sn_tab1, sn_tab2, sn_tab3 = st.tabs([
+            "🌪️ OAT Bottleneck Tornado",
+            "🔬 Global Sensitivity (Morris & Saltelli Sobol S1/ST)",
+            "🤖 GP Surrogate Emulator & Multi-Objective Pareto (M17)",
+        ])
+        with sn_tab1:
+            base_sn_cfg = {
+                "drone_model": str(sn_drone),
+                "aspect_mode": str(sn_aspect),
+                "ammunition_preset": str(sn_ammo),
+                "drone_speed_mps": float(sn_speed),
+                "max_weapon_range_m": float(sn_rmax),
+                "n_barrels": int(sn_nb),
+                "weather": str(sn_wx),
+                "fiber_optic_autonomous": bool(sn_fo),
+            }
+            with st.spinner("Running 17-Point ±% C-UAS Kill-Chain Sensitivity Tornado..."):
+                cuas_tor = _cached_cuas_tornado(
+                    baseline_cfg_json=json.dumps(base_sn_cfg, sort_keys=True),
+                    perturbation_pct=float(sn_pct),
+                    n_trials=75,
+                    seed=42,
+                )
+            ct_sm = cuas_tor["summary"]
+            st.session_state["_report_tornado_result"] = cuas_tor
+            bn_top = cuas_tor["top_bottlenecks"]
+            sk_t1, sk_t2, sk_t3 = st.columns(3)
+            sk_t1.metric("Baseline Kill-Chain P_kill", f"{ct_sm['baseline_value']:.1f} %", delta=f"±{ct_sm['perturbation_pct']:.0f}% OAT Sweep")
+            sk_t2.metric("#1 Limiting Bottleneck", ct_sm["top_driver"], delta=f"Pk Swing: {ct_sm['top_swing']:.1f} %")
+            sk_t3.metric("#2 Secondary Driver", ct_sm["second_driver"], delta=f"Pk Swing: {bn_top[1]['swing']:.1f} %")
+
+            st.info(
+                f"**Actionable Priority 1 ({bn_top[0]['label']}):** {bn_top[0]['recommendation']}\n\n"
+                f"**Priority 2 ({bn_top[1]['label']}):** {bn_top[1]['recommendation']}"
             )
-        ct_sm = cuas_tor["summary"]
-        st.session_state["_report_tornado_result"] = cuas_tor
-        bn_top = cuas_tor["top_bottlenecks"]
-        sk_t1, sk_t2, sk_t3 = st.columns(3)
-        sk_t1.metric("Baseline Kill-Chain P_kill", f"{ct_sm['baseline_value']:.1f} %", delta=f"±{ct_sm['perturbation_pct']:.0f}% OAT Sweep")
-        sk_t2.metric("#1 Limiting Bottleneck", ct_sm["top_driver"], delta=f"Pk Swing: {ct_sm['top_swing']:.1f} %")
-        sk_t3.metric("#2 Secondary Driver", ct_sm["second_driver"], delta=f"Pk Swing: {bn_top[1]['swing']:.1f} %")
+            st.plotly_chart(create_sensitivity_tornado_figure(cuas_tor, metric_label="Kill-Chain P_kill (%)", higher_is_better=True), width="stretch")
 
-        st.info(
-            f"**Actionable Priority 1 ({bn_top[0]['label']}):** {bn_top[0]['recommendation']}\n\n"
-            f"**Priority 2 ({bn_top[1]['label']}):** {bn_top[1]['recommendation']}"
-        )
-        st.plotly_chart(create_sensitivity_tornado_figure(cuas_tor, metric_label="Kill-Chain P_kill (%)", higher_is_better=True), width="stretch")
+            tor_c_df = pd.DataFrame(cuas_tor["rows"])
+            st.dataframe(tor_c_df, width="stretch")
+            st.download_button(
+                "📥 Download C-UAS Tornado Sensitivity Data (.csv)",
+                tor_c_df.to_csv(index=False).encode("utf-8"),
+                "cuas_killchain_tornado.csv",
+                "text/csv",
+                key="cuas18_dl_tor_csv",
+            )
 
-        tor_c_df = pd.DataFrame(cuas_tor["rows"])
-        st.dataframe(tor_c_df, width="stretch")
-        st.download_button(
-            "📥 Download C-UAS Tornado Sensitivity Data (.csv)",
-            tor_c_df.to_csv(index=False).encode("utf-8"),
-            "cuas_killchain_tornado.csv",
-            "text/csv",
-            key="cuas18_dl_tor_csv",
-        )
+        with sn_tab2:
+            from ammo_mc.ui.common import _cached_morris_sobol
+
+            gs1, gs2, gs3 = st.columns(3)
+            with gs1:
+                gs_range = st.slider("Reference Slant Range (m)", 25.0, 65.0, 40.0, 5.0, key="cuas21_gs_range")
+            with gs2:
+                gs_class = st.selectbox("Vulnerability Prior", ["fpv_cfrp", "plastic_shell"], key="cuas21_gs_cls")
+            with gs3:
+                gs_nbase = st.selectbox("Sobol Base Samples", [64, 128], index=0, key="cuas21_gs_nbase")
+            with st.spinner("Computing Morris Elementary Effects & Saltelli/Jansen Sobol Variance Indices..."):
+                mor_res, sob_res = _cached_morris_sobol(
+                    ammo_preset=str(sn_ammo),
+                    choke="Modified",
+                    drone_class=str(gs_class),
+                    n_barrels=int(sn_nb),
+                    aim_error_mrad=2.0,
+                    drone_speed_mps=float(sn_speed),
+                    target_range_m=float(gs_range),
+                    drag_law="walsh_1976",
+                    site_altitude_m=0.0,
+                    n_trajectories=20,
+                    n_base=int(gs_nbase),
+                    seed=42,
+                )
+            msm = mor_res["summary"]
+            ssm = sob_res["summary"]
+            gk1, gk2, gk3 = st.columns(3)
+            gk1.metric("#1 Sobol Total-Effect Driver", ssm["top_sobol_driver"], delta=f"ST={ssm['top_ST']:.3f} | S1/ST split")
+            gk2.metric("#1 Morris Screening Driver", msm["top_driver"], delta=f"mu*={msm['top_mu_star_pk_pct']:.1f}% Pk")
+            gk3.metric("Epistemic Output Mean +/- SD", f"{ssm['mean_pk_pct']:.1f}% +/- {ssm['std_pk_pct']:.1f}%", delta=f"{ssm['total_evaluations']} model evals")
+            st.info(ssm["measurement_priority"])
+            st.plotly_chart(create_morris_sobol_sensitivity_figure(mor_res, sob_res), width="stretch", key="cuas21_mor_sob_fig")
+            mc_t1, mc_t2 = st.columns(2)
+            with mc_t1:
+                st.markdown("**Sobol Variance Indices (MC-F18)**")
+                st.dataframe(pd.DataFrame(sob_res["indices"]), width="stretch", hide_index=True)
+            with mc_t2:
+                st.markdown("**Morris Screening Effects (MC-F19)**")
+                st.dataframe(pd.DataFrame(mor_res["factors"]), width="stretch", hide_index=True)
+
+        with sn_tab3:
+            from ammo_mc.ui.common import _cached_surrogate_pareto
+
+            pa1, pa2, pa3 = st.columns(3)
+            with pa1:
+                pa_reclim = st.slider("Mount Peak Recoil Limit (kN)", 10.0, 35.0, 22.0, 1.0, key="cuas21_pa_reclim")
+            with pa2:
+                pa_cls = st.selectbox("Target Benchmark Class", ["fpv_cfrp", "plastic_shell"], key="cuas21_pa_cls")
+            with pa3:
+                pa_aim = st.slider("Nominal Aim Error (mrad)", 1.0, 4.5, 2.0, 0.5, key="cuas21_pa_aim")
+            with st.spinner("Fitting 4 Matern-5/2 GP Surrogates (LOO-CV) & Extracting Non-Dominated Pareto Frontier..."):
+                par_res = _cached_surrogate_pareto(
+                    drone_class=str(pa_cls),
+                    drone_speed_mps=float(sn_speed),
+                    drone_altitude_m=15.0,
+                    aim_error_mrad=float(pa_aim),
+                    site_altitude_m=0.0,
+                    recoil_limit_kn=float(pa_reclim),
+                    n_doe=44,
+                    n_candidates=320,
+                    seed=42,
+                )
+            psm = par_res["summary"]
+            pk_p1, pk_p2, pk_p3 = st.columns(3)
+            pk_p1.metric("Minimum GP LOO R2", f"{psm['min_loo_r2']:.3f}", delta=f"{psm['n_doe']} DoE / {psm['n_candidates']} Sobol candidates")
+            pk_p2.metric("Pareto-Optimal Feasible Designs", f"{psm['n_pareto_optimal']}", delta=f"Recoil <= {psm['recoil_limit_kn']:.0f} kN")
+            pk_p3.metric("Best Verified Window", f"{psm['best_verified_window_m']:.1f} m", delta=f"Verified Pk40 up to {psm['best_verified_pk_40m_pct']:.1f}%")
+            st.plotly_chart(create_surrogate_pareto_figure(par_res), width="stretch", key="cuas21_par_fig")
+            st.markdown("**Physics-Verified Top Pareto Designs & GP LOO Validation**")
+            st.dataframe(pd.DataFrame(par_res["verified_top_designs"]), width="stretch", hide_index=True)
+            st.dataframe(pd.DataFrame(par_res["loo_validation"]), width="stretch", hide_index=True)
 
 

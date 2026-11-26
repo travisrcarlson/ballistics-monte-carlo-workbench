@@ -1177,17 +1177,181 @@ def cmd_cuas_rigor_check(
 
 @cuas_app.command("workbook-vv")
 def cmd_cuas_workbook_vv(
+    tier: str = typer.Option("fast", "--tier", help="Workbook validation tier: fast or full."),
     as_json: bool = typer.Option(False, "--json", help="Output JSON workbook oracle matrix."),
 ) -> None:
     """Execute deterministic C-UAS workbook Validation_Cases & Calc_Checks regression matrix."""
     from ammo_mc.cuas_rigor import run_workbook_validation_cases
 
-    res = run_workbook_validation_cases()
+    res = run_workbook_validation_cases(tier=tier)
     if as_json:
         typer.echo(json.dumps(res, indent=2))
         return
     sm = res["summary"]
-    typer.echo(f"C-UAS Workbook V&V Matrix: {sm['passed']}/{sm['total']} PASS ({sm['pass_rate_pct']:.1f}%)")
+    typer.echo(
+        f"C-UAS Workbook V&V Matrix ({tier}): {sm['passed']}/{sm['total']} PASS "
+        f"(canonical {sm.get('canonical_vc_passed', sm['passed'])}/{sm.get('canonical_vc_total', sm['total'])}, "
+        f"{sm['pass_rate_pct']:.1f}%)"
+    )
+
+
+@cuas_app.command("epistemic")
+def cmd_cuas_epistemic(
+    ammo_preset: str = typer.Option("12G_TSS_NO2_C_UAS", "--load", help="Shotgun load key."),
+    drone_class: str = typer.Option("fpv_cfrp", "--drone", help="Drone archetype key."),
+    n_barrels: int = typer.Option(6, "--barrels", help="Number of shotgun barrels."),
+    drone_speed_mps: float = typer.Option(15.0, "--speed", help="Closing drone speed (m/s)."),
+    site_altitude_m: float = typer.Option(0.0, "--altitude", help="Site elevation ASL (m)."),
+    n_outer: int = typer.Option(16, "--outer", help="Outer L0 LHS epistemic draws."),
+    seed: int = typer.Option(2100, "--seed", help="PRNG seed."),
+    with_sensitivity: bool = typer.Option(True, "--sensitivity/--no-sensitivity", help="Include Morris + Sobol sensitivity."),
+    as_json: bool = typer.Option(False, "--json", help="Output full JSON payload."),
+) -> None:
+    """Run L0/L1 nested epistemic UQ envelope and Morris/Sobol global sensitivity."""
+    from ammo_mc.cuas_v21_science import (
+        run_cuas_l0_epistemic_envelope,
+        run_cuas_morris_screening,
+        run_cuas_sobol_sensitivity,
+    )
+
+    env = run_cuas_l0_epistemic_envelope(
+        ammo_preset=ammo_preset,
+        drone_class=drone_class,
+        n_barrels=n_barrels,
+        drone_speed_mps=drone_speed_mps,
+        site_altitude_m=site_altitude_m,
+        n_outer=n_outer,
+        seed=seed,
+    )
+    payload: dict[str, Any] = {"epistemic": env}
+    if with_sensitivity:
+        payload["morris"] = run_cuas_morris_screening(
+            ammo_preset=ammo_preset,
+            drone_class=drone_class,
+            n_barrels=n_barrels,
+            drone_speed_mps=drone_speed_mps,
+            site_altitude_m=site_altitude_m,
+            seed=seed,
+        )
+        payload["sobol"] = run_cuas_sobol_sensitivity(
+            ammo_preset=ammo_preset,
+            drone_class=drone_class,
+            n_barrels=n_barrels,
+            drone_speed_mps=drone_speed_mps,
+            site_altitude_m=site_altitude_m,
+            seed=seed,
+        )
+    if as_json:
+        typer.echo(json.dumps(payload, indent=2))
+        return
+    ws = env["summary"]
+    typer.echo(
+        f"L0 Epistemic Usable Window (m): P5={ws['usable_window_p5_m']:.1f}, "
+        f"P50={ws['usable_window_p50_m']:.1f}, P95={ws['usable_window_p95_m']:.1f}"
+    )
+    if with_sensitivity and payload["sobol"].get("indices"):
+        top_s = payload["sobol"]["indices"][0]
+        typer.echo(f"Top Sobol Driver: {top_s['key']} (ST={top_s['ST']:.3f}, S1={top_s['S1']:.3f})")
+
+
+@cuas_app.command("doctrine")
+def cmd_cuas_doctrine(
+    ammo_preset: str = typer.Option("12G_TSS_NO2_C_UAS", "--load", help="Shotgun load key."),
+    drone_class: str = typer.Option("fpv_cfrp", "--drone", help="Drone archetype key."),
+    r_start_m: float = typer.Option(55.0, "--start-range", help="Initial intercept range (m)."),
+    drone_speed_mps: float = typer.Option(20.0, "--speed", help="Closing speed (m/s)."),
+    n_barrels: int = typer.Option(4, "--barrels", help="Number of barrels."),
+    magazine_shells: int = typer.Option(12, "--magazine", help="Ready magazine shells."),
+    n_trials: int = typer.Option(300, "--trials", help="Monte Carlo trials per doctrine."),
+    seed: int = typer.Option(2101, "--seed", help="PRNG seed."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON doctrine comparison."),
+) -> None:
+    """Compare Simultaneous Salvo, Ripple, Wilkening SLS, and Shoot-Adjust-Shoot doctrines."""
+    from ammo_mc.cuas_v21_science import compare_cuas_engagement_doctrines
+
+    res = compare_cuas_engagement_doctrines(
+        ammo_preset=ammo_preset,
+        drone_class=drone_class,
+        n_barrels=n_barrels,
+        magazine_shells=magazine_shells,
+        r_start_m=r_start_m,
+        drone_speed_mps=drone_speed_mps,
+        n_trials=n_trials,
+        seed=seed,
+    )
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    for row in res.get("doctrines", []):
+        typer.echo(
+            f"{row['doctrine_label']}: cum_pk={row['cum_pk_pct']:.1f}%, "
+            f"mean_rounds={row['mean_rounds_expended']:.2f}, leaker={row['leaker_rate_pct']:.1f}%"
+        )
+
+
+@cuas_app.command("pareto-surrogate")
+def cmd_cuas_pareto_surrogate(
+    drone_class: str = typer.Option("fpv_cfrp", "--drone", help="Drone archetype key."),
+    drone_speed_mps: float = typer.Option(20.0, "--speed", help="Closing drone speed (m/s)."),
+    n_doe: int = typer.Option(28, "--doe", help="LHS training design evaluations."),
+    n_candidates: int = typer.Option(180, "--candidates", help="Sobol candidate designs on GP surrogate."),
+    recoil_limit_kn: float = typer.Option(22.0, "--recoil-limit", help="Peak recoil limit (kN)."),
+    seed: int = typer.Option(2102, "--seed", help="PRNG seed."),
+    as_json: bool = typer.Option(False, "--json", help="Output JSON Pareto study."),
+) -> None:
+    """Fit Matern-5/2 GP surrogate and extract multi-objective Pareto-optimal C-UAS configurations."""
+    from ammo_mc.cuas_v21_science import run_cuas_surrogate_pareto_study
+
+    res = run_cuas_surrogate_pareto_study(
+        drone_class=drone_class,
+        drone_speed_mps=drone_speed_mps,
+        n_doe=n_doe,
+        n_candidates=n_candidates,
+        recoil_limit_kn=recoil_limit_kn,
+        seed=seed,
+    )
+    if as_json:
+        typer.echo(json.dumps(res, indent=2))
+        return
+    sm = res["summary"]
+    typer.echo(
+        f"GP Surrogate LOO R2 (Pk@40m={sm['loo_r2']['pk_shared_40m_pct']:.3f}); "
+        f"Pareto={sm['n_pareto_optimal']} designs"
+    )
+
+
+@cuas_app.command("manifest")
+def cmd_cuas_manifest(
+    scenario_name: str = typer.Option("C-UAS Baseline Scenario", "--name", help="Scenario title."),
+    ammo_preset: str = typer.Option("12G_TSS_NO2_C_UAS", "--load", help="Shotgun load key."),
+    drone_class: str = typer.Option("fpv_cfrp", "--drone", help="Drone archetype key."),
+    n_barrels: int = typer.Option(4, "--barrels", help="Number of shotgun barrels."),
+    drone_speed_mps: float = typer.Option(20.0, "--speed", help="Closing speed (m/s)."),
+    site_altitude_m: float = typer.Option(0.0, "--altitude", help="Site elevation ASL (m)."),
+    seed: int = typer.Option(42, "--seed", help="PRNG seed."),
+    fmt: str = typer.Option("json", "--format", help="Output format: json or yaml."),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Optional output file path."),
+) -> None:
+    """Build a reproducible SHA-256 stamped Pydantic Scenario & Provenance Manifest."""
+    from ammo_mc.cuas_v21_science import (
+        build_cuas_scenario_manifest,
+        serialize_manifest_json,
+        serialize_manifest_yaml,
+    )
+
+    manifest = build_cuas_scenario_manifest(
+        scenario_name=scenario_name,
+        seed=seed,
+        site_altitude_m=site_altitude_m,
+        array_config={"ammo_preset": ammo_preset, "n_barrels": n_barrels},
+        target_config={"drone_class": drone_class, "drone_speed_mps": drone_speed_mps},
+    )
+    text = serialize_manifest_yaml(manifest) if fmt.lower() == "yaml" else serialize_manifest_json(manifest)
+    if output is not None:
+        output.write_text(text, encoding="utf-8")
+        typer.echo(f"Manifest written to {output} (sha256={manifest['manifest_sha256'][:12]})")
+    else:
+        typer.echo(text)
 
 
 @app.command("literature")

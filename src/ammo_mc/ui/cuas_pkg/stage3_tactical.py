@@ -101,7 +101,9 @@ def render_stage3_tactical(active_cuas_mod: str, expert: bool, sg_presets_18: di
             with sa3:
                 sd_w_down = st.slider("Downrange Tailwind (+) / Headwind (-) (m/s)", -15.0, 15.0, 4.0, 1.0, key="cuas18_sd_wd")
                 sd_w_cross = st.slider("Crosswind Drift (m/s)", -15.0, 15.0, 2.0, 1.0, key="cuas18_sd_wc")
-                sd_shear = st.checkbox("Apply 1/7 Power-Law Boundary Layer Wind Shear", value=True, key="cuas18_sd_sh")
+                sd_shear = st.checkbox("Apply Atmospheric Boundary-Layer Wind Shear", value=True, key="cuas18_sd_sh")
+                sd_wprof = st.selectbox("Wind Profile Law", ["power_law", "log_law"], format_func=lambda k: "1/7 Power Law" if k == "power_law" else "Log Law AT-F07 (z0=0.03m)", key="cuas21_sd_wprof")
+                sd_alt_m = st.slider("Site Altitude (m ASL, AT-F01)", 0.0, 3500.0, 0.0, 100.0, key="cuas21_sd_alt_m")
 
         with st.spinner("Integrating Vectorized 3-DoF Ballistic Pellet Fallout..."):
             sd_res = _cached_pellet_fallout_sdz(
@@ -117,6 +119,8 @@ def render_stage3_tactical(active_cuas_mod: str, expert: bool, sg_presets_18: di
                 enable_wind_shear=bool(sd_shear),
                 n_sample_pellets=int(sd_n_p),
                 seed=42,
+                site_altitude_m=float(sd_alt_m),
+                wind_profile_mode=str(sd_wprof),
             )
             sd_comp = _cached_compare_cuas_fallout(
                 firing_elevation_deg=float(sd_el),
@@ -183,6 +187,8 @@ def render_stage3_tactical(active_cuas_mod: str, expert: bool, sg_presets_18: di
                 seed=42,
                 drone_mass_kg=float(collat_dr_mass),
                 drone_altitude_m=float(collat_dr_alt),
+                site_altitude_m=float(sd_alt_m),
+                wind_profile_mode=str(sd_wprof),
             )
             csm = collat_res["summary"]
             cm1, cm2, cm3, cm4 = st.columns(4)
@@ -230,6 +236,12 @@ def render_stage3_tactical(active_cuas_mod: str, expert: bool, sg_presets_18: di
                             f"**UK JSP 403 Vol 2 Ch 2 Table 3:** +{uk_ov.get('lateral_cone_mils', 80):.0f} mils lateral azimuth, "
                             f"+{uk_ov.get('vertical_cone_mils', 200):.0f} mils vertical elevation."
                         )
+                        uxo_el = collat_res.get("uxo_carryon_ellipse") or {}
+                        if uxo_el:
+                            st.caption(
+                                f"**Post-Kill UXO / Wreck Carry-On Ellipse (SE-C20):** center `{uxo_el.get('center_x_m', 0):.1f}, {uxo_el.get('center_y_m', 0):.1f} m`, "
+                                f"carry-on `{uxo_el.get('carry_on_distance_m', 0):.1f} m`, semi-axes `{uxo_el.get('semi_major_m', 0):.1f} × {uxo_el.get('semi_minor_m', 0):.1f} m`."
+                            )
                         st.warning(deb_h.get("uxo_post_kill_notice", ""))
                     st.caption(collat_res.get("scope_notice", "Engineering scoping aid only."))
 
@@ -610,6 +622,52 @@ def render_stage3_tactical(active_cuas_mod: str, expert: bool, sg_presets_18: di
                 horizontal=True,
                 key="cuas18_map_style",
             )
+            gis_ov_c1, gis_ov_c2, gis_ov_c3, gis_ov_c4 = st.columns([1.6, 1.0, 0.8, 0.8])
+            with gis_ov_c1:
+                show_shotfall_uxo = st.checkbox(
+                    "Overlay High-Elevation Wind-Sheared Shotfall & Post-Kill UXO Carry-On Ellipse",
+                    value=True,
+                    key="cuas21_gis_shotfall_uxo",
+                )
+            gis_shotfall_pts = None
+            gis_uxo_pts = None
+            gis_sf_lbl = "High-Elev Wind-Sheared Shotfall (95%)"
+            if show_shotfall_uxo:
+                with gis_ov_c2:
+                    gis_sf_ammo = st.selectbox(
+                        "Shotfall Overlay Load",
+                        [k for k in sg_presets_18.keys() if k in ("12G_NO4_BUCK_C_UAS", "12G_TSS_NO2_C_UAS", "12G_NO4_STEEL_C_UAS", "SPARTAN_43_HP_1276_SPHERO_3T")] or list(sg_presets_18.keys())[:3],
+                        format_func=lambda k: sg_presets_18[k]["name"][:30],
+                        key="cuas21_gis_sf_ammo",
+                    )
+                with gis_ov_c3:
+                    gis_sf_el = st.slider("Fire El (°)", 20.0, 75.0, 40.0, 5.0, key="cuas21_gis_sf_el")
+                with gis_ov_c4:
+                    gis_sf_az = st.slider("Fire Az (°)", -180.0, 180.0, 0.0, 15.0, key="cuas21_gis_sf_az")
+                gis_collat = _cached_collateral_safety_envelope(
+                    n_barrels=6,
+                    barrels_per_burst=2,
+                    ammunition_preset=str(gis_sf_ammo),
+                    default_choke="Modified",
+                    default_barrel_length_in=24.0,
+                    firing_elevation_deg=float(gis_sf_el),
+                    firing_azimuth_deg=float(gis_sf_az),
+                    turret_height_m=2.5,
+                    wind_downrange_mps=4.0,
+                    wind_crossrange_mps=2.0,
+                    environment_type="urban_permissive",
+                    n_sample_pellets=160,
+                    seed=42,
+                    drone_mass_kg=1.5,
+                    drone_altitude_m=float(site_alt),
+                    intercept_range_m=float(site_rmax),
+                    drone_speed_mps=float(site_spd),
+                )
+                gis_shotfall_pts = gis_collat.get("shotfall_contour_95_xy_m")
+                gis_uxo_pts = (gis_collat.get("uxo_carryon_ellipse") or {}).get("polygon_xy_m")
+                gis_sf_lbl = f"Shotfall 95% ({gis_sf_ammo[:16]} @ {gis_sf_el:.0f}°)"
+                st.caption("⚠️ Engineering scoping aid only (`KF-10` / `SE-C20`): high-elevation tungsten/steel shotfall & post-kill UXO polygons do not replace official Range Safety Officers or AR 385-63 / JSP 403.")
+
             fig_real_map = create_real_map_site_defense_figure(
                 site_res=site_res,
                 origin_lat=float(map_lat),
@@ -617,6 +675,9 @@ def render_stage3_tactical(active_cuas_mod: str, expert: bool, sg_presets_18: di
                 sdz_radius_m=float(site_sdz),
                 heading_deg=float(map_hdg),
                 map_style=str(map_style),
+                shotfall_contour_xy_m=gis_shotfall_pts,
+                uxo_ellipse_xy_m=gis_uxo_pts,
+                shotfall_label=gis_sf_lbl,
             )
             st.plotly_chart(fig_real_map, width="stretch")
 
@@ -626,6 +687,9 @@ def render_stage3_tactical(active_cuas_mod: str, expert: bool, sg_presets_18: di
                 origin_lon=float(map_lon),
                 sdz_radius_m=float(site_sdz),
                 heading_deg=float(map_hdg),
+                shotfall_contour_xy_m=gis_shotfall_pts,
+                uxo_ellipse_xy_m=gis_uxo_pts,
+                shotfall_label=gis_sf_lbl,
             )
             kml_doc = export_cuas_site_kml(
                 site_res=site_res,
@@ -834,6 +898,12 @@ def render_stage3_tactical(active_cuas_mod: str, expert: bool, sg_presets_18: di
             )
             r_speed = st.slider("Swarm Speed (m/s)", 10.0, 42.0, float(handoff_bs.get("threat_speed_mps", 22.0)) if (use_handoff and handoff_bs) else 22.0, 1.0, key="cuas18_raid_spd")
             r_rmax = st.slider("Turret Engagement Range (m)", 35.0, 95.0, float(handoff_bs.get("weapon_max_range_m", 65.0)) if (use_handoff and handoff_bs) else 65.0, 5.0, key="cuas18_raid_rmax")
+            r_wta_pol = st.selectbox(
+                "Weapon-Target Assignment (WTA) Policy",
+                ["nearest_tti", "gittins_sls_index"],
+                format_func=lambda k: "Shortest Time-to-Intercept (Default)" if k == "nearest_tti" else "Gittins SLS Priority Index (HP-S03 Eq 14)",
+                key="cuas21_raid_wta",
+            )
             if is_expert_mode():
                 outer_opts_12 = ["none", "rf_gnss_jammer", "hpm_screen", "airburst_35mm"]
                 r_outer_layer = st.selectbox(
@@ -871,6 +941,7 @@ def render_stage3_tactical(active_cuas_mod: str, expert: bool, sg_presets_18: di
                 outer_layer_type=str(r_outer_layer),
                 calibration_profile_json=_get_effective_cal_twin_json(),
                 physics_fidelity_json=_get_active_physics_fidelity_json(),
+                wta_policy=str(r_wta_pol),
             )
         st.session_state["_report_raid_result"] = raid_res
 

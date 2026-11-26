@@ -273,7 +273,7 @@ def tab_validation() -> None:
     st.header("✅ Verification & Validation Benchmark Dashboard & Audit Certificates")
     st.markdown(
         "Automated V&V audit harness combining the 22-case `Ammunition Monte Carlo Knowledge Base.xlsx` regression suite "
-        "(`V-01a..V-12`), 22 independent physical, analytical, and standards benchmarks (`B-01..B-22`), and 53 C-UAS workbook "
+        "(`V-01a..V-12`), 22 independent physical, analytical, and standards benchmarks (`B-01..B-22`), and 110 canonical / 116 total C-UAS workbook "
         "oracles across 101 linked literature sources."
     )
 
@@ -404,7 +404,7 @@ def tab_validation() -> None:
             "🔬 Extended Physics Benchmarks (B-01..B-22)",
             "📋 Knowledge Base Workbook Suite (V-01a..V-12)",
             "🧪 Experimental C-UAS Benchmarks (E-01..E-06)",
-            "📐 C-UAS Workbook V&V Matrix (53 Oracles)",
+            "📐 C-UAS Workbook V&V Matrix (110/110 + 12 Anchors)",
         ]
     )
 
@@ -515,19 +515,29 @@ def tab_validation() -> None:
         st.dataframe(pd.DataFrame(exp_res["benchmarks"]), width="stretch", hide_index=True)
 
     with tab_wb_vv:
-        st.subheader("📐 Deterministic C-UAS Workbook Oracles & Statistical Unit Tests")
+        st.subheader("📐 110/110 Canonical Workbook Oracles (VC-001..VC-110) & 12 Empirical Calibration Anchors")
         st.caption(
-            "Reproduces Walsh (1976) / NOL / KPY / WB-F05 trajectory integration, WB-F01/F02 closed-form salvo brackets vs. "
-            "quadrature (CK-A1..A6 & CK-C1..C12), Thomas-Gemmill, Whistler SAS, Wilkening, SAAMI recoil, Wen CFRP, "
-            "and Wilson / Clopper-Pearson / Agresti-Coull / alpha-spending intervals."
+            "Reproduces all 110 deterministic workbook Validation_Cases (VC-001..VC-110): published shot tables "
+            "(NRA/McGraw/Lowry/KPY), WB-F05/F01/F02 closed-form salvo brackets, Thomas-Gemmill, Washburn 2003 inclusion-exclusion, "
+            "Whistler SAS, Wilkening & Gittins SLS, explicit-pellet MC, SAAMI recoil, Wen CFRP, and MC variance-reduction unit checks."
         )
-        if "cuas_wb_vv_matrix" not in st.session_state or st.button("🔄 Re-run C-UAS Workbook Matrix", key="val_rerun_wb_vv_btn"):
-            with st.spinner("Running 53 C-UAS Workbook Regression Oracles..."):
-                st.session_state["cuas_wb_vv_matrix"] = run_workbook_validation_cases()
+        if "cuas_wb_vv_matrix" not in st.session_state or st.button("🔄 Re-run 110/110 C-UAS Workbook Matrix", key="val_rerun_wb_vv_btn"):
+            with st.spinner("Running 116 C-UAS Workbook Oracles (110 Canonical + 6 Extended Physics)..."):
+                st.session_state["cuas_wb_vv_matrix"] = run_workbook_validation_cases(tier="fast")
         wb_vv = st.session_state["cuas_wb_vv_matrix"]
+        wbsm = wb_vv.get("summary", {})
+        wbc1, wbc2, wbc3 = st.columns(3)
+        wbc1.metric("Canonical Workbook Cases (VC-001..110)", f"{wbsm.get('canonical_vc_passed', 0)} / {wbsm.get('canonical_vc_total', 110)} PASS")
+        wbc2.metric("Total Deterministic Suite", f"{wbsm.get('passed', 0)} / {wbsm.get('total', 116)} PASS")
+        wbc3.metric("Empirical Calibration Anchors (VC-111..122)", f"{wbsm.get('empirical_anchors_count', 12)} Indicative Targets", delta="Evidence Grades B / C / D")
         st.plotly_chart(create_workbook_vv_matrix_figure(wb_vv), width="stretch", key="val_wb_vv_fig")
         wb_cases_df = pd.DataFrame(wb_vv["cases"])
         st.dataframe(wb_cases_df, width="stretch", hide_index=True)
+        anchors_list = wb_vv.get("empirical_anchors", [])
+        if anchors_list:
+            st.markdown("##### 🎯 Published & Empirical Calibration Anchors (`VC-111`–`VC-122`, Indicative Only)")
+            st.caption("⚠️ These 12 benchmarks carry Evidence Grades **B**, **C**, or **D** and represent calibration reference targets, not deterministic pass/fail assertions.")
+            st.dataframe(pd.DataFrame(anchors_list), width="stretch", hide_index=True)
         st.download_button(
             "📥 Download C-UAS Workbook V&V Matrix (.csv)",
             wb_cases_df.to_csv(index=False).encode("utf-8"),

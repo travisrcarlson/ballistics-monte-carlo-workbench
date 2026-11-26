@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 
 def create_epistemic_uq_envelope_figure(uq_res: dict[str, Any]) -> go.Figure:
@@ -373,5 +374,206 @@ def create_workbook_vv_matrix_figure(wb_vv: dict[str, Any]) -> go.Figure:
         yaxis_title="Oracle Test Count",
         height=340,
         margin=dict(l=45, r=25, t=48, b=60),
+    )
+    return fig
+
+
+def create_epistemic_window_and_pk_figure(epistemic_res: dict[str, Any]) -> go.Figure:
+    """Plot L0 epistemic P5/P50/P95 Pk(R) band alongside Usable Engagement Window histogram."""
+    curves = epistemic_res.get("curves", [])
+    samples = epistemic_res.get("window_samples_m", [])
+    sm = epistemic_res.get("summary", {})
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        horizontal_spacing=0.11,
+        subplot_titles=[
+            "Nested L0 Epistemic Pk(R) Envelope (P5 / P50 / P95)",
+            f"Usable Window Distribution (P50={sm.get('usable_window_p50_m', 0.0)} m)",
+        ],
+    )
+    if curves:
+        rs = [c["range_m"] for c in curves]
+        p5 = [c["pk_shared_p5_pct"] for c in curves]
+        p50 = [c["pk_shared_p50_pct"] for c in curves]
+        p95 = [c["pk_shared_p95_pct"] for c in curves]
+        nom = [c["pk_shared_nominal_pct"] for c in curves]
+        fig.add_trace(go.Scatter(x=rs, y=p95, mode="lines", line=dict(width=0.5, color="rgba(56,189,248,0.3)"), showlegend=False), row=1, col=1)
+        fig.add_trace(go.Scatter(x=rs, y=p5, mode="lines", fill="tonexty", fillcolor="rgba(56,189,248,0.20)", line=dict(width=0.5, color="rgba(56,189,248,0.3)"), name="L0 P5–P95 Envelope"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=rs, y=p50, mode="lines+markers", name="P50 Epistemic Median", line=dict(color="#38bdf8", width=2.5)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=rs, y=nom, mode="lines", name="Nominal Baseline", line=dict(color="#10b981", width=2.0, dash="dot")), row=1, col=1)
+    if samples:
+        fig.add_trace(go.Histogram(x=samples, nbinsx=16, name="Window Samples (m)", marker_color="#f59e0b", opacity=0.8), row=1, col=2)
+    fig.update_xaxes(title_text="Slant Range (m)", row=1, col=1)
+    fig.update_yaxes(title_text="Shared Salvo Pk (%)", range=[0, 105], row=1, col=1)
+    fig.update_xaxes(title_text="Usable Engagement Window (m)", row=1, col=2)
+    fig.update_yaxes(title_text="Epistemic Outer Draws", row=1, col=2)
+    fig.update_layout(height=360, margin=dict(l=45, r=30, t=55, b=40))
+    return fig
+
+
+def create_morris_sobol_sensitivity_figure(morris_res: dict[str, Any], sobol_res: dict[str, Any]) -> go.Figure:
+    """Plot 2-panel Morris Screening (mu* vs sigma) and Saltelli/Jansen Sobol (S1 vs ST)."""
+    m_rows = morris_res.get("factors", [])
+    s_rows = sobol_res.get("indices", [])
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        horizontal_spacing=0.14,
+        subplot_titles=[
+            "Morris Elementary Effects Screening (MC-F19)",
+            "Sobol First-Order S1 & Total ST Indices (MC-F18)",
+        ],
+    )
+    if m_rows:
+        fig.add_trace(
+            go.Scatter(
+                x=[r["mu_star_pk_pct"] for r in m_rows],
+                y=[r["sigma_pk_pct"] for r in m_rows],
+                mode="markers+text",
+                text=[r["label"].split(" ")[0] for r in m_rows],
+                textposition="top center",
+                marker=dict(size=12, color="#38bdf8", line=dict(width=1, color="#0f172a")),
+                hovertext=[f"{r['label']} ({r['grade']}): mu*={r['mu_star_pk_pct']}, sigma={r['sigma_pk_pct']}" for r in m_rows],
+                hoverinfo="text",
+                name="Morris Factor",
+            ),
+            row=1,
+            col=1,
+        )
+    if s_rows:
+        s_rev = list(reversed(s_rows))
+        labels = [r["label"] for r in s_rev]
+        fig.add_trace(
+            go.Bar(name="Main Effect S1", y=labels, x=[r["S1"] for r in s_rev], orientation="h", marker_color="#10b981"),
+            row=1,
+            col=2,
+        )
+        fig.add_trace(
+            go.Bar(name="Total Effect ST", y=labels, x=[r["ST"] for r in s_rev], orientation="h", marker_color="#f59e0b"),
+            row=1,
+            col=2,
+        )
+    fig.update_xaxes(title_text="Mean Abs. Effect mu* (Pk % pts)", row=1, col=1)
+    fig.update_yaxes(title_text="Interaction / Nonlinearity sigma", row=1, col=1)
+    fig.update_xaxes(title_text="Sobol Variance Share (0–1)", row=1, col=2)
+    fig.update_layout(barmode="group", height=390, margin=dict(l=140, r=30, t=55, b=45))
+    return fig
+
+
+def create_doctrine_comparator_figure(doc_res: dict[str, Any]) -> go.Figure:
+    """Plot closing-range cumulative Pk curves and rounds-per-kill across M12 fire doctrines."""
+    curves = doc_res.get("closing_curves", [])
+    rows = doc_res.get("doctrines", [])
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        horizontal_spacing=0.12,
+        subplot_titles=[
+            "Cumulative Kill Probability Along Closing Target Track",
+            "Effectiveness (%) vs. Rounds Expended per Kill",
+        ],
+    )
+    by_doc: dict[str, list[dict[str, Any]]] = {}
+    for pt in curves:
+        by_doc.setdefault(str(pt["doctrine"]), []).append(pt)
+    palette = ["#38bdf8", "#10b981", "#f59e0b", "#ec4899"]
+    for idx, (lbl, pts) in enumerate(by_doc.items()):
+        fig.add_trace(
+            go.Scatter(
+                x=[p["range_m"] for p in pts],
+                y=[p["cum_pk_pct"] for p in pts],
+                mode="lines+markers",
+                name=lbl,
+                line=dict(width=2.5, color=palette[idx % len(palette)]),
+            ),
+            row=1,
+            col=1,
+        )
+    if rows:
+        fig.add_trace(
+            go.Bar(
+                name="Cumulative Pk (%)",
+                x=[r["doctrine_label"] for r in rows],
+                y=[r["cum_pk_pct"] for r in rows],
+                marker_color="#10b981",
+            ),
+            row=1,
+            col=2,
+        )
+        fig.add_trace(
+            go.Bar(
+                name="Mean Rounds Expended",
+                x=[r["doctrine_label"] for r in rows],
+                y=[r["mean_rounds_expended"] for r in rows],
+                marker_color="#38bdf8",
+            ),
+            row=1,
+            col=2,
+        )
+    fig.update_xaxes(title_text="Engagement Range (m, closing right->left)", autorange="reversed", row=1, col=1)
+    fig.update_yaxes(title_text="Cumulative Pk (%)", range=[0, 105], row=1, col=1)
+    fig.update_yaxes(title_text="Pk (%) / Mean Rounds", row=1, col=2)
+    fig.update_layout(barmode="group", height=390, margin=dict(l=45, r=30, t=55, b=85), legend=dict(orientation="h", y=-0.28))
+    return fig
+
+
+def create_surrogate_pareto_figure(pareto_res: dict[str, Any]) -> go.Figure:
+    """Plot M17 GP surrogate candidate trade-space colored by $/Kill with exact Pareto frontier."""
+    cands = pareto_res.get("candidates", [])
+    front = pareto_res.get("pareto_front", [])
+    top_v = pareto_res.get("verified_top_designs", [])
+    sm = pareto_res.get("summary", {})
+    fig = go.Figure()
+    non_p = [c for c in cands if not c.get("is_pareto")]
+    if non_p:
+        fig.add_trace(
+            go.Scatter(
+                x=[c["pred_peak_recoil_kn"] for c in non_p],
+                y=[c["pred_usable_window_m"] for c in non_p],
+                mode="markers",
+                name="GP Predicted Candidates",
+                marker=dict(
+                    size=7,
+                    color=[c["pred_cost_per_kill_usd"] for c in non_p],
+                    colorscale="Viridis",
+                    colorbar=dict(title="$/Kill (USD)"),
+                    opacity=0.65,
+                ),
+                text=[f"Barrels={c['n_barrels']}, d={c['pellet_diam_mm']}mm, rho={c['pellet_density_g_cm3']}, Pk40={c['pred_pk_40m_pct']}%" for c in non_p],
+                hoverinfo="text+x+y",
+            )
+        )
+    if front:
+        fig.add_trace(
+            go.Scatter(
+                x=[c["pred_peak_recoil_kn"] for c in front],
+                y=[c["pred_usable_window_m"] for c in front],
+                mode="markers",
+                name="Non-Dominated Pareto Front",
+                marker=dict(size=11, color="#f59e0b", symbol="diamond", line=dict(width=1.4, color="#0f172a")),
+                text=[f"PARETO: Bbl={c['n_barrels']}, d={c['pellet_diam_mm']}mm, rho={c['pellet_density_g_cm3']}, Pk40={c['pred_pk_40m_pct']}%, $/k=${c['pred_cost_per_kill_usd']}" for c in front],
+                hoverinfo="text+x+y",
+            )
+        )
+    if top_v:
+        fig.add_trace(
+            go.Scatter(
+                x=[r["exact_peak_recoil_kn"] for r in top_v],
+                y=[r["exact_usable_window_m"] for r in top_v],
+                mode="markers+text",
+                name="Physics-Verified Top Pareto",
+                text=[r["role"] for r in top_v],
+                textposition="top center",
+                marker=dict(size=14, color="#10b981", symbol="star", line=dict(width=1.5, color="#ffffff")),
+            )
+        )
+    fig.add_vline(x=float(sm.get("recoil_limit_kn", 22.0)), line_dash="dash", line_color="#ef4444", annotation_text="Mount Limit (kN)")
+    fig.update_layout(
+        title=f"Matern-5/2 GP Surrogate Pareto Explorer (min LOO R2 = {sm.get('min_loo_r2', 0.0):.3f})",
+        xaxis_title="Predicted Peak Mount Recoil Force (kN)",
+        yaxis_title="Predicted Usable Engagement Window (m)",
+        height=410,
+        margin=dict(l=50, r=40, t=55, b=45),
     )
     return fig

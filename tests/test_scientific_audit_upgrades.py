@@ -197,7 +197,7 @@ def test_small_arms_terrain_and_calibration_fixes() -> None:
 
 
 def test_extended_vv_benchmarks_certificates_api_and_cli(tmp_path: Path) -> None:
-    assert ammo_mc.__version__ == "2.0.1"
+    assert ammo_mc.__version__ == "2.1.0"
 
     kb = get_kb()
     assert len(kb.formulas_by_id) == 96
@@ -224,7 +224,7 @@ def test_extended_vv_benchmarks_certificates_api_and_cli(tmp_path: Path) -> None
     client = TestClient(app)
     res_h = client.get("/health")
     assert res_h.status_code == 200
-    assert res_h.json()["version"] == "2.0.1"
+    assert res_h.json()["version"] == "2.1.0"
 
     res_b = client.get("/validate/benchmarks?seed=42&n_mc=20000")
     assert res_b.status_code == 200

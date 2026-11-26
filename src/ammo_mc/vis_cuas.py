@@ -839,7 +839,11 @@ def create_2d_cuas_fallout_safety_map_figure(
     return fig
 
 
-def create_antidrone_effective_range_figure(env_res: dict[str, Any]) -> go.Figure:
+def create_antidrone_effective_range_figure(
+    env_res: dict[str, Any],
+    epistemic_env: dict[str, Any] | None = None,
+    empirical_anchors: list[dict[str, Any]] | None = None,
+) -> go.Figure:
     """Create 2-panel visualization of P_kill(R) envelope (with R80/R50 thresholds) and lethality vs range."""
     recs = env_res.get("records", [])
     comp = env_res.get("comparison_curves", [])
@@ -895,6 +899,69 @@ def create_antidrone_effective_range_figure(env_res: dict[str, Any]) -> go.Figur
 
         fig.add_hline(y=80.0, line_dash="dash", line_color="#EF4444", annotation_text="R80 (80%)", row=1, col=1)
         fig.add_hline(y=50.0, line_dash="dot", line_color="#F59E0B", annotation_text="R50 (50%)", row=1, col=1)
+
+        if epistemic_env and epistemic_env.get("curves"):
+            ec = epistemic_env["curves"]
+            er = [c["range_m"] for c in ec]
+            ep5 = [c["pk_shared_p5_pct"] for c in ec]
+            ep50 = [c["pk_shared_p50_pct"] for c in ec]
+            ep95 = [c["pk_shared_p95_pct"] for c in ec]
+            fig.add_trace(
+                go.Scatter(
+                    x=er,
+                    y=ep95,
+                    mode="lines",
+                    line=dict(width=0.5, color="rgba(56, 189, 248, 0.25)"),
+                    showlegend=False,
+                    hoverinfo="skip",
+                ),
+                row=1,
+                col=1,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=er,
+                    y=ep5,
+                    mode="lines",
+                    fill="tonexty",
+                    fillcolor="rgba(56, 189, 248, 0.18)",
+                    line=dict(width=0.5, color="rgba(56, 189, 248, 0.25)"),
+                    name="L0 Epistemic P5–P95 Band (Shared)",
+                ),
+                row=1,
+                col=1,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=er,
+                    y=ep50,
+                    mode="lines",
+                    name="L0 Epistemic Median P50",
+                    line=dict(color="#38BDF8", width=2.0, dash="dashdot"),
+                ),
+                row=1,
+                col=1,
+            )
+
+        if empirical_anchors:
+            grade_colors = {"B": "#06B6D4", "C": "#F59E0B", "D": "#EF4444"}
+            for g_lbl in ("B", "C", "D"):
+                pts = [a for a in empirical_anchors if a.get("is_pk_probability") and str(a.get("evidence_grade", "")).upper() == g_lbl]
+                if not pts:
+                    continue
+                fig.add_trace(
+                    go.Scatter(
+                        x=[float(p["range_m"]) for p in pts],
+                        y=[float(p["pk_pct"]) for p in pts],
+                        mode="markers",
+                        name=f"Workbook Anchors (Grade {g_lbl}, Indicative)",
+                        marker=dict(size=10, symbol="diamond", color=grade_colors.get(g_lbl, "#CBD5E1"), line=dict(width=1.2, color="#0F172A")),
+                        text=[f"{p['case_id']} [{p['evidence_grade']}]: {p['short_label']}<br>{p['caveat']} ({p['source_id']})" for p in pts],
+                        hoverinfo="text+x+y",
+                    ),
+                    row=1,
+                    col=1,
+                )
 
         r80_m = sm.get("r80_m")
         if r80_m is not None:

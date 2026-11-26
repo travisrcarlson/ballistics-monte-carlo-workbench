@@ -74,6 +74,67 @@ def sphere_drag_nol_1972_array(mach_arr: np.ndarray) -> np.ndarray:
     return np.interp(m, NOL_1972_MACH, NOL_1972_CD_RE1E4)
 
 
+def sphere_drag_loth_2008(mach: float, re: float) -> float:
+    """Loth (2008) compression-dominated sphere drag correlation Cd(M, Re) (`EB-F12`)."""
+    m = max(0.01, min(3.5, float(mach)))
+    re_val = max(45.0, float(re))
+    c_m = (
+        (5.0 / 3.0) + (2.0 / 3.0) * math.tanh(3.0 * math.log(m + 0.1))
+        if m <= 1.45
+        else 2.044 + 0.2 * math.exp(-1.8 * (math.log(m / 1.5) ** 2))
+    )
+    g_m = (
+        1.0 - 1.525 * (m ** 4)
+        if m < 0.89
+        else 0.0002 + 0.0008 * math.tanh(12.77 * (m - 2.02))
+    )
+    h_m = 1.0 - 0.258 * c_m / (1.0 + 514.0 * g_m)
+    return float((24.0 / re_val) * (1.0 + 0.15 * (re_val ** 0.687)) * h_m + 0.42 * c_m / (1.0 + 42500.0 * g_m / (re_val ** 1.16)))
+
+
+def sphere_drag_loth_2008_array(mach_arr: np.ndarray, re_arr: np.ndarray) -> np.ndarray:
+    """Vectorized Loth (2008) sphere drag Cd(M, Re) (`EB-F12`)."""
+    m = np.clip(np.asarray(mach_arr, dtype=np.float64), 0.01, 3.5)
+    re_val = np.maximum(np.asarray(re_arr, dtype=np.float64), 45.0)
+    c_m = np.where(
+        m <= 1.45,
+        (5.0 / 3.0) + (2.0 / 3.0) * np.tanh(3.0 * np.log(m + 0.1)),
+        2.044 + 0.2 * np.exp(-1.8 * (np.log(m / 1.5) ** 2)),
+    )
+    g_m = np.where(
+        m < 0.89,
+        1.0 - 1.525 * (m ** 4),
+        0.0002 + 0.0008 * np.tanh(12.77 * (m - 2.02)),
+    )
+    h_m = 1.0 - 0.258 * c_m / (1.0 + 514.0 * g_m)
+    return (24.0 / re_val) * (1.0 + 0.15 * (re_val ** 0.687)) * h_m + 0.42 * c_m / (1.0 + 42500.0 * g_m / (re_val ** 1.16))
+
+
+def tropospheric_pressure_pa(altitude_m: float = 0.0, p0_pa: float = 101325.0) -> float:
+    """ISA tropospheric barometric pressure vs. geopotential altitude (`AT-F01`)."""
+    h = max(-500.0, min(11000.0, float(altitude_m)))
+    return float(max(1000.0, float(p0_pa)) * ((1.0 - 0.0065 * h / 288.15) ** 5.25588))
+
+
+def sutherland_viscosity_pa_s(temp_c: float = 15.0) -> float:
+    """Dynamic viscosity of air via Sutherland's law (`AT-F05`)."""
+    t_k = max(180.0, float(temp_c) + 273.15)
+    return float(1.458e-6 * (t_k ** 1.5) / (t_k + 110.4))
+
+
+def surface_layer_wind_log_law(
+    u_ref_mps: float,
+    z_m: float,
+    z_ref_m: float = 10.0,
+    z0_m: float = 0.03,
+) -> float:
+    """Logarithmic atmospheric boundary-layer wind profile (`AT-F07`)."""
+    z0 = max(1e-4, float(z0_m))
+    z_eff = max(2.0 * z0, float(z_m))
+    z_ref_eff = max(2.0 * z0, float(z_ref_m))
+    return float(float(u_ref_mps) * math.log(z_eff / z0) / math.log(z_ref_eff / z0))
+
+
 def sphere_drag_compton_1996(mach: float, trailing_lead: bool = False) -> float:
     """Compton (1996) piecewise sphere Cd(M) for undeformed leading vs deformed trailing lead."""
     m = max(0.0, float(mach))
@@ -158,6 +219,9 @@ def _eval_v2_drag_cd(
         return sphere_drag_compton_1996(mach, trailing_lead=False)
     if law == "compton_trailing":
         return sphere_drag_compton_1996(mach, trailing_lead=True)
+    if law == "loth_2008":
+        re = max(45.0, v_rel_mps * diam_m * rho_kg_m3 / max(mu_pa_s, 1e-7))
+        return sphere_drag_loth_2008(mach, re)
     # Fallback compressible sphere drag
     from ammo_mc.aero_sphere import sphere_drag_compressible
 
@@ -224,7 +288,8 @@ def integrate_pellet_trajectory_rk4(
     def _deriv(x_val: float, v_val: float) -> tuple[float, float]:
         v_safe = max(1.0, v_val)
         v_rel = max(1.0, v_safe + hw)
-        cd = _eval_v2_drag_cd(v_rel, a_sound, drag_law=drag_law, diam_m=d_m, rho_kg_m3=rho_air)
+        mu_air = sutherland_viscosity_pa_s(temp_c)
+        cd = _eval_v2_drag_cd(v_rel, a_sound, drag_law=drag_law, diam_m=d_m, rho_kg_m3=rho_air, mu_pa_s=mu_air)
         cluster_fac = 0.75 if (x_indep > 0.0 and x_val < x_indep) else 1.0
         dv_dx = -(0.5 * rho_air * kd_eff * cluster_fac * cd * area_p * (v_rel ** 2)) / (m_kg * v_safe)
         dt_dx = 1.0 / v_safe
@@ -750,4 +815,232 @@ def generate_singer_evasive_trajectory(
         "vz": vz_ev,
         "ay": ay,
         "az": az,
+    }
+
+
+def integrate_pellet_trajectory_3dof_rk4(
+    v0_mps: float,
+    diam_mm: float,
+    density_kg_m3: float,
+    aim_azimuth_deg: float = 0.0,
+    aim_elevation_deg: float = 15.0,
+    *,
+    target_slant_range_m: float | None = None,
+    max_time_s: float = 8.0,
+    dt_s: float = 0.001,
+    drag_law: str = "walsh_1976",
+    k_d: float = 1.0,
+    site_altitude_m: float = 0.0,
+    temp_c: float = 15.0,
+    rh_fraction: float = 0.0,
+    wind_xyz_10m_mps: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    wind_profile_mode: str = "log_law",
+    z0_m: float = 0.03,
+    launch_height_m: float = 2.0,
+    pellet_mass_g: float | None = None,
+) -> dict[str, Any]:
+    """Full 3-DOF time-domain RK4 pellet integrator (`EB-F01` + `AT-F01` + `AT-F04` + `AT-F07`)."""
+    d_m = max(1e-4, float(diam_mm) / 1000.0)
+    rho_p = max(100.0, float(density_kg_m3))
+    m_kg = (
+        float(pellet_mass_g) / 1000.0
+        if (pellet_mass_g is not None and float(pellet_mass_g) > 0.0)
+        else rho_p * math.pi * (d_m ** 3) / 6.0
+    )
+    area_p = math.pi * 0.25 * (d_m ** 2)
+    kd_eff = max(0.5, float(k_d))
+    az_r = math.radians(float(aim_azimuth_deg))
+    el_r = math.radians(float(aim_elevation_deg))
+    v0 = max(1.0, float(v0_mps))
+
+    pos = np.array([0.0, 0.0, float(launch_height_m)], dtype=np.float64)
+    vel = np.array(
+        [
+            v0 * math.cos(el_r) * math.cos(az_r),
+            v0 * math.cos(el_r) * math.sin(az_r),
+            v0 * math.sin(el_r),
+        ],
+        dtype=np.float64,
+    )
+    p0_station = tropospheric_pressure_pa(site_altitude_m)
+    atm0 = cipm_2007_air_density(temp_c=temp_c, pressure_pa=p0_station, rh_fraction=rh_fraction)
+    mu0 = sutherland_viscosity_pa_s(temp_c)
+
+    wx0, wy0, wz0 = (float(wind_xyz_10m_mps[0]), float(wind_xyz_10m_mps[1]), float(wind_xyz_10m_mps[2]))
+    mode_w = str(wind_profile_mode).lower().strip()
+    dt = max(1e-4, min(0.02, float(dt_s)))
+    n_steps = max(2, int(math.ceil(max(0.1, float(max_time_s)) / dt)))
+    stop_r = float(target_slant_range_m) if target_slant_range_m is not None else None
+    los_u = np.array([math.cos(el_r) * math.cos(az_r), math.cos(el_r) * math.sin(az_r), math.sin(el_r)], dtype=np.float64)
+
+    def _wind_at(z_rel: float) -> np.ndarray:
+        z_eff = max(0.5, z_rel)
+        if mode_w == "uniform":
+            fac = 1.0
+        elif mode_w == "power_law":
+            fac = (max(z_eff, 2.0) / 10.0) ** 0.143
+        else:
+            fac = surface_layer_wind_log_law(1.0, z_eff, z_ref_m=10.0, z0_m=z0_m)
+        return np.array([wx0 * fac, wy0 * fac, wz0], dtype=np.float64)
+
+    def _deriv(p_v: np.ndarray, v_v: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        z_asl = float(site_altitude_m) + max(0.0, float(p_v[2]))
+        if abs(p_v[2] - float(launch_height_m)) < 1.0 and abs(site_altitude_m) < 1.0:
+            rho_air = atm0["rho_kg_m3"]
+            a_snd = atm0["a_mps"]
+            mu_air = mu0
+        else:
+            p_loc = tropospheric_pressure_pa(z_asl)
+            t_loc = float(temp_c) - 0.0065 * max(0.0, float(p_v[2]))
+            atm = cipm_2007_air_density(temp_c=t_loc, pressure_pa=p_loc, rh_fraction=rh_fraction)
+            rho_air = atm["rho_kg_m3"]
+            a_snd = atm["a_mps"]
+            mu_air = sutherland_viscosity_pa_s(t_loc)
+        v_rel = v_v - _wind_at(float(p_v[2]))
+        vm = max(0.5, float(np.linalg.norm(v_rel)))
+        cd = _eval_v2_drag_cd(vm, a_snd, drag_law=drag_law, diam_m=d_m, rho_kg_m3=rho_air, mu_pa_s=mu_air)
+        acc = -(0.5 * rho_air * kd_eff * cd * area_p / m_kg) * vm * v_rel
+        acc[2] -= G0_MPS2
+        return v_v, acc
+
+    t_cur = 0.0
+    for _ in range(n_steps):
+        k1_p, k1_v = _deriv(pos, vel)
+        k2_p, k2_v = _deriv(pos + 0.5 * dt * k1_p, vel + 0.5 * dt * k1_v)
+        k3_p, k3_v = _deriv(pos + 0.5 * dt * k2_p, vel + 0.5 * dt * k2_v)
+        k4_p, k4_v = _deriv(pos + dt * k3_p, vel + dt * k3_v)
+        pos_next = pos + (dt / 6.0) * (k1_p + 2.0 * k2_p + 2.0 * k3_p + k4_p)
+        vel_next = vel + (dt / 6.0) * (k1_v + 2.0 * k2_v + 2.0 * k3_v + k4_v)
+        t_next = t_cur + dt
+
+        if stop_r is not None:
+            r_prev = float(np.linalg.norm(pos - np.array([0.0, 0.0, float(launch_height_m)])))
+            r_next = float(np.linalg.norm(pos_next - np.array([0.0, 0.0, float(launch_height_m)])))
+            if r_next >= stop_r:
+                frac = max(0.0, min(1.0, (stop_r - r_prev) / max(r_next - r_prev, 1e-9)))
+                pos = pos + frac * (pos_next - pos)
+                vel = vel + frac * (vel_next - vel)
+                t_cur = t_cur + frac * dt
+                break
+
+        if stop_r is None and pos_next[2] <= 0.0 and t_cur > 0.01:
+            frac = max(0.0, min(1.0, float(pos[2]) / max(float(pos[2] - pos_next[2]), 1e-9)))
+            pos = pos + frac * (pos_next - pos)
+            vel = vel + frac * (vel_next - vel)
+            t_cur = t_cur + frac * dt
+            break
+
+        pos = pos_next
+        vel = vel_next
+        t_cur = t_next
+
+    rel_pos = pos - np.array([0.0, 0.0, float(launch_height_m)], dtype=np.float64)
+    v_ret = float(np.linalg.norm(vel))
+    slant = float(np.linalg.norm(rel_pos))
+    los_z = float(los_u[2] * slant)
+    gravity_drop_m = max(0.0, (los_z + float(launch_height_m)) - float(pos[2]))
+    lat_u = np.array([-math.sin(az_r), math.cos(az_r), 0.0], dtype=np.float64)
+    crosswind_drift_m = float(np.dot(rel_pos, lat_u))
+
+    return {
+        "pos_m": [float(x) for x in pos],
+        "vel_mps": [float(x) for x in vel],
+        "slant_range_m": float(slant),
+        "ground_range_m": float(math.hypot(float(pos[0]), float(pos[1]))),
+        "tof_s": float(t_cur),
+        "v_retained_mps": float(v_ret),
+        "energy_j": float(0.5 * m_kg * (v_ret ** 2)),
+        "gravity_drop_m": float(gravity_drop_m),
+        "crosswind_drift_m": float(crosswind_drift_m),
+        "station_pressure_pa": float(p0_station),
+        "station_air_density_kg_m3": float(atm0["rho_kg_m3"]),
+    }
+
+
+def solve_iterative_3d_lead_intercept(
+    r0_m: tuple[float, float, float],
+    vt_mps: tuple[float, float, float],
+    *,
+    at_mps2: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    t_dead_s: float = 0.141,
+    v0_mps: float = 405.0,
+    diam_mm: float = 3.30,
+    density_kg_m3: float = 11200.0,
+    drag_law: str = "walsh_1976",
+    k_d: float = 1.0,
+    site_altitude_m: float = 0.0,
+    temp_c: float = 15.0,
+    rh_fraction: float = 0.0,
+    wind_xyz_10m_mps: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    max_iters: int = 8,
+    tol_s: float = 1e-4,
+) -> dict[str, Any]:
+    """Iterative 3D vector intercept & ballistic superelevation solver (`FC-F12` / `M08`)."""
+    r0 = np.asarray(r0_m, dtype=np.float64)
+    vt = np.asarray(vt_mps, dtype=np.float64)
+    at = np.asarray(at_mps2, dtype=np.float64)
+    td = max(0.0, float(t_dead_s))
+    v0 = max(50.0, float(v0_mps))
+    p_station = tropospheric_pressure_pa(site_altitude_m)
+
+    t_tof = float(np.linalg.norm(r0)) / v0
+    rf = r0.copy()
+    residual = 1.0
+    iters_used = 0
+    superel_rad = 0.0
+    drop_m = 0.0
+    traj_last: dict[str, Any] = {}
+
+    for k in range(1, max(2, int(max_iters)) + 1):
+        iters_used = k
+        t_lead = td + t_tof
+        rf = r0 + vt * t_lead + 0.5 * at * (t_lead ** 2)
+        slant = max(1.0, float(np.linalg.norm(rf)))
+        az_deg = math.degrees(math.atan2(float(rf[1]), float(rf[0])))
+        el_los_rad = math.atan2(float(rf[2]), max(1e-6, math.hypot(float(rf[0]), float(rf[1]))))
+
+        # 3-DOF trajectory to slant range for accurate TOF + gravity drop / superelevation
+        traj_last = integrate_pellet_trajectory_3dof_rk4(
+            v0_mps=v0,
+            diam_mm=diam_mm,
+            density_kg_m3=density_kg_m3,
+            aim_azimuth_deg=az_deg,
+            aim_elevation_deg=math.degrees(el_los_rad + superel_rad),
+            target_slant_range_m=slant,
+            dt_s=0.002,
+            drag_law=drag_law,
+            k_d=k_d,
+            site_altitude_m=site_altitude_m,
+            temp_c=temp_c,
+            rh_fraction=rh_fraction,
+            wind_xyz_10m_mps=wind_xyz_10m_mps,
+            launch_height_m=0.0,
+        )
+        t_new = float(traj_last["tof_s"])
+        drop_m = max(0.0, float(traj_last["gravity_drop_m"]))
+        superel_rad = math.atan2(drop_m, slant)
+        residual = abs(t_new - t_tof)
+        t_tof = 0.5 * t_tof + 0.5 * t_new if residual > 0.02 else t_new
+        if residual <= float(tol_s) and k >= 2:
+            break
+
+    az_final_deg = math.degrees(math.atan2(float(rf[1]), float(rf[0])))
+    el_los_deg = math.degrees(math.atan2(float(rf[2]), max(1e-6, math.hypot(float(rf[0]), float(rf[1])))))
+    el_aim_deg = el_los_deg + math.degrees(superel_rad)
+    return {
+        "tof_s": round(float(t_tof), 5),
+        "t_dead_s": round(td, 4),
+        "total_lead_time_s": round(float(td + t_tof), 5),
+        "intercept_pos_m": [round(float(x), 3) for x in rf],
+        "slant_range_m": round(float(np.linalg.norm(rf)), 3),
+        "aim_azimuth_deg": round(float(az_final_deg), 3),
+        "los_elevation_deg": round(float(el_los_deg), 3),
+        "aim_elevation_deg": round(float(el_aim_deg), 3),
+        "superelevation_mrad": round(float(superel_rad * 1000.0), 3),
+        "gravity_drop_m": round(float(drop_m), 4),
+        "v_retained_mps": round(float(traj_last.get("v_retained_mps", v0)), 2),
+        "station_pressure_pa": round(float(p_station), 1),
+        "residual_s": float(residual),
+        "iterations": int(iters_used),
+        "converged": bool(residual <= max(float(tol_s), 5e-4)),
     }

@@ -302,6 +302,9 @@ def simulate_closed_loop_fcs_engagement_mc(
     dead_time_override_ms: float | None = None,
     use_heavy_tailed_atr: bool = False,
     enable_aspect_rcs_nulls: bool = False,
+    use_iterative_3d_lead_solver: bool = False,
+    site_altitude_m: float = 0.0,
+    target_elevation_deg: float = 15.0,
 ) -> dict[str, Any]:
     """Simulate closed-loop sensor tracking, Kalman lead prediction, servo limits & evasive drone intercept."""
     rng = np.random.default_rng(seed)
@@ -327,19 +330,48 @@ def simulate_closed_loop_fcs_engagement_mc(
     area_m2 = math.pi * 0.25 * (d_m ** 2)
     base_cd = float(ammo.get("effective_cd", 0.47))
 
-    rho_air = 1.225
-    kappa_nom = (rho_air * base_cd * area_m2) / (2.0 * max(m_kg, 1e-6))
-    v_imp_nom = v0_nom * math.exp(-kappa_nom * target_distance_m)
-    t_tof_nom = target_distance_m / max((v0_nom + v_imp_nom) / 2.0, 10.0)
-
-    update_hz = float(sensor["update_rate_hz"])
-    dt_track = 1.0 / update_hz
     from ammo_mc.cuas_ballistics_v2 import (
+        cipm_2007_air_density,
         compute_aspect_dependent_rcs_dbsm,
         compute_serial_dead_time_budget,
         sample_heavy_tailed_atr_error_mrad,
+        solve_iterative_3d_lead_intercept,
+        tropospheric_pressure_pa,
     )
     from ammo_mc.cuas_rigor import resolve_verification_grade
+
+    p_station_pa = tropospheric_pressure_pa(site_altitude_m)
+    rho_air = cipm_2007_air_density(temp_c=15.0, pressure_pa=p_station_pa, rh_fraction=0.0)["rho_kg_m3"]
+    kappa_nom = (rho_air * base_cd * area_m2) / (2.0 * max(m_kg, 1e-6))
+    v_imp_nom = v0_nom * math.exp(-kappa_nom * target_distance_m)
+    t_tof_nom = target_distance_m / max((v0_nom + v_imp_nom) / 2.0, 10.0)
+    update_hz = float(sensor["update_rate_hz"])
+    dt_track = 1.0 / update_hz
+
+    iterative_lead_sol: dict[str, Any] | None = None
+    if use_iterative_3d_lead_solver:
+        el_t = math.radians(max(0.0, min(80.0, float(target_elevation_deg))))
+        hdg_r = math.radians(float(drone_heading_deg))
+        r0_vec = (
+            float(target_distance_m) * math.cos(el_t),
+            0.0,
+            float(target_distance_m) * math.sin(el_t),
+        )
+        vt_vec = (
+            -float(drone_velocity_mps) * math.cos(hdg_r),
+            float(drone_velocity_mps) * math.sin(hdg_r),
+            0.0,
+        )
+        iterative_lead_sol = solve_iterative_3d_lead_intercept(
+            r0_vec,
+            vt_vec,
+            t_dead_s=float(sensor["fcs_latency_ms"]) / 1000.0 if not use_serial_dead_time_chain else 0.141,
+            v0_mps=v0_nom,
+            diam_mm=float(ammo["pellet_diameter_mm"]),
+            density_kg_m3=float(m_kg / max((math.pi / 6.0) * (d_m ** 3), 1e-12)),
+            site_altitude_m=site_altitude_m,
+        )
+        t_tof_nom = float(iterative_lead_sol["tof_s"])
 
     dead_budget = compute_serial_dead_time_budget(
         preset=dead_time_preset,
@@ -619,6 +651,9 @@ def simulate_closed_loop_fcs_engagement_mc(
             "enable_aspect_rcs_nulls": bool(enable_aspect_rcs_nulls),
             "rcs_null_applied": bool(rcs_null_applied),
             "rcs_null_scale": round(float(rcs_null_scale), 3),
+            "use_iterative_3d_lead_solver": bool(use_iterative_3d_lead_solver),
+            "site_altitude_m": round(float(site_altitude_m), 1),
+            "iterative_lead_solution": iterative_lead_sol,
             "verification_grade": resolve_verification_grade(
                 {
                     "sensor_noise": "V4" if use_heavy_tailed_atr else "V2",
@@ -1904,6 +1939,9 @@ def simulate_cuas_pellet_fallout_hazard(
     enable_wind_shear: bool = True,
     n_sample_pellets: int = 300,
     seed: int = 42,
+    site_altitude_m: float = 0.0,
+    wind_profile_mode: str = "power_law",
+    surface_roughness_z0_m: float = 0.03,
 ) -> dict[str, Any]:
     """Vectorized 3-DoF spherical pellet fallout integrator computing ground Surface Danger Zone (SDZ) & hazard tiers."""
     rng = np.random.default_rng(seed)
@@ -1974,13 +2012,22 @@ def simulate_cuas_pellet_fallout_hazard(
     else:
         f_deform = rng.uniform(1.00, 1.06, size=N)
 
+    from ammo_mc.cuas_ballistics_v2 import surface_layer_wind_log_law, tropospheric_pressure_pa
+
     def _accel(p_arr: np.ndarray, v_arr: np.ndarray, f_def_arr: np.ndarray) -> np.ndarray:
         z_m = np.maximum(p_arr[:, 2], 0.0)
-        temp_ratio = np.maximum(1.0 - 2.2558e-5 * z_m, 0.1)
+        z_asl = float(site_altitude_m) + z_m
+        temp_ratio = np.maximum(1.0 - 2.2558e-5 * z_asl, 0.1)
         rho_air = 1.225 * (temp_ratio ** 4.2559)
         a_sound = 340.29 * np.sqrt(temp_ratio)
 
-        shear = (np.maximum(z_m, 2.0) / 10.0) ** 0.143 if enable_wind_shear else np.ones_like(z_m)
+        if not enable_wind_shear:
+            shear = np.ones_like(z_m)
+        elif str(wind_profile_mode).lower().strip() == "log_law":
+            z0 = max(1e-4, float(surface_roughness_z0_m))
+            shear = np.log(np.maximum(z_m, 2.0 * z0) / z0) / math.log(10.0 / z0)
+        else:
+            shear = (np.maximum(z_m, 2.0) / 10.0) ** 0.143
         w_world_x = wind_downrange_mps * math.cos(az0_rad) - wind_crossrange_mps * math.sin(az0_rad)
         w_world_y = wind_downrange_mps * math.sin(az0_rad) + wind_crossrange_mps * math.cos(az0_rad)
         w_vec = np.column_stack([w_world_x * shear, w_world_y * shear, np.zeros_like(z_m)])
@@ -2112,6 +2159,23 @@ def simulate_cuas_pellet_fallout_hazard(
     y_spread = max(float(np.percentile(crossrange_imp, 97.5) - np.percentile(crossrange_imp, 2.5)), 1.0)
     sdz_area_m2 = 0.25 * math.pi * x_span * y_spread
 
+    # 36-point oriented 95% confidence dispersion ellipse around ground impacts
+    cx_m = float(np.mean(x_impact)) if len(x_impact) > 0 else 0.0
+    cy_m = float(np.mean(y_impact)) if len(y_impact) > 0 else 0.0
+    dr_std = max(float(np.std(downrange_imp)), 3.0) if len(downrange_imp) > 1 else 5.0
+    cr_std = max(float(np.std(crossrange_imp)), 2.0) if len(crossrange_imp) > 1 else 3.0
+    # chi2(df=2, 0.95)^0.5 = 2.4477
+    a_sf = 2.4477 * dr_std
+    b_sf = 2.4477 * cr_std
+    th_sf = np.linspace(0.0, 2.0 * math.pi, 37, endpoint=True)
+    shotfall_contour_95_xy_m = [
+        [
+            round(cx_m + a_sf * math.cos(float(t)) * u_dr_x + b_sf * math.sin(float(t)) * u_cr_x, 2),
+            round(cy_m + a_sf * math.cos(float(t)) * u_dr_y + b_sf * math.sin(float(t)) * u_cr_y, 2),
+        ]
+        for t in th_sf
+    ]
+
     trajectories_3d = [
         {
             "x": traj_hist[gi][0],
@@ -2129,6 +2193,8 @@ def simulate_cuas_pellet_fallout_hazard(
             "firing_elevation_deg": firing_elevation_deg,
             "firing_azimuth_deg": firing_azimuth_deg,
             "turret_height_m": turret_height_m,
+            "site_altitude_m": round(float(site_altitude_m), 1),
+            "wind_profile_mode": str(wind_profile_mode),
             "pellet_density_kg_m3": round(rho_p, 0),
             "min_fallout_range_m": round(float(np.min(ranges_m)), 1),
             "mean_fallout_range_m": round(float(np.mean(ranges_m)), 1),
@@ -2156,6 +2222,7 @@ def simulate_cuas_pellet_fallout_hazard(
             "hazard_class": hazard_classes,
             "flight_time_s": [round(float(x), 2) for x in t_impact],
         },
+        "shotfall_contour_95_xy_m": shotfall_contour_95_xy_m,
         "trajectories_3d": trajectories_3d,
     }
 

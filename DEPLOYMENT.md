@@ -36,7 +36,7 @@ Share direct links into any consolidated workbench or C-UAS stage module via que
 - `?wb=sim` / `?wb=3d` / `?wb=firing` — Ballistics & 3D Trajectory Simulation Domain
 - `?wb=physics` / `?wb=mcdrag` — Physics & Aero Labs + McCoy MCDRAG 3D CAD
 - `?wb=iatg` — UNODA IATG 01.80 / 02.20 Safety & Quantity-Distance Workbench
-- `?wb=validation` / `?wb=literature` — Automated V&V Suite (`44` core checks + `53` C-UAS workbook oracles & certificates) and Scientific Literature Provenance (`101` primary sources, `96` formulas)
+- `?wb=validation` / `?wb=literature` — Automated V&V Suite (`44` core checks + `110` canonical / `116` total C-UAS workbook oracles + `12` empirical anchors & certificates) and Scientific Literature Provenance (`101` primary sources, `96` formulas)
 
 ---
 

@@ -91,7 +91,7 @@ app = FastAPI(
         "Production REST API for stochastic ammunition effects, trajectory dispersion, "
         "fuze reliability, blast/fragmentation hazard modeling, and Counter-UAS trade studies."
     ),
-    version="2.0.1",
+    version="2.1.0",
 )
 
 app.add_middleware(
@@ -145,7 +145,7 @@ def _verify_api_auth(
 
 class HealthResponse(BaseModel):
     status: str = "ok"
-    version: str = "2.0.1"
+    version: str = "2.1.0"
     uptime_seconds: float
     use_limitation: str = USE_LIMITATION_NOTICE
 
@@ -176,7 +176,7 @@ def get_health() -> HealthResponse:
     """Return API health status, version, and official use limitation notice."""
     return HealthResponse(
         status="ok",
-        version="2.0.1",
+        version="2.1.0",
         uptime_seconds=round(time.time() - START_TIME, 2),
         use_limitation=USE_LIMITATION_NOTICE,
     )
@@ -1469,6 +1469,7 @@ class BriefingExportRequest(BaseModel):
     adversarial_result: Optional[dict[str, Any]] = None
     calibration_result: Optional[dict[str, Any]] = None
     vv_result: Optional[dict[str, Any]] = None
+    scenario_manifest: Optional[dict[str, Any]] = None
 
 
 @app.post("/cuas/briefing/pdf", tags=["C-UAS", "Export"], dependencies=[Depends(_verify_api_auth)])
@@ -1549,8 +1550,180 @@ def post_cuas_pellet_consistency(req: PelletConsistencyRequest) -> dict[str, Any
 
 
 @app.get("/cuas/vv/workbook-cases", tags=["Validation"], dependencies=[Depends(_verify_api_auth)])
-def get_cuas_workbook_cases() -> dict[str, Any]:
+def get_cuas_workbook_cases(
+    tier: str = Query("fast", description="Validation tier: fast or full."),
+) -> dict[str, Any]:
     """Run deterministic C-UAS workbook Validation_Cases & Calc_Checks regression oracles."""
     from ammo_mc.cuas_rigor import run_workbook_validation_cases
 
-    return _to_json_safe(run_workbook_validation_cases())
+    return _to_json_safe(run_workbook_validation_cases(tier=tier))
+
+
+@app.get("/cuas/empirical-anchors", tags=["Validation"], dependencies=[Depends(_verify_api_auth)])
+def get_cuas_empirical_anchors() -> dict[str, Any]:
+    """Return Grade B/C/D empirical calibration anchors (VC-111..VC-122)."""
+    from ammo_mc.cuas_rigor import get_empirical_calibration_anchors
+
+    anchors = get_empirical_calibration_anchors()
+    return _to_json_safe({"total": len(anchors), "anchors": anchors})
+
+
+class EpistemicSensitivityRequest(BaseModel):
+    ammo_preset: str = Field(default="12G_TSS_NO2_C_UAS")
+    choke: str = Field(default="Modified")
+    drone_class: str = Field(default="fpv_cfrp")
+    n_barrels: int = Field(default=6, ge=1, le=24)
+    drone_speed_mps: float = Field(default=15.0, ge=0.0, le=100.0)
+    site_altitude_m: float = Field(default=0.0, ge=0.0, le=5000.0)
+    n_outer: int = Field(default=16, ge=4, le=128)
+    seed: int = Field(default=2100)
+    include_sensitivity: bool = Field(default=True)
+
+
+@app.post("/cuas/epistemic-sensitivity", tags=["C-UAS Analytics"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_epistemic_sensitivity(req: EpistemicSensitivityRequest) -> dict[str, Any]:
+    """Compute nested L0/L1 epistemic envelope plus Morris and Sobol global sensitivity."""
+    from ammo_mc.cuas_v21_science import (
+        run_cuas_l0_epistemic_envelope,
+        run_cuas_morris_screening,
+        run_cuas_sobol_sensitivity,
+    )
+
+    ep = run_cuas_l0_epistemic_envelope(
+        ammo_preset=req.ammo_preset,
+        choke=req.choke,
+        drone_class=req.drone_class,
+        n_barrels=req.n_barrels,
+        drone_speed_mps=req.drone_speed_mps,
+        site_altitude_m=req.site_altitude_m,
+        n_outer=req.n_outer,
+        seed=req.seed,
+    )
+    out: dict[str, Any] = {"epistemic": ep}
+    if req.include_sensitivity:
+        out["morris"] = run_cuas_morris_screening(
+            ammo_preset=req.ammo_preset,
+            choke=req.choke,
+            drone_class=req.drone_class,
+            n_barrels=req.n_barrels,
+            drone_speed_mps=req.drone_speed_mps,
+            site_altitude_m=req.site_altitude_m,
+            seed=req.seed,
+        )
+        out["sobol"] = run_cuas_sobol_sensitivity(
+            ammo_preset=req.ammo_preset,
+            choke=req.choke,
+            drone_class=req.drone_class,
+            n_barrels=req.n_barrels,
+            drone_speed_mps=req.drone_speed_mps,
+            site_altitude_m=req.site_altitude_m,
+            seed=req.seed,
+        )
+    return _to_json_safe(out)
+
+
+class DoctrineCompareRequest(BaseModel):
+    ammo_preset: str = Field(default="12G_TSS_NO2_C_UAS")
+    choke: str = Field(default="Modified")
+    drone_class: str = Field(default="fpv_cfrp")
+    n_barrels: int = Field(default=4, ge=1, le=24)
+    magazine_shells: int = Field(default=12, ge=2, le=64)
+    r_start_m: float = Field(default=55.0, ge=15.0, le=200.0)
+    drone_speed_mps: float = Field(default=20.0, ge=1.0, le=80.0)
+    n_trials: int = Field(default=300, ge=25, le=2000)
+    seed: int = Field(default=2101)
+
+
+@app.post("/cuas/doctrine-compare", tags=["C-UAS Analytics"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_doctrine_compare(req: DoctrineCompareRequest) -> dict[str, Any]:
+    """Compare Simultaneous Salvo, Ripple Salvo, Wilkening SLS, and Shoot-Adjust-Shoot doctrines."""
+    from ammo_mc.cuas_v21_science import compare_cuas_engagement_doctrines
+
+    res = compare_cuas_engagement_doctrines(
+        ammo_preset=req.ammo_preset,
+        choke=req.choke,
+        drone_class=req.drone_class,
+        n_barrels=req.n_barrels,
+        magazine_shells=req.magazine_shells,
+        r_start_m=req.r_start_m,
+        drone_speed_mps=req.drone_speed_mps,
+        n_trials=req.n_trials,
+        seed=req.seed,
+    )
+    return _to_json_safe(res)
+
+
+class SurrogateParetoRequest(BaseModel):
+    drone_class: str = Field(default="fpv_cfrp")
+    drone_speed_mps: float = Field(default=20.0, ge=1.0, le=80.0)
+    recoil_limit_kn: float = Field(default=22.0, ge=5.0, le=60.0)
+    n_doe: int = Field(default=28, ge=10, le=120)
+    n_candidates: int = Field(default=180, ge=30, le=2000)
+    seed: int = Field(default=2102)
+
+
+@app.post("/cuas/surrogate-pareto", tags=["C-UAS Analytics"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_surrogate_pareto(req: SurrogateParetoRequest) -> dict[str, Any]:
+    """Fit Matern-5/2 GP surrogate and compute multi-objective Pareto-optimal C-UAS designs."""
+    from ammo_mc.cuas_v21_science import run_cuas_surrogate_pareto_study
+
+    res = run_cuas_surrogate_pareto_study(
+        drone_class=req.drone_class,
+        drone_speed_mps=req.drone_speed_mps,
+        recoil_limit_kn=req.recoil_limit_kn,
+        n_doe=req.n_doe,
+        n_candidates=req.n_candidates,
+        seed=req.seed,
+    )
+    return _to_json_safe(res)
+
+
+class ScenarioManifestBuildRequest(BaseModel):
+    scenario_name: str = Field(default="C-UAS Scenario")
+    ammo_preset: str = Field(default="12G_TSS_NO2_C_UAS")
+    drone_class: str = Field(default="fpv_cfrp")
+    n_barrels: int = Field(default=4, ge=1, le=24)
+    drone_speed_mps: float = Field(default=20.0, ge=0.0, le=100.0)
+    site_altitude_m: float = Field(default=0.0, ge=0.0, le=5000.0)
+    seed: int = Field(default=2100)
+    calibrated: bool = Field(default=False)
+    fmt: str = Field(default="json")
+
+
+@app.post("/cuas/manifest/build", tags=["Validation"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_manifest_build(req: ScenarioManifestBuildRequest) -> dict[str, Any]:
+    """Build a SHA-256 stamped reproducible Pydantic C-UAS scenario & provenance manifest."""
+    from ammo_mc.cuas_v21_science import (
+        build_cuas_scenario_manifest,
+        serialize_manifest_json,
+        serialize_manifest_yaml,
+    )
+
+    manifest = build_cuas_scenario_manifest(
+        scenario_name=req.scenario_name,
+        seed=req.seed,
+        site_altitude_m=req.site_altitude_m,
+        array_config={"ammo_preset": req.ammo_preset, "n_barrels": req.n_barrels},
+        target_config={"drone_class": req.drone_class, "drone_speed_mps": req.drone_speed_mps},
+        calibrated=req.calibrated,
+    )
+    return _to_json_safe(
+        {
+            "manifest": manifest,
+            "yaml": serialize_manifest_yaml(manifest) if req.fmt.lower() == "yaml" else None,
+            "json": serialize_manifest_json(manifest),
+        }
+    )
+
+
+class ScenarioManifestValidateRequest(BaseModel):
+    payload: str = Field(..., min_length=2)
+
+
+@app.post("/cuas/manifest/validate", tags=["Validation"], dependencies=[Depends(_verify_api_auth)])
+def post_cuas_manifest_validate(req: ScenarioManifestValidateRequest) -> dict[str, Any]:
+    """Parse and verify a JSON/YAML C-UAS scenario manifest and its SHA-256 checksum."""
+    from ammo_mc.cuas_v21_science import load_cuas_scenario_manifest
+
+    ok, manifest, msg = load_cuas_scenario_manifest(req.payload)
+    return _to_json_safe({"valid": bool(ok), "message": msg, "manifest": manifest})

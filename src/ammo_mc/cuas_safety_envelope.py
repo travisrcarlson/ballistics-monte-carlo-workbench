@@ -53,6 +53,11 @@ def evaluate_cuas_collateral_safety_envelope(
     drone_mass_kg: float = 1.5,
     drone_altitude_m: float = 35.0,
     drone_frontal_area_m2: float = 0.06,
+    site_altitude_m: float = 0.0,
+    wind_profile_mode: str = "power_law",
+    intercept_range_m: float = 40.0,
+    drone_speed_mps: float = 25.0,
+    warhead_blast_radius_m: float = 8.0,
 ) -> dict[str, Any]:
     """Compute directional 12-ga muzzle-blast dB contours, friendly danger cone, & falling-pellet KE tiers."""
     cp = dict(calibration_profile or {})
@@ -122,6 +127,8 @@ def evaluate_cuas_collateral_safety_envelope(
         turret_height_m=turret_height_m,
         wind_downrange_mps=wind_downrange_mps,
         wind_crossrange_mps=wind_crossrange_mps,
+        site_altitude_m=site_altitude_m,
+        wind_profile_mode=wind_profile_mode,
         n_sample_pellets=int(n_sample_pellets),
         seed=seed,
     )
@@ -221,6 +228,29 @@ def evaluate_cuas_collateral_safety_envelope(
             f"clear unprotected personnel within {r_140:.0f} m downrange / {r_165:.0f} m single-hearing-protection zone."
         )
 
+    # Post-kill UXO & ballistic wreck carry-on ellipse (SE-C20 / DT-F09)
+    v_dr_in = max(1.0, float(drone_speed_mps))
+    r_int = max(5.0, float(intercept_range_m))
+    x_carry_m = v_dr_in * math.sqrt(2.0 * h_dr / 9.80665)
+    # Inbound kamikaze vector travels toward origin along -u_az; drift offsets ellipse along wind
+    t_fall_dr = math.sqrt(2.0 * h_dr / 9.80665)
+    ux_az, uy_az = math.cos(az0_rad), math.sin(az0_rad)
+    vx_w_dr = wind_downrange_mps * ux_az - wind_crossrange_mps * uy_az
+    vy_w_dr = wind_downrange_mps * uy_az + wind_crossrange_mps * ux_az
+    cx_uxo = (r_int - x_carry_m) * ux_az + 0.5 * vx_w_dr * t_fall_dr
+    cy_uxo = (r_int - x_carry_m) * uy_az + 0.5 * vy_w_dr * t_fall_dr
+    r_blast = max(1.0, float(warhead_blast_radius_m))
+    semi_major_uxo = r_blast + 0.18 * x_carry_m
+    semi_minor_uxo = r_blast + 0.08 * x_carry_m
+    ang_pts = np.linspace(0.0, 2.0 * math.pi, 37, endpoint=True)
+    uxo_poly_xy = [
+        [
+            round(cx_uxo + semi_major_uxo * math.cos(float(t)) * ux_az - semi_minor_uxo * math.sin(float(t)) * uy_az, 2),
+            round(cy_uxo + semi_major_uxo * math.cos(float(t)) * uy_az + semi_minor_uxo * math.sin(float(t)) * ux_az, 2),
+        ]
+        for t in ang_pts
+    ]
+
     return {
         "summary": {
             "verdict": verdict,
@@ -242,6 +272,8 @@ def evaluate_cuas_collateral_safety_envelope(
             "glass_risk_pct": round(100.0 * n_glass / n_tot, 1),
             "safe_low_energy_pct": round(100.0 * n_safe / n_tot, 1),
             "recommended_min_elevation_deg": 28.0 if lethal_pct > 2.0 or firing_elevation_deg < 20.0 else 18.0,
+            "site_altitude_m": round(float(site_altitude_m), 1),
+            "uxo_carryon_center_range_m": round(math.hypot(cx_uxo, cy_uxo), 1),
         },
         "acoustic_contours": db_contours,
         "direct_fire_cone": {"x_m": cone_x, "y_m": cone_y},
@@ -251,6 +283,15 @@ def evaluate_cuas_collateral_safety_envelope(
             "range_m": [round(float(v), 2) for v in r_arr],
             "energy_j": [round(float(v), 2) for v in e_arr],
             "risk_tier": tiers,
+        },
+        "shotfall_contour_95_xy_m": fallout.get("shotfall_contour_95_xy_m", []),
+        "uxo_carryon_ellipse": {
+            "center_x_m": round(cx_uxo, 2),
+            "center_y_m": round(cy_uxo, 2),
+            "carry_on_distance_m": round(x_carry_m, 1),
+            "semi_major_m": round(semi_major_uxo, 1),
+            "semi_minor_m": round(semi_minor_uxo, 1),
+            "polygon_xy_m": uxo_poly_xy,
         },
         "tier_breakdown": [
             {"tier": "Lethal (>15 J)", "count": n_lethal, "share_pct": lethal_pct},

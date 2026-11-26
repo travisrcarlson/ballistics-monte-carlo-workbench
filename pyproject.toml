@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ammo-mc"
-version = "2.0.1"
+version = "2.1.0"
 description = "Stochastic Ammunition Effects & Dispersion Monte Carlo Simulator (launch -> flight -> fuze -> terminal -> vulnerability -> hazard statistics)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,6 +21,7 @@ dependencies = [
     "typer>=0.9",
     "streamlit>=1.50",
     "python-pptx>=1.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

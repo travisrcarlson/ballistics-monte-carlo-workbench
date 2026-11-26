@@ -729,7 +729,7 @@ def run_extended_vv_benchmarks(seed: int = 42, n_mc_v08: int = 50_000) -> dict[s
     phys_total = len(physics_benchmarks)
 
     return {
-        "version": "2.0.1",
+        "version": "2.1.0",
         "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "seed": int(seed),
         "n_mc_v08": int(n_mc_v08),
@@ -764,7 +764,7 @@ def generate_vv_certificate_markdown(report: dict[str, Any]) -> str:
     summary = report["summary"]
     lit = summary["literature"]
     lines = [
-        f"# Ammunition Monte Carlo (`ammo-mc`) v{report.get('version', '2.0.1')} — Verification & Validation Audit Certificate",
+        f"# Ammunition Monte Carlo (`ammo-mc`) v{report.get('version', '2.1.0')} — Verification & Validation Audit Certificate",
         "",
         f"- **Generated (UTC):** `{report.get('generated_utc', '')}`",
         f"- **RNG Seed:** `{report.get('seed', 42)}` | **V-08 MC Samples:** `{report.get('n_mc_v08', 50_000):,}` | **Runtime:** `{report.get('elapsed_s', 0.0):.3f} s`",
@@ -880,7 +880,7 @@ def generate_vv_certificate_html(report: dict[str, Any]) -> str:
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>ammo-mc v{html.escape(str(report.get('version', '2.0.1')))} V&amp;V Audit Certificate</title>
+<title>ammo-mc v{html.escape(str(report.get('version', '2.1.0')))} V&amp;V Audit Certificate</title>
 <style>
   :root {{ --bg:#f8fafc; --card:#ffffff; --ink:#0f172a; --muted:#475569; --line:#e2e8f0; --accent:#0f4c81; }}
   body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--ink); margin:0; padding:28px; line-height:1.45; }}
@@ -913,7 +913,7 @@ def generate_vv_certificate_html(report: dict[str, Any]) -> str:
 <div class="wrap">
   <div class="hero">
     <div>
-      <h1>Ammunition Monte Carlo (ammo-mc) v{html.escape(str(report.get('version', '2.0.1')))} — V&amp;V Audit Certificate</h1>
+      <h1>Ammunition Monte Carlo (ammo-mc) v{html.escape(str(report.get('version', '2.1.0')))} — V&amp;V Audit Certificate</h1>
       <p>Generated UTC: {html.escape(str(report.get('generated_utc', '')))} &middot; Seed: {report.get('seed', 42)} &middot; V-08 MC: {report.get('n_mc_v08', 50000):,} &middot; Runtime: {report.get('elapsed_s', 0.0):.3f} s</p>
     </div>
     <div class="status-badge">{badge_txt}</div>

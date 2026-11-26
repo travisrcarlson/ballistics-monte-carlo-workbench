@@ -37,7 +37,7 @@ from ammo_mc.vis_cuas import (
     create_antidrone_range_speed_heatmap_figure,
 )
 from ammo_mc.vis_cuas_advanced import create_swap_c_and_otm_figure
-from ammo_mc.vis_cuas_vv import create_salvo_brackets_and_window_figure
+from ammo_mc.vis_cuas_vv import create_epistemic_window_and_pk_figure, create_salvo_brackets_and_window_figure
 
 
 def _get_cal_twin_json() -> str:
@@ -92,6 +92,45 @@ def render_verification_and_counter_evidence(
                     f"*Mitigation:* {item['mitigation']}"
                 )
             st.caption(f"Diagnostics key: `{key_prefix}` | Grading never implies full live-fire empirical validation.")
+
+
+def render_assumptions_and_provenance_drawer(
+    manifest: dict[str, Any],
+    *,
+    key_prefix: str = "cuas",
+) -> None:
+    """Render collapsible Assumptions, V1-V4 Parameter Grades & Scenario Manifest download drawer."""
+    if not manifest:
+        return
+    grade = str(manifest.get("worst_verification_grade", "V4"))
+    sha = str(manifest.get("manifest_sha256", ""))[:12]
+    items = manifest.get("parameter_grades", [])
+    with st.expander(f"📋 Assumptions, Parameter Grades ({grade}) & Scenario Manifest (`{sha}`)", expanded=False):
+        st.caption(manifest.get("scope_disclaimer", "Engineering analysis aid only."))
+        if items:
+            _df_items = pd.DataFrame(items)
+            if "value" in _df_items.columns:
+                _df_items["value"] = _df_items["value"].astype(str)
+            st.dataframe(_df_items, width="stretch", hide_index=True)
+        from ammo_mc.cuas_v21_science import serialize_manifest_json, serialize_manifest_yaml
+
+        mc1, mc2 = st.columns(2)
+        mc1.download_button(
+            "💾 Scenario Manifest (.json)",
+            serialize_manifest_json(manifest).encode("utf-8"),
+            f"cuas_manifest_{sha}.json",
+            "application/json",
+            key=f"{key_prefix}_dl_man_json",
+            width="stretch",
+        )
+        mc2.download_button(
+            "📄 Scenario Manifest (.yaml)",
+            serialize_manifest_yaml(manifest).encode("utf-8"),
+            f"cuas_manifest_{sha}.yaml",
+            "text/yaml",
+            key=f"{key_prefix}_dl_man_yaml",
+            width="stretch",
+        )
 
 
 def _apply_stage1_fix_callback(patch: dict[str, Any], label: str = "Calibrated Design Fix") -> None:
@@ -229,6 +268,7 @@ def _render_effective_range_tab(
     penetration_model: str = "energy",
     use_markov_kill_tree: bool = False,
     annex_c_sample: dict[str, Any] | None = None,
+    site_altitude_m: float = 0.0,
 ) -> dict[str, Any]:
     """Render Stage 1 Effective Range Curve (R80 / R50), Annex C table, and optional Speed x Range Heatmap."""
     st.markdown("##### Effective Engagement Envelope (P_kill vs Slant Range)")
@@ -248,13 +288,27 @@ def _render_effective_range_tab(
             "SPARTAN_33_HP_SPHERO_4T",
         }
     ]
-    comp_loads = st.multiselect(
-        "Overlay Comparison Shell Loads (Optional)",
-        alt_candidates,
-        default=[],
-        format_func=lambda k: sg_presets[k]["name"],
-        key="cuas_env_comp_loads",
-    )
+    eo1, eo2, eo3 = st.columns([1.4, 1.0, 1.0])
+    with eo1:
+        comp_loads = st.multiselect(
+            "Overlay Comparison Shell Loads (Optional)",
+            alt_candidates,
+            default=[],
+            format_func=lambda k: sg_presets[k]["name"],
+            key="cuas_env_comp_loads",
+        )
+    with eo2:
+        show_anchors = st.checkbox(
+            "Overlay Empirical Anchors (VC-111..122, Grades B/C/D)",
+            value=False,
+            key="cuas21_show_anchors",
+        )
+    with eo3:
+        show_l0_band = st.checkbox(
+            "Nested L0 Epistemic Band (P5 / P50 / P95)",
+            value=False,
+            key="cuas21_show_l0",
+        )
     stations = (15.0, 25.0, 35.0, 50.0, 65.0, 75.0, 85.0)
     with st.spinner("Computing effective range envelope P_kill(R)..."):
         env_res = _cached_antidrone_range_envelope(
@@ -309,14 +363,53 @@ def _render_effective_range_tab(
             shot_sigma_cv=shot_sigma_cv,
             penetration_model=penetration_model,
             use_markov_kill_tree=use_markov_kill_tree,
+            site_altitude_m=site_altitude_m,
         )
     st.session_state["_report_range_envelope"] = env_res
     esm = env_res["summary"]
+
+    from ammo_mc.cuas_rigor import get_empirical_calibration_anchors
+    from ammo_mc.cuas_v21_science import build_cuas_scenario_manifest
+    from ammo_mc.ui.common import _cached_l0_epistemic_envelope
+
+    l0_res: dict[str, Any] | None = None
+    if show_l0_band:
+        uw_cls_est = "plastic_shell" if "plastic" in str(drone_model).lower() else "fpv_cfrp"
+        l0_res = _cached_l0_epistemic_envelope(
+            ammo_preset=str(ammunition_preset),
+            choke=str(default_choke),
+            drone_class=uw_cls_est,
+            n_barrels=int(n_barrels),
+            aim_error_mrad=max(0.5, float(aim_error_mrad)),
+            drone_speed_mps=max(5.0, float(drone_velocity_mps)),
+            drone_altitude_m=15.0,
+            warhead_blast_radius_m=8.0,
+            drag_law=str(drag_model),
+            site_altitude_m=float(site_altitude_m),
+            temp_c=float(ambient_temp_c),
+            n_outer=64,
+            seed=42,
+        )
+    anchors_list = get_empirical_calibration_anchors() if show_anchors else None
+
     ec1, ec2, ec3 = st.columns(3)
     ec1.metric("Effective Range R80 (P_kill >= 80%)", esm["r80_label"], delta="Doctrinal intercept ceiling")
     ec2.metric("Effective Range R50 (P_kill >= 50%)", esm["r50_label"], delta="50% damage / harass limit")
     ec3.metric("Peak Single-Volley P_kill", f"{esm['max_pk_pct']:.1f} %", delta=esm["ammunition_name"][:34])
-    st.plotly_chart(create_antidrone_effective_range_figure(env_res), width="stretch", key="cuas_env_range_fig")
+    st.plotly_chart(
+        create_antidrone_effective_range_figure(env_res, epistemic_env=l0_res, empirical_anchors=anchors_list),
+        width="stretch",
+        key="cuas_env_range_fig",
+    )
+    if l0_res:
+        l0_sm = l0_res["summary"]
+        lk1, lk2, lk3 = st.columns(3)
+        lk1.metric("L0 Epistemic Window (P5 / P50 / P95)", f"{l0_sm['usable_window_p50_m']:.1f} m", delta=f"[{l0_sm['usable_window_p5_m']:.1f}, {l0_sm['usable_window_p95_m']:.1f}] m")
+        lk2.metric("Epistemic Pk Spread @ 40 m", f"{l0_sm['epistemic_band_40m_pct']:.1f} %", delta=f"{l0_sm['n_outer_epistemic']} LHS outer draws (MC-F21)")
+        lk3.metric("Window Collapse Probability", f"{l0_sm['window_collapse_prob_pct']:.1f} %", delta=f"R_min_safe={l0_sm['r_min_safe_m']:.1f} m")
+        st.plotly_chart(create_epistemic_window_and_pk_figure(l0_res), width="stretch", key="cuas21_l0_win_fig")
+    if anchors_list:
+        st.caption("⚠️ Workbook Empirical Calibration Anchors (`VC-111`–`VC-122`): Indicative benchmarks graded **B** (model/small-sample), **C** (official statement), or **D** (demo/claim) — not pass/fail field truth.")
     st.dataframe(pd.DataFrame(env_res["records"]), width="stretch")
 
     if annex_c_sample:
@@ -371,6 +464,7 @@ def _render_effective_range_tab(
             aim_error_mrad=max(0.5, float(aim_error_mrad)),
             drag_law=str(drag_model),
             k_d=float(drag_multiplier_kd),
+            site_altitude_m=float(site_altitude_m),
         )
         wsm = win_res["summary"]
         wk1, wk2, wk3, wk4 = st.columns(4)
@@ -445,6 +539,17 @@ def _render_effective_range_tab(
             )
         st.plotly_chart(create_antidrone_range_speed_heatmap_figure(hm_res), width="stretch")
         st.dataframe(pd.DataFrame(hm_res["r80_by_speed_m"]), width="stretch")
+    s1_manifest = build_cuas_scenario_manifest(
+        scenario_name=f"Stage 1 {n_barrels}-Bbl {ammunition_preset}",
+        seed=42,
+        site_altitude_m=float(site_altitude_m),
+        weather={"temp_c": float(ambient_temp_c), "rh_pct": float(relative_humidity_pct), "headwind_mps": float(headwind_mps), "crosswind_mps": float(crosswind_mps)},
+        array_config={"layout_type": layout_type, "n_barrels": n_barrels, "ammunition_preset": ammunition_preset, "default_choke": default_choke, "drag_model": drag_model, "drag_multiplier_kd": drag_multiplier_kd, "aim_error_mrad": aim_error_mrad},
+        target_config={"drone_model": drone_model, "drone_velocity_mps": drone_velocity_mps, "aspect_mode": aspect_mode},
+        calibrated=bool(_get_cal_twin_json()),
+    )
+    st.session_state["_active_cuas_manifest"] = s1_manifest
+    render_assumptions_and_provenance_drawer(s1_manifest, key_prefix="stage1_env")
     return env_res
 
 

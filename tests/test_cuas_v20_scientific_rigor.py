@@ -202,9 +202,11 @@ def test_usable_window_dead_time_singer_safety_crn_and_array() -> None:
 
 
 def test_workbook_vv_matrix_cli_api_and_101_sources() -> None:
-    assert ammo_mc.__version__ == "2.0.1"
+    assert ammo_mc.__version__ == "2.1.0"
     wb_vv = run_workbook_validation_cases()
-    assert wb_vv["summary"]["total"] == 53
+    assert wb_vv["summary"]["canonical_vc_total"] == 110
+    assert wb_vv["summary"]["canonical_vc_passed"] == 110
+    assert wb_vv["summary"]["total"] == 116
     assert wb_vv["summary"]["failed"] == 0
     assert wb_vv["summary"]["pass_rate_pct"] == 100.0
     assert len(create_workbook_vv_matrix_figure(wb_vv).data) == 2
@@ -225,7 +227,7 @@ def test_workbook_vv_matrix_cli_api_and_101_sources() -> None:
         json.loads(res.stdout)
 
     client = TestClient(fastapi_app)
-    assert client.get("/health").json()["version"] == "2.0.1"
+    assert client.get("/health").json()["version"] == "2.1.0"
     r1 = client.post("/cuas/rigor/salvo-brackets", json={"lambda0": 1.529, "sigma_m": 0.308, "sigma_a_m": 0.209, "n_shots": 4})
     assert r1.status_code == 200 and r1.json()["pk_shared_lower"] < r1.json()["pk_independent_upper"]
     r2 = client.post("/cuas/rigor/engagement-window", json={"drone_speed_mps": 25.0, "drone_altitude_m": 15.0})

@@ -28,9 +28,13 @@ from ammo_mc.vis_cuas import (
     create_swarm_doctrine_tradeoff_figure,
     create_turret_recoil_dynamics_figure,
 )
-from ammo_mc.vis_cuas_vv import create_dead_time_waterfall_figure
+from ammo_mc.vis_cuas_vv import (
+    create_dead_time_waterfall_figure,
+    create_doctrine_comparator_figure,
+)
 from ammo_mc.ui.cuas_pkg.helpers import (
     _render_cuas_profile_sync_bar,
+    render_assumptions_and_provenance_drawer,
     render_high_fidelity_active_banner,
     render_verification_and_counter_evidence,
 )
@@ -133,8 +137,11 @@ def render_stage2_engagement(active_cuas_mod: str, expert: bool, sg_presets_18: 
                 fcs_dead_preset = st.selectbox("Latency Pipeline Profile", ["eo_60hz_1stream", "eo_60hz_3stream", "radar_10hz_fused"], key="cuas18_fcs_dead_p")
             with fd2:
                 fcs_heavy_atr = st.checkbox("Heavy-Tailed AI ATR Centroid Noise (FC-P12)", value=False, key="cuas18_fcs_atr")
+                fcs_iter_lead = st.checkbox("Iterative 3D TOF Lead Solver (M08 / FC-F12)", value=False, key="cuas21_fcs_iter_lead")
             with fd3:
                 fcs_rcs_nulls = st.checkbox("Aspect-Dependent Radar RCS Nulls (25-35 dB)", value=False, key="cuas18_fcs_rcs")
+                fcs_tgt_el = st.slider("Target Elevation Angle (°)", 0.0, 65.0, 15.0, 5.0, key="cuas21_fcs_el")
+                fcs_site_alt = st.slider("Site Altitude (m ASL, AT-F01)", 0.0, 3500.0, 0.0, 100.0, key="cuas21_fcs_alt")
 
         with st.spinner("Running Closed-Loop FCS & Evasive Intercept Monte Carlo..."):
             fcs_res = _cached_closed_loop_fcs(
@@ -160,6 +167,9 @@ def render_stage2_engagement(active_cuas_mod: str, expert: bool, sg_presets_18: 
                 dead_time_preset=str(fcs_dead_preset),
                 use_heavy_tailed_atr=bool(fcs_heavy_atr),
                 enable_aspect_rcs_nulls=bool(fcs_rcs_nulls),
+                use_iterative_3d_lead_solver=bool(fcs_iter_lead),
+                site_altitude_m=float(fcs_site_alt),
+                target_elevation_deg=float(fcs_tgt_el),
             )
         fsm = fcs_res["summary"]
         fk1, fk2, fk3, fk4 = st.columns(4)
@@ -171,7 +181,13 @@ def render_stage2_engagement(active_cuas_mod: str, expert: bool, sg_presets_18: 
         st.plotly_chart(create_fcs_tracking_and_evasion_figure(fcs_res), width="stretch")
         if fcs_res.get("architecture_comparison"):
             st.dataframe(pd.DataFrame(fcs_res["architecture_comparison"]), width="stretch")
-        with st.expander("⏱️ Serial Dead-Time Chain Breakdown (FC-T04) & Counter-Evidence", expanded=bool(fcs_use_dead)):
+        with st.expander("⏱️ Serial Dead-Time Chain Breakdown (FC-T04) & Counter-Evidence", expanded=bool(fcs_use_dead or fcs_iter_lead)):
+            if fsm.get("iterative_lead_solution"):
+                ils = fsm["iterative_lead_solution"]
+                ic1, ic2, ic3 = st.columns(3)
+                ic1.metric("Iterative Converged TOF (FC-F12)", f"{ils['tof_s']*1000:.1f} ms", delta=f"{ils['iterations']} iters (res={ils['residual_s']:.1e} s)")
+                ic2.metric("Ballistic Superelevation", f"{ils['superelevation_mrad']:.2f} mrad", delta=f"Drop: {ils['gravity_drop_m']*100:.1f} cm @ {ils['slant_range_m']:.1f} m")
+                ic3.metric("Predicted Aim Az / El", f"{ils['aim_azimuth_deg']:.1f}° / {ils['aim_elevation_deg']:.1f}°", delta=f"Station P={ils['station_pressure_pa']:.0f} Pa")
             if fsm.get("dead_time_budget"):
                 st.plotly_chart(create_dead_time_waterfall_figure(fsm["dead_time_budget"]), width="stretch", key="cuas18_fcs_dt_fig")
             from ammo_mc.cuas_rigor import get_contextual_counter_evidence
@@ -181,6 +197,63 @@ def render_stage2_engagement(active_cuas_mod: str, expert: bool, sg_presets_18: 
                 get_contextual_counter_evidence(stage="fcs", range_m=float(fcs_dist), n_barrels=int(fcs_n_b), splay_mrad=float(fcs_splay)),
                 key_prefix="stage2_fcs",
             )
+
+        with st.expander("🎯 Engagement Doctrine Lab (Simultaneous Salvo vs. Ripple vs. Wilkening SLS vs. Whistler SAS, M12)", expanded=False):
+            from ammo_mc.cuas_v21_science import build_cuas_scenario_manifest
+            from ammo_mc.ui.common import _cached_doctrine_comparator
+
+            dc1, dc2, dc3 = st.columns(3)
+            with dc1:
+                doc_bda = st.slider("Shoot-Look-Shoot BDA Delay (s)", 0.10, 1.50, 0.40, 0.05, key="cuas21_doc_bda")
+                doc_mag = st.slider("Ready Magazine Shells", 4, 24, 12, 2, key="cuas21_doc_mag")
+            with dc2:
+                doc_bias = st.slider("Shared Aim Bias sigma (mrad)", 0.5, 5.0, 2.0, 0.25, key="cuas21_doc_bias")
+                doc_rho = st.slider("Burst AR(1) Correlation rho (HP-F36)", 0.0, 0.90, 0.65, 0.05, key="cuas21_doc_rho")
+            with dc3:
+                doc_class = st.selectbox(
+                    "Target Armor Class",
+                    ["fpv_cfrp", "plastic_shell"],
+                    format_func=lambda k: "3 mm CFRP FPV (Wen 2000)" if k == "fpv_cfrp" else "Plastic-Shell Consumer Quad (5 J)",
+                    key="cuas21_doc_cls",
+                )
+                doc_rstart = st.slider("Open-Fire Start Range (m)", 35.0, 80.0, 55.0, 5.0, key="cuas21_doc_rstart")
+
+            doc_res = _cached_doctrine_comparator(
+                ammo_preset=str(fcs_ammo),
+                choke="Modified",
+                drone_class=str(doc_class),
+                n_barrels=int(fcs_n_b),
+                barrels_per_burst=min(2, int(fcs_n_b)),
+                magazine_shells=int(doc_mag),
+                r_start_m=float(doc_rstart),
+                drone_speed_mps=max(8.0, float(fcs_spd)),
+                drone_altitude_m=15.0,
+                bda_delay_s=float(doc_bda),
+                aim_bias_sigma_mrad=float(doc_bias),
+                ar1_rho=float(doc_rho),
+                n_trials=1000,
+                seed=42,
+                site_altitude_m=float(fcs_site_alt),
+            )
+            dsm = doc_res["summary"]
+            dk1, dk2, dk3 = st.columns(3)
+            dk1.metric("Top Cumulative Pk Doctrine", dsm["best_pk_doctrine"][:28], delta=f"Pk={dsm['best_pk_pct']:.1f}% | Window={dsm['closing_window_s']:.2f}s")
+            dk2.metric("Highest Ammo-Efficiency Doctrine", dsm["best_efficiency_doctrine"][:28], delta=f"{dsm['best_efficiency_score']:.1f}% Pk / round")
+            dk3.metric("Wilkening Optimal 1st Wave (HP-F39)", f"{dsm['wilkening_first_wave_shots']} shot(s)", delta=f"SSPK={dsm['nominal_midwindow_sspk']:.3f} | Safe>={dsm['r_min_safe_m']:.1f}m")
+            st.plotly_chart(create_doctrine_comparator_figure(doc_res), width="stretch", key="cuas21_doc_fig")
+            st.dataframe(pd.DataFrame(doc_res["doctrines"]), width="stretch", hide_index=True)
+            st.caption("Glazebrook & Washburn (2004) Gittins Multi-Target SLS Priority Example (`HP-S03` Eq. 14):")
+            st.dataframe(pd.DataFrame(doc_res["gittins_ranking"]), width="stretch", hide_index=True)
+
+            fcs_manifest = build_cuas_scenario_manifest(
+                scenario_name=f"Stage 2 FCS {fcs_sensor}",
+                seed=42,
+                site_altitude_m=float(fcs_site_alt),
+                array_config={"layout_type": fcs_layout, "n_barrels": fcs_n_b, "ammunition_preset": fcs_ammo, "aim_error_mrad": float(doc_bias)},
+                target_config={"drone_model": fcs_drone, "drone_speed_mps": float(fcs_spd), "maneuver_profile": fcs_maneuver},
+                fcs_config={"sensor": fcs_sensor, "predictor": fcs_predictor, "dead_time_s": float(fsm.get("dead_time_budget", {}).get("t_dead_s", 0.141)), "iterative_3d_lead": bool(fcs_iter_lead)},
+            )
+            render_assumptions_and_provenance_drawer(fcs_manifest, key_prefix="stage2_fcs")
 
     # --- TAB 18.2: MULTI-DRONE SWARM SATURATION ---
     elif active_cuas_mod == _CUAS18_MODULES[1]:

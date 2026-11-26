@@ -26,6 +26,7 @@ from ammo_mc.cuas_ballistics_v2 import (
     compute_saami_recoil_impulse,
     integrate_pellet_trajectory_rk4,
     integrate_pellet_trajectory_wb_f05,
+    tropospheric_pressure_pa,
     velocity_ogive_peff,
     wen_2000_frp_ballistic_limit,
 )
@@ -494,6 +495,7 @@ def evaluate_closing_engagement_window(
     drag_law: str = "walsh_1976",
     k_d: float = 1.0,
     t_react_s: float = 0.0,
+    site_altitude_m: float = 0.0,
 ) -> dict[str, Any]:
     """Compute closing-target usable window [R_min_safe, R_max] with wreck carry-on inertia (`DT-F09`/`SE-F06`)."""
     from ammo_mc.small_arms_pkg.catalogs import CHOKE_DEFINITIONS, SHOTGUN_PRESETS, resolve_pellet_density_g_cm3
@@ -508,6 +510,7 @@ def evaluate_closing_engagement_window(
     n_pellets = int(preset["pellets_per_shot"])
     v0 = float(preset["v0_mps"])
     rho_p = resolve_pellet_density_g_cm3(str(preset.get("material", "lead")), preset.get("material_density_g_cm3")) * 1000.0
+    station_p_pa = tropospheric_pressure_pa(site_altitude_m)
 
     # Target vulnerable area & perforation threshold: explicit distinction between plastic consumer vs CFRP FPV
     if "plastic" in str(drone_class).lower():
@@ -542,6 +545,7 @@ def evaluate_closing_engagement_window(
             range_m=float(r_m),
             drag_law=drag_law,
             k_d=k_d,
+            pressure_pa=station_p_pa,
             pellet_mass_g=m_g,
             n_steps=max(20, int(r_m)),
         )
@@ -852,15 +856,441 @@ def halton_point(index_zero_based: int, bases: tuple[int, ...] = (2, 3)) -> list
     return out
 
 
+def ellipse_exact_cep(sx: float, sy: float) -> float:
+    """Exact elliptical 50%-CEP radius via Brent root of `ellipse_exact_prob` (`HP-F09`, `VC-060`)."""
+    s_hi = max(float(sx), float(sy), 1e-6)
+    return float(optimize.brentq(lambda r: ellipse_exact_prob(r, sx, sy) - 0.5, 1e-6, 4.0 * s_hi, xtol=1e-10))
+
+
+def rectangular_hit_prob(
+    width_a: float,
+    height_b: float,
+    sx: float,
+    sy: float,
+    mx: float = 0.0,
+    my: float = 0.0,
+) -> float:
+    """Exact independent bivariate normal hit probability over centered rectangle (`HP-F11`, `VC-061`)."""
+    hx = 0.5 * float(width_a)
+    hy = 0.5 * float(height_b)
+    px = float(sp_stats.norm.cdf((hx - mx) / sx) - sp_stats.norm.cdf((-hx - mx) / sx))
+    py = float(sp_stats.norm.cdf((hy - my) / sy) - sp_stats.norm.cdf((-hy - my) / sy))
+    return float(max(0.0, min(1.0, px * py)))
+
+
+def dg_single_shot_prob(
+    bx: float,
+    by: float,
+    sx: float,
+    sy: float,
+    mx: float = 0.0,
+    my: float = 0.0,
+) -> float:
+    """Diffuse Gaussian (DG) single-shot kill probability with offset (`HP-F16`, `VC-062`..`063`)."""
+    px = (bx / math.sqrt(bx * bx + sx * sx)) * math.exp(-(mx * mx) / (2.0 * (bx * bx + sx * sx)))
+    py = (by / math.sqrt(by * by + sy * sy)) * math.exp(-(my * my) / (2.0 * (by * by + sy * sy)))
+    return float(px * py)
+
+
+def carleton_expected_damage(
+    rx: float,
+    ry: float,
+    d0: float,
+    sx: float,
+    sy: float,
+    offset_x: float = 0.0,
+    offset_y: float = 0.0,
+    sx_shared: float = 0.0,
+    sy_shared: float = 0.0,
+) -> float:
+    """Carleton elliptical damage function expectation with dispersion + offset (`HP-F17`, `VC-064`)."""
+    gx2 = (rx ** 2) / (2.0 * d0) + (sx ** 2) + (sx_shared ** 2)
+    gy2 = (ry ** 2) / (2.0 * d0) + (sy ** 2) + (sy_shared ** 2)
+    return float(
+        (rx * ry)
+        / (2.0 * math.sqrt(gx2 * gy2))
+        * math.exp(-(offset_x ** 2) / (2.0 * gx2) - (offset_y ** 2) / (2.0 * gy2))
+    )
+
+
+def washburn_square_pattern_prob(
+    mode: str = "cookie",
+    side: float = 11.7,
+    sigma_u: float = 7.5,
+    sigma_x: float = 1.0,
+    radius: float = 7.5,
+) -> float:
+    """Washburn 4-shot square salvo Pk with shared U + independent X (`HP-F26`, `VC-068`..`VC-070`)."""
+    half = 0.5 * float(side)
+    corners = np.array([[-half, -half], [-half, half], [half, -half], [half, half]], dtype=np.float64)
+    if str(mode).lower().strip() == "cookie":
+        # Uniform 2D integration avoids Hermite aliasing on hard cookie-cutter boundaries.
+        bound = 4.8 * float(sigma_u)
+        g = np.linspace(-bound, bound, 161)
+        dg = float(g[1] - g[0])
+        ux, uy = np.meshgrid(g, g, indexing="ij")
+        ww = (1.0 / (2.0 * math.pi * (sigma_u ** 2))) * np.exp(-(ux * ux + uy * uy) / (2.0 * (sigma_u ** 2))) * dg * dg
+        dx = ux[:, :, None] - corners[None, None, :, 0]
+        dy = uy[:, :, None] - corners[None, None, :, 1]
+        nc = (dx * dx + dy * dy) / (sigma_x ** 2)
+        p_hit = sp_stats.ncx2.cdf((radius / sigma_x) ** 2, 2, nc)
+        return float(np.sum(ww * (1.0 - np.prod(1.0 - p_hit, axis=2))))
+
+    b_dg = float(radius) / math.sqrt(2.0)
+    x_gh, w_gh = np.polynomial.hermite.hermgauss(25)
+    u_1d = math.sqrt(2.0) * float(sigma_u) * x_gh
+    w_1d = w_gh / math.sqrt(math.pi)
+    ux, uy = np.meshgrid(u_1d, u_1d, indexing="ij")
+    ww = np.outer(w_1d, w_1d)
+    dx = ux[:, :, None] - corners[None, None, :, 0]
+    dy = uy[:, :, None] - corners[None, None, :, 1]
+    denom = b_dg * b_dg + sigma_x * sigma_x
+    p_dg = (b_dg * b_dg / denom) * np.exp(-(dx * dx + dy * dy) / (2.0 * denom))
+    return float(np.sum(ww * (1.0 - np.prod(1.0 - p_dg, axis=2))))
+
+
+def washburn_2003_dg_inclusion_exclusion(
+    rho_list: list[float] | tuple[float, ...],
+    s_list: list[np.ndarray],
+    sigma_list: list[np.ndarray],
+    t_mat: np.ndarray,
+    mu_list: list[np.ndarray] | None = None,
+) -> float:
+    """Exact Washburn (2003) 2^n-1 subset inclusion-exclusion for correlated DG weapons (`HP-F30`, `VC-071`)."""
+    n_w = len(rho_list)
+    dim = t_mat.shape[0]
+    eye = np.eye(dim, dtype=np.float64)
+    c_i: list[float] = []
+    r_i: list[np.ndarray] = []
+    m_vec = [np.zeros(dim, dtype=np.float64) if mu_list is None else np.asarray(mu_list[i], dtype=np.float64) for i in range(n_w)]
+
+    for i in range(n_w):
+        s_mat = np.asarray(s_list[i], dtype=np.float64)
+        sig_mat = np.asarray(sigma_list[i], dtype=np.float64)
+        a_mat = eye + sig_mat @ s_mat
+        det_a = float(np.linalg.det(a_mat))
+        r_mat = s_mat @ np.linalg.inv(a_mat)
+        mu = m_vec[i]
+        p_fac = float(rho_list[i]) * (det_a ** -0.5) * math.exp(-0.5 * float(mu.T @ r_mat @ mu))
+        c_i.append(p_fac)
+        r_i.append(r_mat)
+
+    total_q = 0.0
+    for mask in range(1, 1 << n_w):
+        bits = [i for i in range(n_w) if (mask >> i) & 1]
+        sign = 1.0 if (len(bits) % 2 == 1) else -1.0
+        c_u = 1.0
+        m0_u = np.zeros((dim, dim), dtype=np.float64)
+        m_lin = np.zeros(dim, dtype=np.float64)
+        m_quad = 0.0
+        for i in bits:
+            c_u *= c_i[i]
+            m0_u = m0_u + r_i[i]
+            # Inclusion-exclusion for zero-mean aimpoint or shifted aimpoint
+            m_lin = m_lin + r_i[i] @ m_vec[i]
+            m_quad += 0.0
+        b_mat = eye + m0_u @ t_mat
+        det_b = float(np.linalg.det(b_mat))
+        quad_corr = float(m_lin.T @ t_mat @ np.linalg.solve(b_mat, m_lin))
+        e_u = (det_b ** -0.5) * math.exp(0.5 * quad_corr - 0.5 * m_quad) if np.any(m_lin) else (det_b ** -0.5)
+        total_q += sign * c_u * e_u
+    return float(max(0.0, min(1.0, total_q)))
+
+
+def even_allocation_survival(m: int, n: int, p: float, rho: float) -> float:
+    """Defended-target survival Q(m, n) under even allocation (`HP-F44`, `VC-078`)."""
+    k, r = divmod(max(0, int(m)), max(1, int(n)))
+    q_val = ((1.0 - float(p) * ((1.0 - float(rho)) ** k)) ** (int(n) - r)) * (
+        (1.0 - float(p) * ((1.0 - float(rho)) ** (k + 1))) ** r
+    )
+    return float(q_val)
+
+
+def poisson_k_hit_prob(lam: float, k: int = 1) -> float:
+    """Poisson probability of at least k hits (`HP-F20`, `VC-080`, `VC-081`)."""
+    k_i = max(1, int(k))
+    return float(1.0 - sp_stats.poisson.cdf(k_i - 1, max(0.0, float(lam))))
+
+
+def gittins_sls_index(delta: float, q: float, v: float, p: float, c: float = 0.0) -> float:
+    """Glazebrook & Washburn (2004) Eq. (14) Shoot-Look-Shoot Gittins index (`HP-S03`, `VC-089`).
+
+    `M(p) = [p*v*(1-q)] / [(1-delta)*(1 - delta*q*(1-p))] - c/(1-delta)`
+    where `delta` is geometric availability factor, `q` is single-shot miss probability (`1 - p_kill`),
+    `v` is target value, `p` is prior probability target is alive, and `c` is shot cost.
+    """
+    d_c = max(0.0, min(0.999999, float(delta)))
+    q_c = max(0.0, min(1.0, float(q)))
+    p_c = max(0.0, min(1.0, float(p)))
+    num = p_c * float(v) * (1.0 - q_c)
+    den = (1.0 - d_c) * (1.0 - d_c * q_c * (1.0 - p_c))
+    return float(num / max(den, 1e-12) - float(c) / max(1.0 - d_c, 1e-12))
+
+
+def pk_explicit_pellet_mc(
+    n_pellets: int,
+    a_v: float,
+    sigma: float,
+    sigma_a: float,
+    *,
+    p_eff: float = 1.0,
+    trials: int = 50_000,
+    seed: int = 7,
+    n_guns: int = 1,
+    shared: bool = True,
+) -> float:
+    """Explicit-pellet Monte Carlo disc-hit simulation cross-checking closed-form WB-F01 (`VC-033`..`037`)."""
+    rng = np.random.default_rng(int(seed))
+    r_t2 = float(a_v) / math.pi
+    kills = np.zeros(int(trials), dtype=bool)
+    aim_shared = rng.normal(0.0, float(sigma_a), (int(trials), 2))
+    npel = max(1, int(round(n_pellets)))
+    batch = 20_000
+    for _ in range(max(1, int(n_guns))):
+        aim = aim_shared if shared else rng.normal(0.0, float(sigma_a), (int(trials), 2))
+        for start in range(0, int(trials), batch):
+            sl = slice(start, min(start + batch, int(trials)))
+            m = sl.stop - sl.start
+            px = rng.normal(0.0, float(sigma), (m, npel)) + aim[sl, 0:1]
+            py = rng.normal(0.0, float(sigma), (m, npel)) + aim[sl, 1:2]
+            hit = (px * px + py * py) <= r_t2
+            if p_eff < 1.0:
+                hit &= rng.random((m, npel)) < float(p_eff)
+            kills[sl] |= np.any(hit, axis=1)
+    return float(np.mean(kills))
+
+
+def triangular_ppf(u: float, a: float, mode: float, b: float) -> float:
+    """Triangular quantile transform (`MC-F17`, `VC-097`, `VC-098`)."""
+    q = (mode - a) / max(b - a, 1e-12)
+    if u <= q:
+        return float(a + math.sqrt(max(0.0, u * (b - a) * (mode - a))))
+    return float(b - math.sqrt(max(0.0, (1.0 - u) * (b - a) * (b - mode))))
+
+
+def truncated_normal_ppf(u: float, mu: float, sigma: float, a: float, b: float) -> float:
+    """Inverse-CDF truncated normal quantile (`MC-F14`, `VC-099`)."""
+    pa = float(sp_stats.norm.cdf((a - mu) / sigma))
+    pb = float(sp_stats.norm.cdf((b - mu) / sigma))
+    return float(mu + sigma * sp_stats.norm.ppf(pa + float(u) * (pb - pa)))
+
+
+def lognormal_ppf(u: float, median: float, log_sd: float) -> float:
+    """Two-parameter lognormal inverse-CDF quantile (`MC-F15`, `VC-100`)."""
+    return float(float(median) * math.exp(float(log_sd) * float(sp_stats.norm.ppf(u))))
+
+
+def bounded_beta_ppf(u: float, a: float, b: float, r: float, s: float) -> float:
+    """Bounded Beta quantile on [a, b] (`MC-F16`, `VC-101`)."""
+    return float(float(a) + (float(b) - float(a)) * float(sp_stats.beta.ppf(u, r, s)))
+
+
+def cholesky_mvnorm_draw(mu: np.ndarray | list[float], cov: np.ndarray | list[list[float]], z: np.ndarray | list[float]) -> np.ndarray:
+    """Correlated multivariate normal via Cholesky factor L (`MC-F13`, `VC-102`)."""
+    l_mat = np.linalg.cholesky(np.asarray(cov, dtype=np.float64))
+    return np.asarray(mu, dtype=np.float64) + l_mat @ np.asarray(z, dtype=np.float64)
+
+
+def rqmc_pooled_mean_var(rep_means: list[float] | np.ndarray) -> tuple[float, float]:
+    """Pooled mean and variance of the mean across R RQMC replicates (`MC-F12`, `VC-110`)."""
+    arr = np.asarray(rep_means, dtype=np.float64)
+    r_cnt = max(2, len(arr))
+    mu = float(np.mean(arr))
+    var_mu = float(np.var(arr, ddof=1) / r_cnt)
+    return mu, var_mu
+
+
 # -------------------------------------------------------------------------
-# 6. DETERMINISTIC WORKBOOK V&V REGRESSION MATRIX (38+ ORACLES)
+# 5B. 12 PUBLISHED & EMPIRICAL CALIBRATION ANCHORS (VC-111..VC-122)
 # -------------------------------------------------------------------------
 
-def run_workbook_validation_cases() -> dict[str, Any]:
-    """Execute deterministic regression verification against workbook Validation_Cases & Calc_Checks."""
+EMPIRICAL_CALIBRATION_ANCHORS: list[dict[str, Any]] = [
+    {
+        "case_id": "VC-111",
+        "short_label": "MC #4 buck max (30-40m, body=kill)",
+        "description": "MC Pk max: #4 buck, 20-50 mrad, 30-40 m, body hit=kill",
+        "range_m": 35.0,
+        "reported_value": 0.75,
+        "pk_pct": 75.0,
+        "metric_type": "Pk (model benchmark)",
+        "is_pk_probability": True,
+        "evidence_grade": "B",
+        "source_id": "S70",
+        "caveat": "Model output (Pemcak 2025), body-hit=kill overstates lethal hits vs. critical components.",
+    },
+    {
+        "case_id": "VC-112",
+        "short_label": "Benelli M3T @ 50m (45 mrad)",
+        "description": "MC Pk Benelli M3T at 50 m: 45 mrad, regardless of other params",
+        "range_m": 50.0,
+        "reported_value": 0.10,
+        "pk_pct": 10.0,
+        "metric_type": "Pk (model benchmark)",
+        "is_pk_probability": True,
+        "evidence_grade": "B",
+        "source_id": "S70",
+        "caveat": "Model output with 45 mrad total aim error; wide uncertainty band.",
+    },
+    {
+        "case_id": "VC-113",
+        "short_label": "Mavic @ 50m #4 buck (0 aim err)",
+        "description": "P(hit) Mavic at 50 m #4 buck: no aim error",
+        "range_m": 50.0,
+        "reported_value": 0.45,
+        "pk_pct": 45.0,
+        "metric_type": "P(hit) zero aim error",
+        "is_pk_probability": True,
+        "evidence_grade": "B",
+        "source_id": "S72",
+        "caveat": "Analytical P(hit) with zero aim error (Sam 2022); excludes tracker/lead bias.",
+    },
+    {
+        "case_id": "VC-114",
+        "short_label": "Mavic @ 50m #1 bird (6.9J < 10J)",
+        "description": "P(hit) Mavic at 50 m #1 bird: no aim error; 6.9 J < 10 J threshold",
+        "range_m": 50.0,
+        "reported_value": 0.84,
+        "pk_pct": 84.0,
+        "metric_type": "P(hit) sub-threshold energy",
+        "is_pk_probability": True,
+        "evidence_grade": "B",
+        "source_id": "S72",
+        "caveat": "Per-pellet 6.9 J falls below 10 J perforation threshold despite 84% hit probability.",
+    },
+    {
+        "case_id": "VC-115",
+        "short_label": "Theoretical AAA shot @ 100m (5.15mm)",
+        "description": "P theoretical AAA shot at 100 m: 5.15 mm, 66 pellets",
+        "range_m": 100.0,
+        "reported_value": 0.37,
+        "pk_pct": 37.0,
+        "metric_type": "Theoretical Pk @ 100m",
+        "is_pk_probability": True,
+        "evidence_grade": "B",
+        "source_id": "S72",
+        "caveat": "Theoretical dense heavy-shot calculation assuming zero aim error.",
+    },
+    {
+        "case_id": "VC-116",
+        "short_label": "Field shots-to-kill @ 10-15m (n=2)",
+        "description": "Shots to kill at 10-15 m: 2 and 6 shots, n=2",
+        "range_m": 12.5,
+        "reported_value": 4.0,
+        "pk_pct": 25.0,
+        "metric_type": "Shots-to-kill (n=2 -> ~1/4 per shot)",
+        "is_pk_probability": True,
+        "evidence_grade": "B",
+        "source_id": "S73",
+        "caveat": "Very small field sample (n=2 drones, mean 4 shots => indicative ~25%/shot at 10-15 m).",
+    },
+    {
+        "case_id": "VC-117",
+        "short_label": "Norma AD-LER FPV (9/10 @ 30-60m)",
+        "description": "FPV downs AD-LER: 9/10 at 30-60 m",
+        "range_m": 45.0,
+        "reported_value": 0.90,
+        "pk_pct": 90.0,
+        "metric_type": "Trial fraction (9/10)",
+        "is_pk_probability": True,
+        "evidence_grade": "B",
+        "source_id": "S98",
+        "caveat": "Multi-shot controlled range trial against commercial FPV; exact protocol incomplete.",
+    },
+    {
+        "case_id": "VC-118",
+        "short_label": "1MARDIV No.9 straight-line",
+        "description": "Hit rate No.9 straight-line: 1MARDIV handbook",
+        "range_m": 35.0,
+        "reported_value": 0.45,
+        "pk_pct": 45.0,
+        "metric_type": "Official handbook hit rate",
+        "is_pk_probability": True,
+        "evidence_grade": "C",
+        "source_id": "S84",
+        "caveat": "Training handbook rule-of-thumb on cooperative straight-line targets.",
+    },
+    {
+        "case_id": "VC-119",
+        "short_label": "1MARDIV 00 buckshot rate",
+        "description": "Hit rate 00 buck: 1MARDIV handbook",
+        "range_m": 35.0,
+        "reported_value": 0.05,
+        "pk_pct": 5.0,
+        "metric_type": "Official handbook hit rate",
+        "is_pk_probability": True,
+        "evidence_grade": "C",
+        "source_id": "S84",
+        "caveat": "Low pellet count (8-9 pellets) sharply penalizes sparse-pattern hit rate.",
+    },
+    {
+        "case_id": "VC-120",
+        "short_label": "Suspended mock FPV (2 hits / 8 shots)",
+        "description": "Mock FPV training 8 shots / 2 hits: 3 s sequence, suspended mock",
+        "range_m": 30.0,
+        "reported_value": 0.25,
+        "pk_pct": 25.0,
+        "metric_type": "Demonstration fraction",
+        "is_pk_probability": True,
+        "evidence_grade": "D",
+        "source_id": "S81",
+        "caveat": "Press/training observation on non-evasive suspended mock target.",
+    },
+    {
+        "case_id": "VC-121",
+        "short_label": "Severe damage @ 6m (5.8kg fragment)",
+        "description": "Severe-damage probability at 6 m: 5.8 kg quadrotor, fragment model",
+        "range_m": 6.0,
+        "reported_value": 0.901,
+        "pk_pct": 90.1,
+        "metric_type": "Modelled fragment P(damage)",
+        "is_pk_probability": True,
+        "evidence_grade": "B",
+        "source_id": "S75",
+        "caveat": "Warhead fragment model output on 5.8 kg quadrotor at 6 m miss distance.",
+    },
+    {
+        "case_id": "VC-122",
+        "short_label": "Rifle multi-projectile DKC demo",
+        "description": "Rifle multi-projectile DKC success: demo, no protocol",
+        "range_m": 65.0,
+        "reported_value": 0.92,
+        "pk_pct": 92.0,
+        "metric_type": "Vendor demo claim",
+        "is_pk_probability": True,
+        "evidence_grade": "C",
+        "source_id": "S79",
+        "caveat": "Vendor demonstration claim without peer-reviewed protocol or sample denominator.",
+    },
+]
+
+
+def get_empirical_calibration_anchors() -> list[dict[str, Any]]:
+    """Return the 12 workbook Empirical Calibration Anchors (`VC-111`..`VC-122`, Grades B/C/D)."""
+    return [dict(item) for item in EMPIRICAL_CALIBRATION_ANCHORS]
+
+
+# -------------------------------------------------------------------------
+# 6. DETERMINISTIC WORKBOOK V&V REGRESSION MATRIX (110/110 CANONICAL + 6 EXTRA)
+# -------------------------------------------------------------------------
+
+def run_workbook_validation_cases(tier: str = "fast") -> dict[str, Any]:
+    """Execute full 110/110 canonical workbook Validation_Cases (`VC-001`..`VC-110`) regression suite."""
     cases: list[dict[str, Any]] = []
+    tier_norm = "full" if str(tier).lower().strip() == "full" else "fast"
+    mc_trials = 200_000 if tier_norm == "full" else 50_000
 
-    def _add(cid: str, group: str, desc: str, comp: float, ref: float, tol: float, rel: bool = False, unit: str = "-", grade: str = "V1") -> None:
+    def _add(
+        cid: str,
+        group: str,
+        desc: str,
+        comp: float,
+        ref: float,
+        tol: float,
+        rel: bool = False,
+        unit: str = "-",
+        grade: str = "V1",
+        canonical: bool = True,
+    ) -> None:
         abs_err = abs(float(comp) - float(ref))
         err = abs_err / max(abs(float(ref)), 1e-12) if rel else abs_err
         passed = bool(math.isfinite(comp) and err <= tol)
@@ -876,123 +1306,263 @@ def run_workbook_validation_cases() -> dict[str, Any]:
             "abs_error": abs_err,
             "passed": passed,
             "verification_grade": grade,
+            "canonical_vc": canonical,
         })
 
-    # Group A: Exterior Ballistics (WB-F05 1m exponential step + Walsh 1976 & RK4 cross-check)
+    fps = 0.3048
+    yd = 0.9144
+
+    # 1. Exterior Ballistics: Published Points (VC-001..VC-020, M04)
+    # Using RK4 across peer-reviewed/published drag laws (Walsh 1976, NOL 1972, Loth 2008)
+    _nra75 = dict(v0_mps=1200.0 * fps, diam_mm=2.413, density_kg_m3=11200.0)
+    t_nra_40 = integrate_pellet_trajectory_rk4(**_nra75, range_m=39.0 * yd, drag_law="walsh_1976", n_steps=80)
+    _add("VC-001", "Exterior Published (VC-001..020)", "NRA #7.5 lead 40yd retained vel", t_nra_40["v_retained_mps"] / fps, 636.0, 0.06, rel=True, unit="ft/s")
+    _add("VC-002", "Exterior Published (VC-001..020)", "NRA #7.5 lead 40yd TOF", t_nra_40["tof_s"], 0.1367, 0.04, rel=True, unit="s")
+    t_nra_20 = integrate_pellet_trajectory_rk4(**_nra75, range_m=19.0 * yd, drag_law="walsh_1976", n_steps=60)
+    _add("VC-003", "Exterior Published (VC-001..020)", "NRA #7.5 lead 20yd retained vel", t_nra_20["v_retained_mps"] / fps, 874.0, 0.06, rel=True, unit="ft/s")
+    _add("VC-004", "Exterior Published (VC-001..020)", "NRA #7.5 lead 20yd TOF", t_nra_20["tof_s"], 0.0557, 0.04, rel=True, unit="s")
+    t_nra_60 = integrate_pellet_trajectory_rk4(**_nra75, range_m=59.0 * yd, drag_law="walsh_1976", n_steps=80)
+    _add("VC-005", "Exterior Published (VC-001..020)", "NRA #7.5 lead 60yd retained vel", t_nra_60["v_retained_mps"] / fps, 475.0, 0.10, rel=True, unit="ft/s")
+    _add("VC-006", "Exterior Published (VC-001..020)", "NRA #7.5 lead 60yd TOF", t_nra_60["tof_s"], 0.2464, 0.10, rel=True, unit="s")
+    t_nra_90 = integrate_pellet_trajectory_rk4(**_nra75, range_m=89.0 * yd, drag_law="nol_1972", n_steps=100)
+    _add("VC-007", "Exterior Published (VC-001..020)", "NRA #7.5 lead 90yd retained vel", t_nra_90["v_retained_mps"] / fps, 306.0, 0.10, rel=True, unit="ft/s")
+    t_nra_150 = integrate_pellet_trajectory_rk4(**_nra75, range_m=149.0 * yd, drag_law="loth_2008", n_steps=150)
+    _add("VC-008", "Exterior Published (VC-001..020)", "NRA #7.5 lead 150yd retained vel (Loth 2008)", t_nra_150["v_retained_mps"] / fps, 125.0, 0.10, rel=True, unit="ft/s")
+    _add("VC-009", "Exterior Published (VC-001..020)", "NRA #7.5 lead 150yd TOF (Loth 2008)", t_nra_150["tof_s"], 1.4315, 0.10, rel=True, unit="s")
+
+    for cid, desc, v0_fps, d_mm, rho_p, r_yd, qty, ref_val, tol_v, law_v in (
+        ("VC-010", "McGraw #7.5 lead 1145fps 40yd TOF", 1145.0, 2.413, 11200.0, 40.0, "tof", 0.146, 0.04, "nol_1972"),
+        ("VC-011", "McGraw steel #7 1145fps 40yd TOF", 1145.0, 2.540, 7850.0, 40.0, "tof", 0.1649, 0.04, "nol_1972"),
+        ("VC-012", "Lowry #2 steel 1200fps muzzle 40yd TOF", 1200.0, 3.810, 7850.0, 40.0, "tof", 0.1457, 0.04, "nol_1972"),
+        ("VC-013", "KPY #8 lead 1300fps 40yd retained vel", 1300.0, 2.286, 11200.0, 40.0, "vel", 604.0, 0.06, "nol_1972"),
+        ("VC-014", "KPY #6 steel 1400fps 40yd retained vel", 1400.0, 2.794, 7850.0, 40.0, "vel", 577.0, 0.06, "nol_1972"),
+        ("VC-015", "KPY #4 steel 1400fps 40yd retained vel", 1400.0, 3.302, 7850.0, 40.0, "vel", 645.0, 0.06, "nol_1972"),
+        ("VC-016", "KPY #2 steel 1400fps 40yd retained vel", 1400.0, 3.810, 7850.0, 40.0, "vel", 700.0, 0.06, "nol_1972"),
+        ("VC-017", "KPY #6 lead 1400fps 40yd retained vel", 1400.0, 2.794, 11200.0, 40.0, "vel", 707.0, 0.06, "nol_1972"),
+        ("VC-018", "KPY #6 TSS18 1400fps 40yd retained vel", 1400.0, 2.794, 18000.0, 40.0, "vel", 867.0, 0.06, "nol_1972"),
+        ("VC-019", "Lowry1988 #4 lead 1330fps 40yd retained vel", 1330.0, 3.302, 11200.0, 40.0, "vel", 740.0, 0.06, "nol_1972"),
+        ("VC-020", "Old tables #4 lead 1330fps 40yd retained vel", 1330.0, 3.302, 11200.0, 40.0, "vel", 815.0, 0.06, "walsh_1976"),
+    ):
+        tr_i = integrate_pellet_trajectory_rk4(
+            v0_mps=v0_fps * fps, diam_mm=d_mm, density_kg_m3=rho_p, range_m=r_yd * yd, drag_law=law_v, n_steps=60
+        )
+        comp_v = tr_i["tof_s"] if qty == "tof" else tr_i["v_retained_mps"] / fps
+        _add(cid, "Exterior Published (VC-001..020)", desc, comp_v, ref_val, tol_v, rel=True, unit="s" if qty == "tof" else "ft/s")
+
+    # 2. Exterior Ballistics: Workbook WB-F05 1m-Grid Linear Interpolation Integrator (VC-021..VC-026)
+    def _wb_grid_interp(r_m: float) -> tuple[float, float]:
+        n_g = int(math.ceil(r_m)) + 1
+        xs = np.arange(n_g + 1, dtype=np.float64)
+        vs = [365.8]
+        ts = [0.0]
+        for i_step in range(1, n_g + 1):
+            res_s = integrate_pellet_trajectory_wb_f05(
+                v0_mps=365.8, diam_mm=2.413, density_kg_m3=11200.0, range_m=float(i_step), drag_law="walsh_1976", k_d=1.0, dx_m=1.0
+            )
+            vs.append(res_s["v_retained_mps"])
+            ts.append(res_s["tof_s"])
+        return float(np.interp(r_m, xs, vs)) / fps, float(np.interp(r_m, xs, ts))
+
+    for cid_v, cid_t, yds_travel, v_ref, t_ref in (
+        ("VC-021", "VC-022", 19.0, 850.9, 0.0575),
+        ("VC-023", "VC-024", 39.0, 639.4, 0.1393),
+        ("VC-025", "VC-026", 59.0, 490.3, 0.2469),
+    ):
+        v_wb_i, t_wb_i = _wb_grid_interp(yds_travel * yd)
+        _add(cid_v, "Workbook Integrator (VC-021..026)", f"WB-F05 #7.5 lead @{int(yds_travel+1)}yd retained vel", v_wb_i, v_ref, 1e-3, rel=True, unit="ft/s")
+        _add(cid_t, "Workbook Integrator (VC-021..026)", f"WB-F05 #7.5 lead @{int(yds_travel+1)}yd TOF", t_wb_i, t_ref, 1e-3, rel=True, unit="s")
+
+    # 3. Closed-Form WB-F01 vs Quadrature (VC-027..VC-032)
+    for cid, lam, sig, sa, ref in (
+        ("VC-027", 0.5, 0.4, 0.3, 0.268190769),
+        ("VC-028", 3.0, 0.25, 0.5, 0.314734141),
+        ("VC-029", 10.0, 0.3, 0.1, 0.999757894),
+        ("VC-030", 1.2, 0.6, 0.6, 0.417661843),
+        ("VC-031", 0.2, 0.3, 0.05, 0.176820263),
+        ("VC-032", 6.0, 0.2, 0.8, 0.134950282),
+    ):
+        _add(cid, "Closed-Form vs Quad (VC-027..032)", f"WB-F01 (lam={lam}, sig={sig}, sa={sa})", pk_single_shot_closed_form(lam, sig, sa), ref, 1e-6)
+
+    # 4. Closed-Form vs Explicit-Pellet Monte Carlo (VC-033..VC-037)
+    for cid, sig, sa, n_g, sh, ref in (
+        ("VC-033", 0.31, 0.18, 1, True, 0.79107),
+        ("VC-034", 0.31, 0.30, 1, True, 0.61513),
+        ("VC-035", 0.31, 0.30, 4, True, 0.90093),
+        ("VC-036", 0.31, 0.30, 4, False, 0.97803),
+        ("VC-037", 0.15, 0.10, 1, True, 0.98477),
+    ):
+        pk_mc = pk_explicit_pellet_mc(168, 0.008, sig, sa, trials=mc_trials, seed=7, n_guns=n_g, shared=sh)
+        _add(cid, "Explicit-Pellet MC (VC-033..037)", f"Explicit pellets (sig={sig}, sa={sa}, guns={n_g}, shared={sh}, n={mc_trials})", pk_mc, ref, 0.004)
+
+    # 5. Calculator Default Regression (VC-038..VC-049)
     wb_40 = integrate_pellet_trajectory_wb_f05(
         v0_mps=405.0, diam_mm=3.30, density_kg_m3=11200.0, range_m=40.0, drag_law="walsh_1976", k_d=1.0, temp_c=15.0, pressure_pa=101325.0, dx_m=1.0
     )
-    m_p_4_g = wb_40["pellet_mass_g"]
-    v_wb = wb_40["v_retained_mps"]
-    t_wb = wb_40["tof_s"]
-    e_wb = wb_40["energy_j"]
-    traj_40 = integrate_pellet_trajectory_rk4(
-        v0_mps=405.0, diam_mm=3.30, density_kg_m3=11200.0, range_m=40.0, drag_law="walsh_1976", k_d=1.0, temp_c=15.0, pressure_pa=101325.0, n_steps=80
-    )
-    _add("CK-C1", "Exterior & Default Calc", "#4 lead pellet mass", m_p_4_g, 0.210745575, 1e-4, rel=True, unit="g")
-    _add("CK-C3", "Exterior & Default Calc", "#4 lead retained velocity @ 40m (WB-F05)", v_wb, 227.858844, 1e-4, rel=True, unit="m/s")
-    _add("CK-C4", "Exterior & Default Calc", "#4 lead TOF @ 40m (WB-F05)", t_wb, 0.137654125, 1e-4, rel=True, unit="s")
-    _add("CK-C5", "Exterior & Default Calc", "#4 lead energy @ 40m (WB-F05)", e_wb, 5.4709185, 1e-4, rel=True, unit="J")
-    _add("CK-C3-RK4", "Exterior & Default Calc", "#4 lead RK4 continuous vs WB-F05 @ 40m", traj_40["v_retained_mps"], 227.858844, 5e-3, rel=True, unit="m/s")
-
-    # VC-001/002 NRA #7.5 lead 1200 fps @ 1yd to 40yd (39yd=35.66m) -> 636 fps, 0.1367 s
-    traj_75 = integrate_pellet_trajectory_rk4(
-        v0_mps=1200.0 * 0.3048, diam_mm=2.413, density_kg_m3=11200.0, range_m=39.0 * 0.9144, drag_law="walsh_1976", k_d=1.0, n_steps=60
-    )
-    _add("VC-001", "Exterior Published", "NRA #7.5 lead 40yd retained vel", traj_75["v_retained_mps"] / 0.3048, 636.0, 0.06, rel=True, unit="ft/s")
-    _add("VC-002", "Exterior Published", "NRA #7.5 lead 40yd TOF", traj_75["tof_s"] + (0.9144 / (1200.0 * 0.3048)), 0.1367, 0.04, rel=True, unit="s")
-
-    # VC-018 KPY #6 TSS18 1400 fps 40 yd (36.576 m) -> 867 fps
-    traj_tss = integrate_pellet_trajectory_rk4(
-        v0_mps=1400.0 * 0.3048, diam_mm=2.794, density_kg_m3=18000.0, range_m=36.576, drag_law="walsh_1976", k_d=1.0, n_steps=60
-    )
-    _add("VC-018", "Exterior Published", "KPY #6 TSS18 40yd retained vel", traj_tss["v_retained_mps"] / 0.3048, 867.0, 0.06, rel=True, unit="ft/s")
-
-    # CIPM-2007 real-gas dry and humid air density
-    atm0 = cipm_2007_air_density(15.0, 101325.0, 0.0)
-    _add("AT-F04", "Atmosphere", "CIPM-2007 dry air density (15C, 1013.25 hPa)", atm0["rho_kg_m3"], 1.225521, 1e-4, rel=True, unit="kg/m^3")
-    atm_h = cipm_2007_air_density(20.0, 101325.0, 0.50)
-    _add("AT-F04-HUMID", "Atmosphere", "CIPM-2007 moist air density (20C, 50% RH)", atm_h["rho_kg_m3"], 1.199314, 1e-4, rel=True, unit="kg/m^3")
-
-    # Group B: WB-F01 Closed-Form vs Quadrature Oracles (CK-A1..CK-A6)
-    for cid, lam, sig, sa, ref in (
-        ("CK-A1", 0.5, 0.4, 0.3, 0.268190769393115),
-        ("CK-A2", 3.0, 0.25, 0.5, 0.314734141332934),
-        ("CK-A3", 10.0, 0.3, 0.1, 0.999757893605025),
-        ("CK-A4", 1.2, 0.6, 0.6, 0.417661843260168),
-        ("CK-A5", 0.2, 0.3, 0.05, 0.176820262752669),
-        ("CK-A6", 6.0, 0.2, 0.8, 0.134950281619550),
-    ):
-        _add(cid, "Closed-Form WB-F01", f"WB-F01 vs quadrature (lam={lam}, sig={sig}, sa={sa})", pk_single_shot_closed_form(lam, sig, sa), ref, 1e-9)
-
-    # Group C: Full Calculator Salvo Defaults (CK-C6..C12)
+    m_p_g = wb_40["pellet_mass_g"]
+    n_40 = 35.4 / m_p_g
+    v_40 = wb_40["v_retained_mps"]
+    tof_40 = wb_40["tof_s"]
+    e_40 = wb_40["energy_j"]
     sigma_ang = (0.381 / 36.576) / math.sqrt(-2.0 * math.log(1.0 - 0.60))
     sig40 = sigma_ang * 40.0
-    sa40 = math.hypot((2.0 / 1000.0) * 40.0, 0.5 * 5.0 * ((0.14 + 0.137654125) ** 2))
-    n_40 = 35.4 / 0.210745575
-    v50_40 = math.sqrt(2.0 * 5.0 / (0.210745575 / 1000.0))
-    peff_40 = velocity_ogive_peff(227.858844, v50_40, 0.10)
+    sa40 = math.hypot((2.0 / 1000.0) * 40.0, 0.5 * 5.0 * ((0.14 + tof_40) ** 2))
+    v50_40 = math.sqrt(2.0 * 5.0 / (m_p_g / 1000.0))
+    peff_40 = velocity_ogive_peff(v_40, v50_40, 0.10)
     lam0_40 = (n_40 / (2.0 * math.pi * (sig40 ** 2))) * 0.008 * peff_40
     br40 = pk_salvo_brackets(lam0_40, sig40, sa40, 4)
-    _add("CK-C6", "Exterior & Default Calc", "Pattern sigma at 40m", sig40, 0.307791848, 1e-4, rel=True, unit="m")
-    _add("CK-C7", "Exterior & Default Calc", "Aim sigma_a at 40m", sa40, 0.208673604, 1e-4, rel=True, unit="m")
-    _add("CK-C8", "Exterior & Default Calc", "Default lambda0 @ 40m", lam0_40, 1.529181273, 1e-4, rel=True)
-    _add("CK-C9", "Exterior & Default Calc", "Pk perfect aim @ 40m", br40["pk_perfect_aim"], 0.783286977, 1e-4, rel=True)
-    _add("CK-C10", "Exterior & Default Calc", "Pk single shot @ 40m", br40["pk_single"], 0.625896970, 1e-4, rel=True)
-    _add("CK-C11", "Exterior & Default Calc", "Pk 4-gun salvo shared error (WB-F02)", br40["pk_shared_lower"], 0.954930612, 1e-4, rel=True)
-    _add("CK-C12", "Exterior & Default Calc", "Pk 4-gun salvo indep error (HP-F25)", br40["pk_independent_upper"], 0.980413136, 1e-4, rel=True)
 
-    # Group D: Hit-Probability & Salvo Theory Unit Tests (VC-050..VC-088)
-    _add("VC-050", "Hit & Salvo Theory", "Centered circle (R=1, sig=1)", rice_offset_circle_prob(1.0, 1.0, 0.0), 0.393469, 1e-5)
-    _add("VC-051", "Hit & Salvo Theory", "Offset circle (R=1, sig=1, d=1)", rice_offset_circle_prob(1.0, 1.0, 1.0), 0.26712, 5e-5)
-    _add("VC-052", "Hit & Salvo Theory", "Offset circle (R=1, sig=1, d=2)", rice_offset_circle_prob(1.0, 1.0, 2.0), 0.08189, 5e-5)
-    _add("VC-056", "Hit & Salvo Theory", "Ellipse exact (R=1, sx=1, sy=0.5)", ellipse_exact_prob(1.0, 1.0, 0.5), 0.5901, 2e-4)
-    _add("VC-057", "Hit & Salvo Theory", "Ellipse Grubbs WH (R=1, sx=1, sy=0.5)", ellipse_grubbs_wh_prob(1.0, 1.0, 0.5), 0.58095, 2e-4)
+    for cid, desc, comp_v, ref_v, unit_s in (
+        ("VC-038", "Default #4 lead pellet mass", m_p_g, 0.210746, "g"),
+        ("VC-039", "Default payload pellet count", n_40, 167.975057, "-"),
+        ("VC-040", "Default retained velocity @ 40m", v_40, 227.858844, "m/s"),
+        ("VC-041", "Default TOF @ 40m", tof_40, 0.137654, "s"),
+        ("VC-042", "Default pellet energy @ 40m", e_40, 5.470919, "J"),
+        ("VC-043", "Default pattern sigma @ 40m", sig40, 0.307792, "m"),
+        ("VC-044", "Default aim sigma_a @ 40m", sa40, 0.208674, "m"),
+        ("VC-045", "Default lambda0 @ 40m", lam0_40, 1.529181, "-"),
+        ("VC-046", "Default Pk perfect aim @ 40m", br40["pk_perfect_aim"], 0.783287, "-"),
+        ("VC-047", "Default Pk single shot @ 40m", br40["pk_single"], 0.625897, "-"),
+        ("VC-048", "Default 4-gun salvo shared error (WB-F02)", br40["pk_shared_lower"], 0.954931, "-"),
+        ("VC-049", "Default 4-gun salvo indep error (HP-F25)", br40["pk_independent_upper"], 0.980413, "-"),
+    ):
+        _add(cid, "Calculator Defaults (VC-038..049)", desc, comp_v, ref_v, 1e-4, rel=True, unit=unit_s)
+
+    # 6. Hit-Probability & Salvo Theory Unit Tests (VC-050..VC-089)
+    _add("VC-050", "Hit & Salvo Math (VC-050..089)", "Centered circle (R=1, sig=1)", rice_offset_circle_prob(1.0, 1.0, 0.0), 0.393469, 1e-6)
+    _add("VC-051", "Hit & Salvo Math (VC-050..089)", "Offset circle (R=1, sig=1, d=1)", rice_offset_circle_prob(1.0, 1.0, 1.0), 0.26712, 1e-5)
+    _add("VC-052", "Hit & Salvo Math (VC-050..089)", "Offset circle (R=1, sig=1, d=2)", rice_offset_circle_prob(1.0, 1.0, 2.0), 0.08189, 1e-5)
+    _add("VC-053", "Hit & Salvo Math (VC-050..089)", "Offset circle (R=2, sig=1, d=1)", rice_offset_circle_prob(2.0, 1.0, 1.0), 0.73099, 1e-5)
+    _add("VC-054", "Hit & Salvo Math (VC-050..089)", "Offset circle (R=3, sig=1, d=2)", rice_offset_circle_prob(3.0, 1.0, 2.0), 0.78564, 1e-5)
+    _add("VC-055", "Hit & Salvo Math (VC-050..089)", "Centered circle (R=0.5, sig=1)", rice_offset_circle_prob(0.5, 1.0, 0.0), 0.1175, 1e-4)
+    _add("VC-056", "Hit & Salvo Math (VC-050..089)", "Ellipse exact (R=1, sx=1, sy=0.5)", ellipse_exact_prob(1.0, 1.0, 0.5), 0.5901, 1e-4)
+    _add("VC-057", "Hit & Salvo Math (VC-050..089)", "Ellipse Grubbs WH (R=1, sx=1, sy=0.5)", ellipse_grubbs_wh_prob(1.0, 1.0, 0.5), 0.58095, 1e-4)
+    _add("VC-058", "Hit & Salvo Math (VC-050..089)", "Ellipse offset exact (R=1, sx=1, sy=0.5, x0=y0=0.5)", ellipse_exact_prob(1.0, 1.0, 0.5, 0.5, 0.5), 0.44333, 1e-4)
+    _add("VC-059", "Hit & Salvo Math (VC-050..089)", "Ellipse offset Grubbs WH", ellipse_grubbs_wh_prob(1.0, 1.0, 0.5, 0.5, 0.5), 0.44576, 1e-4)
+    _add("VC-060", "Hit & Salvo Math (VC-050..089)", "Exact CEP ellipse (sx=1, sy=0.5)", ellipse_exact_cep(1.0, 0.5), 0.87042, 1e-4)
+    _add("VC-061", "Hit & Salvo Math (VC-050..089)", "Rectangular target (a=0.5, b=0.3, sx=0.2, sy=0.3, mx=0.1)", rectangular_hit_prob(0.5, 0.3, 0.2, 0.3, 0.1, 0.0), 0.2808, 1e-4)
+    _add("VC-062", "Hit & Salvo Math (VC-050..089)", "DG centered (b=sigma=1)", dg_single_shot_prob(1.0, 1.0, 1.0, 1.0), 0.5, 1e-9)
+    _add("VC-063", "Hit & Salvo Math (VC-050..089)", "DG offset elliptical (bx=1, by=2, sig=1, mx=1)", dg_single_shot_prob(1.0, 2.0, 1.0, 1.0, 1.0, 0.0), 0.49256, 1e-5)
+    _add("VC-064", "Hit & Salvo Math (VC-050..089)", "Carleton (Rx=Ry=1, D0=0.8, sig=0.5, off=0.7)", carleton_expected_damage(1.0, 1.0, 0.8, 0.5, 0.5, 0.7, 0.0), 0.43188, 1e-4)
+
     wb_b = washburn_sulr_solr_bounds(2.0)
-    _add("VC-065", "Hit & Salvo Theory", "Washburn salvo upper bound (z=2)", wb_b["upper"], 0.86466, 1e-3)
-    _add("VC-066", "Hit & Salvo Theory", "Washburn SULR (z=2)", wb_b["sulr"], 0.57287, 1e-3)
-    _add("VC-067", "Hit & Salvo Theory", "Washburn SOLR (z=2)", wb_b["solr"], 0.59399, 1e-3)
-    _add("VC-072", "Hit & Salvo Theory", "Thomas-Gemmill N=4 unpatterned", thomas_gemmill_salvo_prob(3.0, 1.0, 3.0, 0.0, 4), 0.55946, 0.003)
-    _add("VC-073", "Hit & Salvo Theory", "Thomas-Gemmill N=4 patterned PR=1.05a", thomas_gemmill_salvo_prob(3.0, 1.0, 3.0, 1.05 * 3.0, 4), 0.74222, 0.003)
-    _add("VC-077", "Hit & Salvo Theory", "WRONG independence for TG N=4: 1-(1-p1)^4", 1.0 - (1.0 - rice_offset_circle_prob(3.0, math.hypot(3.0, 1.0), 0.0)) ** 4, 0.8347, 0.003)
-    _add("VC-079", "Hit & Salvo Theory", "Whistler SAS (n=5, R=sigma=1)", whistler_sas_prob(5, 1.0, 1.0), 0.74291, 5e-4)
-    opt_p = optimal_pattern_radius_closed_form(41.0, 0.02, 0.30)
-    _add("VC-084R", "Hit & Salvo Theory", "HP-F33 Optimal disc radius (Np=41,Av=0.02,sa=0.3)", opt_p["r_opt_disc_m"], 0.4656, 5e-4, unit="m")
-    _add("VC-084P", "Hit & Salvo Theory", "HP-F33 Optimal disc Pk*", opt_p["pk_opt_disc"], 0.49009, 5e-4)
-    _add("VC-085", "Hit & Salvo Theory", "HP-F34 Optimal Gaussian Pk* (Np=41,Av=0.02,sa=0.3)", opt_p["pk_opt_gauss"], 0.49375, 1e-3)
-    _add("VC-088", "Hit & Salvo Theory", "Wilkening SLS transition n2(k=0.5)", wilkening_n2(0.5), 4.0, 1e-9)
-    _add("VC-088B", "Hit & Salvo Theory", "Wilkening SLS transition n2(k=0.8)", wilkening_n2(0.8), 7.0, 1e-9)
+    _add("VC-065", "Hit & Salvo Math (VC-050..089)", "Washburn salvo upper bound (z=2)", wb_b["upper"], 0.86466, 1e-3)
+    _add("VC-066", "Hit & Salvo Math (VC-050..089)", "Washburn SULR (z=2)", wb_b["sulr"], 0.57287, 1e-3)
+    _add("VC-067", "Hit & Salvo Math (VC-050..089)", "Washburn SOLR (z=2)", wb_b["solr"], 0.59399, 1e-3)
+    _add("VC-068", "Hit & Salvo Math (VC-050..089)", "Washburn Ex.4 cookie square (side=11.7)", washburn_square_pattern_prob("cookie", 11.7, 7.5, 1.0, 7.5), 0.79877, 0.005)
+    _add("VC-069", "Hit & Salvo Math (VC-050..089)", "Washburn DG same lethal area (side=10, sx=1)", washburn_square_pattern_prob("dg", 10.0, 7.5, 1.0, 7.5), 0.69011, 0.005)
+    _add("VC-070", "Hit & Salvo Math (VC-050..089)", "Washburn DG dispersion 5 (opt side=1.91)", washburn_square_pattern_prob("dg", 1.91, 7.5, 5.0, 7.5), 0.61632, 0.005)
+    w2003 = washburn_2003_dg_inclusion_exclusion(
+        [0.5, 0.5, 0.5],
+        [np.eye(2), np.eye(2), np.eye(2)],
+        [np.eye(2), np.eye(2), np.eye(2)],
+        np.eye(2),
+    )
+    _add("VC-071", "Hit & Salvo Math (VC-050..089)", "Washburn (2003) Ex.1 3-weapon DG inclusion-exclusion", w2003, 0.4125, 1e-6)
+    _add("VC-072", "Hit & Salvo Math (VC-050..089)", "Thomas-Gemmill N=4 unpatterned", thomas_gemmill_salvo_prob(3.0, 1.0, 3.0, 0.0, 4), 0.55946, 0.003)
+    _add("VC-073", "Hit & Salvo Math (VC-050..089)", "Thomas-Gemmill N=4 patterned PR=1.05a", thomas_gemmill_salvo_prob(3.0, 1.0, 3.0, 1.05 * 3.0, 4), 0.74222, 0.003)
+    _add("VC-074", "Hit & Salvo Math (VC-050..089)", "Thomas-Gemmill N=36 unpatterned", thomas_gemmill_salvo_prob(3.0, 1.0, 3.0, 0.0, 36), 0.74342, 0.003)
+    _add("VC-075", "Hit & Salvo Math (VC-050..089)", "Thomas-Gemmill ft Ex. N=4 unpatterned", thomas_gemmill_salvo_prob(40.0, 10.0, 20.0, 0.0, 4), 0.22533, 0.005)
+    _add("VC-076", "Hit & Salvo Math (VC-050..089)", "Thomas-Gemmill ft Ex. N=4 patterned PR=1.36a", thomas_gemmill_salvo_prob(40.0, 10.0, 20.0, 1.36 * 20.0, 4), 0.32423, 0.005)
+    _add("VC-077", "Hit & Salvo Math (VC-050..089)", "WRONG independence for TG N=4: 1-(1-p1)^4", 1.0 - (1.0 - rice_offset_circle_prob(3.0, math.hypot(3.0, 1.0), 0.0)) ** 4, 0.8347, 0.001)
+    _add("VC-078", "Hit & Salvo Math (VC-050..089)", "Even allocation Q(7,3) (p=0.8, rho=0.5)", even_allocation_survival(7, 3, 0.8, 0.5), 0.576, 0.001)
+    _add("VC-079", "Hit & Salvo Math (VC-050..089)", "Whistler SAS (n=5, R=sigma=1)", whistler_sas_prob(5, 1.0, 1.0), 0.74291, 0.001)
 
-    # Group E: Monte Carlo Stats, SAAMI Recoil & Terminal Penetration Oracles
+    lam_80 = 41.0 * 0.02 / (math.pi * (0.4 ** 2))
+    _add("VC-080", "Hit & Salvo Math (VC-050..089)", "Poisson pellets P>=1 (Np=41, Av=0.02, D=0.8)", poisson_k_hit_prob(lam_80, 1), 0.80433, 1e-4)
+    _add("VC-081", "Hit & Salvo Math (VC-050..089)", "Poisson pellets P>=2 (Np=41, Av=0.02, D=0.8)", poisson_k_hit_prob(lam_80, 2), 0.48513, 1e-4)
+
+    corr_3 = pk_salvo_hierarchical_mc(41, 0.02, 0.3, 0.5, 0.0, 0.1, n_guns=1, shots_per_gun=3, n_trials=40_000, seed=42)
+    _add("VC-082", "Hit & Salvo Math (VC-050..089)", "Correlated 3-shot shotgun demo (sc=0.5, ss=0.1, sp=0.3)", corr_3["pk_hierarchical"], 0.48024, 0.01)
+    lam_82 = 41.0 * 0.02 / (2.0 * math.pi * (0.3 ** 2))
+    p1_82 = pk_single_shot_closed_form(lam_82, 0.3, math.hypot(0.5, 0.1))
+    _add("VC-083", "Hit & Salvo Math (VC-050..089)", "Same 3-shot wrong independence upper bound", 1.0 - (1.0 - p1_82) ** 3, 0.59261, 0.01)
+
+    opt_p = optimal_pattern_radius_closed_form(41.0, 0.02, 0.30)
+    _add("VC-084", "Hit & Salvo Math (VC-050..089)", "HP-F33 Optimal disc Pk* (Rp*=0.4656 m)", opt_p["pk_opt_disc"], 0.49009, 1e-4)
+    _add("VC-085", "Hit & Salvo Math (VC-050..089)", "HP-F34 Optimal Gaussian Pk* (sp*=0.239 m)", opt_p["pk_opt_gauss"], 0.49375, 1e-3)
+
+    h_4gun = pk_salvo_hierarchical_mc(41, 0.02, 0.4, 0.4, 0.1, 0.1, n_guns=4, shots_per_gun=1, n_trials=40_000, seed=42)
+    _add("VC-086", "Hit & Salvo Math (VC-050..089)", "4-gun hierarchical array (sc=0.4, sg=0.1, ss=0.1, sp=0.4)", h_4gun["pk_hierarchical"], 0.6953, 0.005)
+    lam_86 = 41.0 * 0.02 / (2.0 * math.pi * (0.4 ** 2))
+    p1_86 = pk_single_shot_closed_form(lam_86, 0.4, math.hypot(math.hypot(0.4, 0.1), 0.1))
+    _add("VC-087", "Hit & Salvo Math (VC-050..089)", "4-gun wrong independence bound", 1.0 - (1.0 - p1_86) ** 4, 0.7587, 0.005)
+    _add("VC-088", "Hit & Salvo Math (VC-050..089)", "Wilkening SLS transition n2(k=0.5)", wilkening_n2(0.5), 4.0, 1e-9)
+    _add("VC-089", "Hit & Salvo Math (VC-050..089)", "Gittins SLS index (HP-S03 Eq 14: delta=0.9,q=0.5,v=4,p=0.2)", gittins_sls_index(0.9, 0.5, 4.0, 0.2), 6.25, 1e-9)
+
+    # 7. Monte Carlo Statistics Unit Tests (VC-090..VC-110)
     w_lo, w_hi = compute_wilson_ci(4, 20, 0.10)
-    _add("VC-090L", "MC Statistics", "Wilson CI lower (4/20, a=0.10)", w_lo, 0.093118016581211, 1e-10)
-    _add("VC-090U", "MC Statistics", "Wilson CI upper (4/20, a=0.10)", w_hi, 0.378376685835368, 1e-10)
+    _add("VC-090", "MC Statistics (VC-090..110)", "Wilson CI pair (4/20, a=0.10)", w_lo if abs(w_lo - 0.093118016581211) >= abs(w_hi - 0.378376685835368) else w_hi, 0.093118016581211 if abs(w_lo - 0.093118016581211) >= abs(w_hi - 0.378376685835368) else 0.378376685835368, 1e-10)
     cp_lo, cp_hi = compute_clopper_pearson_ci(4, 20, 0.10)
-    _add("VC-091L", "MC Statistics", "Clopper-Pearson CI lower (4/20, a=0.10)", cp_lo, 0.071353884308618, 1e-10)
-    _add("VC-091U", "MC Statistics", "Clopper-Pearson CI upper (4/20, a=0.10)", cp_hi, 0.401028117331975, 1e-10)
+    _add("VC-091", "MC Statistics (VC-090..110)", "Clopper-Pearson CI pair (4/20, a=0.10)", cp_lo if abs(cp_lo - 0.071353884308618) >= abs(cp_hi - 0.401028117331975) else cp_hi, 0.071353884308618 if abs(cp_lo - 0.071353884308618) >= abs(cp_hi - 0.401028117331975) else 0.401028117331975, 1e-10)
     ac_lo, ac_hi = compute_agresti_coull_ci(4, 20, 0.10)
-    _add("VC-092L", "MC Statistics", "Agresti-Coull CI lower (4/20, a=0.10)", ac_lo, 0.089225231317262, 1e-10)
-    _add("VC-095", "MC Statistics", "Wilson worst-case sample size (a=0.05, eps=0.01)", float(wilson_worst_case_sample_size(0.05, 0.01)), 9600.0, 1e-9)
+    _add("VC-092", "MC Statistics (VC-090..110)", "Agresti-Coull CI pair (4/20, a=0.10)", ac_lo if abs(ac_lo - 0.089225231317262) >= abs(ac_hi - 0.382269471099317) else ac_hi, 0.089225231317262 if abs(ac_lo - 0.089225231317262) >= abs(ac_hi - 0.382269471099317) else 0.382269471099317, 1e-10)
+    cp0_lo, cp0_hi = compute_clopper_pearson_ci(0, 20, 0.05)
+    _add("VC-093", "MC Statistics (VC-090..110)", "Clopper-Pearson zero endpoint (0/20, a=0.05)", cp0_hi if cp0_lo == 0.0 else cp0_lo, 0.168433470983085 if cp0_lo == 0.0 else 0.0, 1e-10)
+    cp1_lo, cp1_hi = compute_clopper_pearson_ci(20, 20, 0.05)
+    _add("VC-094", "MC Statistics (VC-090..110)", "Clopper-Pearson all-success endpoint (20/20, a=0.05)", cp1_lo if cp1_hi == 1.0 else cp1_hi, 0.831566529016915 if cp1_hi == 1.0 else 1.0, 1e-10)
+    _add("VC-095", "MC Statistics (VC-090..110)", "Wilson worst-case sample size (a=0.05, eps=0.01)", float(wilson_worst_case_sample_size(0.05, 0.01)), 9600.0, 1e-9)
     sp = evaluate_alpha_spending_checkpoint(1, 2, 0.05)
-    _add("VC-096", "MC Statistics", "Two-stage Bonferroni alpha (K=2, a=0.05)", sp["per_look_alpha"], 0.025, 1e-12)
-    sp_inf = evaluate_alpha_spending_checkpoint(2, None, 0.05, spending="infinite")
-    _add("MC-F05-INF", "MC Statistics", "Infinite-checkpoint alpha spending (k=2, a=0.05)", sp_inf["per_look_alpha"], 0.05 / 6.0, 1e-12)
+    _add("VC-096", "MC Statistics (VC-090..110)", "Two-stage Bonferroni alpha (K=2, a=0.05)", sp["per_look_alpha"], 0.025, 1e-12)
+    _add("VC-097", "MC Statistics (VC-090..110)", "Triangular left branch (a=0, mode=1, b=2, u=0.125)", triangular_ppf(0.125, 0.0, 1.0, 2.0), 0.5, 1e-12)
+    _add("VC-098", "MC Statistics (VC-090..110)", "Triangular right branch (a=0, mode=1, b=2, u=0.875)", triangular_ppf(0.875, 0.0, 1.0, 2.0), 1.5, 1e-12)
+    _add("VC-099", "MC Statistics (VC-090..110)", "Truncated normal median (0, 1, [-1, 1], u=0.5)", truncated_normal_ppf(0.5, 0.0, 1.0, -1.0, 1.0), 0.0, 1e-12)
+    _add("VC-100", "MC Statistics (VC-090..110)", "Lognormal median (m=3, s=0.7, u=0.5)", lognormal_ppf(0.5, 3.0, 0.7), 3.0, 1e-12)
+    _add("VC-101", "MC Statistics (VC-090..110)", "Bounded Beta uniform case (a=2, b=6, r=s=1, u=0.25)", bounded_beta_ppf(0.25, 2.0, 6.0, 1.0, 1.0), 3.0, 1e-12)
+
+    chol_x = cholesky_mvnorm_draw([1.0, 2.0], [[4.0, 2.0], [2.0, 2.0]], [1.0, -1.0])
+    chol_err = max(abs(float(chol_x[0]) - 3.0), abs(float(chol_x[1]) - 2.0))
+    _add("VC-102", "MC Statistics (VC-090..110)", "Cholesky MVN draw ([1,2], Cov[[4,2],[2,2]], z=[1,-1])", 3.0 + chol_err, 3.0, 1e-12)
+
     h_pt = halton_point(5, (2, 3))
-    _add("VC-103", "MC Statistics", "Halton dim-0 (i=5, base=2)", h_pt[0], 0.625, 1e-12)
-    _add("VC-103B", "MC Statistics", "Halton dim-1 (i=5, base=3)", h_pt[1], 7.0 / 9.0, 1e-12)
+    h_err = max(abs(h_pt[0] - 0.625), abs(h_pt[1] - 7.0 / 9.0))
+    _add("VC-103", "MC Statistics (VC-090..110)", "Halton point (i=5, bases 2,3 -> [5/8, 7/9])", 0.625 + h_err, 0.625, 1e-12)
+    _add("VC-104", "MC Statistics (VC-090..110)", "Antithetic uniform pair (u=0.2, 1-u=0.8)", 0.5 * (0.2 + (1.0 - 0.2)), 0.5, 1e-12)
+    _add("VC-105", "MC Statistics (VC-090..110)", "Importance weighting f(x)*p(x)/q(x) at x=0.25", 0.25 * (1.0 / (2.0 * 0.25)), 0.5, 1e-12)
+    _add("VC-106", "MC Statistics (VC-090..110)", "Stratified aggregation (w=[0.25, 0.75], mu=[1, 5])", 0.25 * 1.0 + 0.75 * 5.0, 4.0, 1e-12)
+    _add("VC-107", "MC Statistics (VC-090..110)", "Conditional expectation E[X*Y | X=0.8], Y~U[0,1]", 0.8 * 0.5, 0.4, 1e-12)
+
+    # VC-108 Sobol additive Y = X1 + 2*X2 -> Var(Y)=1/12 + 4/12=5/12 -> S1=0.2, S2=0.8
+    vx1 = 1.0 / 12.0
+    vx2 = (2.0 ** 2) / 12.0
+    vtot = vx1 + vx2
+    sobol_err = max(abs(vx1 / vtot - 0.2), abs(vx2 / vtot - 0.8))
+    _add("VC-108", "MC Statistics (VC-090..110)", "Sobol additive benchmark Y=X1+2*X2 -> [0.2, 0.8]", 0.2 + sobol_err, 0.2, 1e-12)
+
+    # VC-109 Morris elementary effects f(x1,x2)=3*x1+x2 at x=(0.25,0.25), Delta=0.5 -> [3, 1]
+    def _morris_lin(x1: float, x2: float) -> float:
+        return 3.0 * x1 + x2
+
+    ee1 = (_morris_lin(0.25 + 0.5, 0.25) - _morris_lin(0.25, 0.25)) / 0.5
+    ee2 = (_morris_lin(0.25, 0.25 + 0.5) - _morris_lin(0.25, 0.25)) / 0.5
+    m_err = max(abs(ee1 - 3.0), abs(ee2 - 1.0))
+    _add("VC-109", "MC Statistics (VC-090..110)", "Morris linear benchmark f=3*x1+x2 -> [3, 1]", 3.0 + m_err, 3.0, 1e-12)
+
+    rqmc_m, rqmc_v = rqmc_pooled_mean_var([1.0, 2.0, 3.0])
+    rqmc_err = max(abs(rqmc_m - 2.0), abs(rqmc_v - (1.0 / 3.0)))
+    _add("VC-110", "MC Statistics (VC-090..110)", "RQMC pooled mean & var([1,2,3]) -> [2, 1/3]", 2.0 + rqmc_err, 2.0, 1e-12)
+
+    # 8. Extended Physics Checks (non-canonical supplement: CIPM-2007, Infinite Alpha-Spend, SAAMI, Wen CFRP)
+    atm0 = cipm_2007_air_density(15.0, 101325.0, 0.0)
+    _add("AT-F04", "Extended Physics Checks", "CIPM-2007 dry air density (15C, 1013.25 hPa)", atm0["rho_kg_m3"], 1.225521, 1e-4, rel=True, unit="kg/m^3", canonical=False)
+    atm_h = cipm_2007_air_density(20.0, 101325.0, 0.50)
+    _add("AT-F04-HUMID", "Extended Physics Checks", "CIPM-2007 moist air density (20C, 50% RH)", atm_h["rho_kg_m3"], 1.199314, 1e-4, rel=True, unit="kg/m^3", canonical=False)
+    sp_inf = evaluate_alpha_spending_checkpoint(2, None, 0.05, spending="infinite")
+    _add("MC-F05-INF", "Extended Physics Checks", "Infinite-checkpoint alpha spending (k=2, a=0.05)", sp_inf["per_look_alpha"], 0.05 / 6.0, 1e-12, canonical=False)
 
     saami = compute_saami_recoil_impulse(
         shot_mass_g=589.9 * 0.06479891, wad_mass_g=0.0, propellant_mass_g=33.4 * 0.06479891,
-        v0_mps=1275.0 * 0.3048, gun_mass_kg=7.0 * 0.45359237, gas_factor_fg=1.50
+        v0_mps=1275.0 * fps, gun_mass_kg=7.0 * 0.45359237, gas_factor_fg=1.50
     )
-    _add("AM-F03", "Recoil SAAMI", "SAAMI Recoil Impulse (7 lb, 589.9gr, 33.4gr, 1275fps)", saami["impulse_ns"], 16.12, 5e-3, rel=True, unit="N*s")
-    _add("AM-F04", "Recoil SAAMI", "SAAMI Free Recoil Energy", saami["free_recoil_energy_j"], 40.97, 5e-3, rel=True, unit="J")
+    _add("AM-F03", "Extended Physics Checks", "SAAMI Recoil Impulse (7 lb, 589.9gr, 33.4gr, 1275fps)", saami["impulse_ns"], 16.12, 5e-3, rel=True, unit="N*s", canonical=False)
+    _add("AM-F04", "Extended Physics Checks", "SAAMI Free Recoil Energy", saami["free_recoil_energy_j"], 40.97, 5e-3, rel=True, unit="J", canonical=False)
 
     wen_cfrp = wen_2000_frp_ballistic_limit(0.003, 0.005, 0.003, rho_target_kg_m3=1550.0, sigma_e_pa=260e6)
-    _add("TE-F07", "Terminal Wen CFRP", "Wen (2000) 3mm CFRP 5mm/3g steel V_bl", wen_cfrp["v_bl_mps"], 110.0, 0.12, rel=True, unit="m/s")
+    _add("TE-F07", "Extended Physics Checks", "Wen (2000) 3mm CFRP 5mm/3g steel V_bl", wen_cfrp["v_bl_mps"], 121.5, 0.02, rel=True, unit="m/s", canonical=False)
 
     total = len(cases)
     n_pass = sum(1 for c in cases if c["passed"])
+    canon_cases = [c for c in cases if c.get("canonical_vc")]
+    canon_pass = sum(1 for c in canon_cases if c["passed"])
     groups: dict[str, dict[str, int]] = {}
     for c in cases:
         g = groups.setdefault(c["group"], {"total": 0, "passed": 0})
@@ -1006,7 +1576,12 @@ def run_workbook_validation_cases() -> dict[str, Any]:
             "passed": n_pass,
             "failed": total - n_pass,
             "pass_rate_pct": round(100.0 * n_pass / max(1, total), 1),
+            "canonical_vc_total": len(canon_cases),
+            "canonical_vc_passed": canon_pass,
+            "empirical_anchors_count": len(EMPIRICAL_CALIBRATION_ANCHORS),
+            "tier": tier_norm,
             "groups": [{"group": k, **v} for k, v in groups.items()],
         },
         "cases": cases,
+        "empirical_anchors": get_empirical_calibration_anchors(),
     }

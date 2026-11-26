@@ -497,6 +497,7 @@ def _collect_briefing_sections(
     adversarial_result: dict[str, Any] | None = None,
     calibration_result: dict[str, Any] | None = None,
     vv_result: dict[str, Any] | None = None,
+    scenario_manifest: dict[str, Any] | None = None,
 ) -> tuple[list[tuple[str, str, str]], list[tuple[str, Figure]], list[dict[str, Any]]]:
     kpis: list[tuple[str, str, str]] = []
     if simulator_summary:
@@ -556,11 +557,28 @@ def _collect_briefing_sections(
                 f"{bm_sm.get('passed', 0)}/{bm_sm.get('total', 0)} PASS | {r80_str}",
             )
         )
+    if scenario_manifest:
+        m_hash = str(scenario_manifest.get("manifest_sha256", ""))[:12] or "n/a"
+        m_grade = str(scenario_manifest.get("worst_verification_grade", "V4"))
+        m_seed = int(scenario_manifest.get("seed", 42))
+        kpis.append(
+            (
+                "Scenario Manifest (M01/M16)",
+                "SHA-256 / Seed / Worst-Link Grade",
+                f"{m_hash} | seed={m_seed} | {m_grade} (v{scenario_manifest.get('schema_version', '2.1.0')})",
+            )
+        )
     if not kpis:
         kpis.append(("Workbench Baseline", "Status", "Ready — execute modules to populate quantitative KPIs"))
 
+    eff_subtitle = subtitle
+    if scenario_manifest:
+        m_hash = str(scenario_manifest.get("manifest_sha256", ""))[:12]
+        m_grade = str(scenario_manifest.get("worst_verification_grade", "V4"))
+        eff_subtitle = f"{subtitle} | Manifest {m_hash} | Grade {m_grade}"
+
     figs: list[tuple[str, Figure]] = [
-        ("Executive Summary & KPI Scorecard", _make_cover_figure(title, subtitle, kpis))
+        ("Executive Summary & KPI Scorecard", _make_cover_figure(title, eff_subtitle, kpis))
     ]
     if ab_result and (ab_result.get("scorecard") or ab_result.get("candidates")):
         figs.append(("A/B Turret Architecture Scorecard", _make_ab_radar_chart_fig(ab_result)))
@@ -595,6 +613,7 @@ def generate_executive_briefing_pdf(
     adversarial_result: dict[str, Any] | None = None,
     calibration_result: dict[str, Any] | None = None,
     vv_result: dict[str, Any] | None = None,
+    scenario_manifest: dict[str, Any] | None = None,
 ) -> bytes:
     """Render multi-page landscape executive PDF briefing into raw bytes."""
     _, figs, _ = _collect_briefing_sections(
@@ -610,6 +629,7 @@ def generate_executive_briefing_pdf(
         adversarial_result=adversarial_result,
         calibration_result=calibration_result,
         vv_result=vv_result,
+        scenario_manifest=scenario_manifest,
     )
     buf = io.BytesIO()
     with PdfPages(buf) as pdf:
@@ -631,6 +651,7 @@ def generate_executive_briefing_pptx(
     adversarial_result: dict[str, Any] | None = None,
     calibration_result: dict[str, Any] | None = None,
     vv_result: dict[str, Any] | None = None,
+    scenario_manifest: dict[str, Any] | None = None,
 ) -> bytes:
     """Build native 16:9 widescreen PowerPoint (.pptx) deck with charts, tables & citations."""
     kpis, figs, citations = _collect_briefing_sections(
@@ -646,6 +667,7 @@ def generate_executive_briefing_pptx(
         adversarial_result=adversarial_result,
         calibration_result=calibration_result,
         vv_result=vv_result,
+        scenario_manifest=scenario_manifest,
     )
     prs = Presentation()
     prs.slide_width = Inches(13.333)

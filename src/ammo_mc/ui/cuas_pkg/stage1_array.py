@@ -942,11 +942,12 @@ def render_stage1_small_arms(arm_mode: str, expert: bool) -> None:
                 cuas_prop_type = st.selectbox("Propellant Temp Curve", ["double_base", "single_base"], key="cuas_prop_type")
                 cuas_drag_model = st.selectbox(
                     "Sphere Drag Model",
-                    ["compressible_re_m", "walsh_1976", "nol_1972", "compton_1996", "mach_only_smooth_sphere"],
+                    ["compressible_re_m", "walsh_1976", "nol_1972", "loth_2008", "compton_1996", "mach_only_smooth_sphere"],
                     format_func=lambda k: {
                         "compressible_re_m": "Compressible Re + Mach (Morrison/Bailey-Hiatt)",
                         "walsh_1976": "Walsh (1976) NASA TN D-8120 Continuum Table",
                         "nol_1972": "Krumins (1972) NOLTR 72-34 Re=1e4 Table",
+                        "loth_2008": "Loth (2008) Compressible Sphere Fit (EB-F12)",
                         "compton_1996": "Compton (1996) Piecewise Lead Drag",
                         "mach_only_smooth_sphere": "Compton (1996) Mach-Only Smooth Sphere",
                     }.get(k, k),
@@ -954,6 +955,7 @@ def render_stage1_small_arms(arm_mode: str, expert: bool) -> None:
                 )
                 cuas_kd_mult = st.slider("Pellet Deformation Drag k_d", 1.00, 1.30, 1.00, 0.05, key="cuas_kd_mult", help="1.00 = smooth sphere; 1.15-1.30 = real deformed lead shot")
                 cuas_rh_pct = st.slider("Relative Humidity (%, CIPM-2007)", 0.0, 100.0, 0.0, 10.0, key="cuas_rh_pct")
+                cuas_site_alt = st.slider("Site Altitude (m ASL, AT-F01)", 0.0, 3500.0, 0.0, 100.0, key="cuas21_site_alt_m")
 
         with st.expander("🔬 High-Fidelity Physics & Terminal Realism", expanded=False):
             hfc1, hfc2 = st.columns(2)
@@ -1129,6 +1131,7 @@ def render_stage1_small_arms(arm_mode: str, expert: bool) -> None:
                 shot_sigma_cv=float(cuas_sigma_cv),
                 penetration_model=str(cuas_pen_model),
                 use_markov_kill_tree=bool(cuas_markov_tree),
+                site_altitude_m=float(cuas_site_alt),
             )
 
         cu_sm = cuas_sim["summary"]
@@ -1341,6 +1344,7 @@ def render_stage1_small_arms(arm_mode: str, expert: bool) -> None:
             shot_sigma_cv=float(cuas_sigma_cv),
             penetration_model=str(cuas_pen_model),
             use_markov_kill_tree=bool(cuas_markov_tree),
+            site_altitude_m=float(cuas_site_alt),
             annex_c_sample={
                 "n_pellets": cu_sm["total_pellets_per_volley"],
                 "vulnerable_area_m2": cu_sm["presented_area_m2"],

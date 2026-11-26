@@ -209,6 +209,9 @@ def create_real_map_site_defense_figure(
     sdz_radius_m: float = 280.0,
     heading_deg: float = 0.0,
     map_style: str = "open-street-map",
+    shotfall_contour_xy_m: list[list[float]] | list[tuple[float, float]] | None = None,
+    uxo_ellipse_xy_m: list[list[float]] | list[tuple[float, float]] | None = None,
+    shotfall_label: str = "High-Elev Wind-Sheared Shotfall (95%)",
 ) -> go.Figure:
     """Plot C-UAS turrets, firing sectors, obstacles, NFZs, blind spots & Fallout SDZ on a real-world map."""
     sm = site_res.get("summary", {})
@@ -358,6 +361,43 @@ def create_real_map_site_defense_figure(
                 hovertext=f"NFZ: {nfz['name']} (R={nfz['radius_m']}m)",
                 showlegend=(i == 0),
                 legendgroup="nfz",
+            )
+        )
+
+    # 6B. High-Elevation Wind-Sheared Shotfall Dispersion & Post-Kill UXO Carry-On Ellipse
+    if shotfall_contour_xy_m and len(shotfall_contour_xy_m) >= 3:
+        sf_lons, sf_lats = [], []
+        for pt in shotfall_contour_xy_m:
+            lo, la = local_xy_to_lonlat(float(pt[0]), float(pt[1]), origin_lat, origin_lon, heading_deg)
+            sf_lons.append(lo)
+            sf_lats.append(la)
+        fig.add_trace(
+            go.Scattermap(
+                lon=sf_lons,
+                lat=sf_lats,
+                mode="lines",
+                fill="toself",
+                fillcolor="rgba(168, 85, 247, 0.22)",
+                line=dict(color="#A855F7", width=2.2),
+                name=shotfall_label,
+            )
+        )
+
+    if uxo_ellipse_xy_m and len(uxo_ellipse_xy_m) >= 3:
+        ux_lons, ux_lats = [], []
+        for pt in uxo_ellipse_xy_m:
+            lo, la = local_xy_to_lonlat(float(pt[0]), float(pt[1]), origin_lat, origin_lon, heading_deg)
+            ux_lons.append(lo)
+            ux_lats.append(la)
+        fig.add_trace(
+            go.Scattermap(
+                lon=ux_lons,
+                lat=ux_lats,
+                mode="lines",
+                fill="toself",
+                fillcolor="rgba(249, 115, 22, 0.26)",
+                line=dict(color="#F97316", width=2.2),
+                name="Post-Kill UXO / Wreck Carry-On (SE-C20)",
             )
         )
 

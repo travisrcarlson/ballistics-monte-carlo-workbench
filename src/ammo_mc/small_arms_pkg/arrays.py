@@ -667,6 +667,7 @@ def simulate_anti_drone_multishotgun_mc(
     nb_clumping_kappa: float | None = None,
     penetration_model: str = "energy",
     use_markov_kill_tree: bool = False,
+    site_altitude_m: float = 0.0,
 ) -> dict[str, Any]:
     """Execute Monte Carlo simulation of an anti-drone defense volley using a multi-shotgun array."""
     rng = np.random.default_rng(seed)
@@ -829,9 +830,11 @@ def simulate_anti_drone_multishotgun_mc(
         evaluate_markov_redundant_kill_tree,
         faa_shear_plugging_v50,
         sphere_drag_compton_1996_array,
+        sphere_drag_loth_2008_array,
         sphere_drag_nol_1972_array,
         sphere_drag_walsh_1976_array,
         thor_tr47_metallic_penetration,
+        tropospheric_pressure_pa,
         velocity_ogive_peff,
         wen_2000_frp_ballistic_limit,
     )
@@ -842,12 +845,13 @@ def simulate_anti_drone_multishotgun_mc(
         resolve_verification_grade,
     )
 
+    station_p_pa = tropospheric_pressure_pa(site_altitude_m)
     rh_frac = max(0.0, min(1.0, float(relative_humidity_pct) / 100.0))
     if cp.get("air_density_kg_m3") is not None:
         rho_air = float(cp["air_density_kg_m3"])
         a_sound = float(temp_fx["speed_of_sound_mps"])
-    elif rh_frac > 0.0 or str(drag_model).lower().strip() in {"walsh_1976", "nol_1972", "compton_1996", "compton_trailing"}:
-        atm_cipm = cipm_2007_air_density(temp_c=float(ambient_temp_c), pressure_pa=101325.0, rh_fraction=rh_frac)
+    elif rh_frac > 0.0 or abs(float(site_altitude_m)) > 1.0 or str(drag_model).lower().strip() in {"walsh_1976", "nol_1972", "loth_2008", "compton_1996", "compton_trailing"}:
+        atm_cipm = cipm_2007_air_density(temp_c=float(ambient_temp_c), pressure_pa=station_p_pa, rh_fraction=rh_frac)
         rho_air = atm_cipm["rho_kg_m3"]
         a_sound = atm_cipm["a_mps"]
     else:
@@ -870,6 +874,8 @@ def simulate_anti_drone_multishotgun_mc(
             return sphere_drag_compton_1996_array(mach_arr, trailing_lead=False)
         if d_law == "compton_trailing":
             return sphere_drag_compton_1996_array(mach_arr, trailing_lead=True)
+        if d_law == "loth_2008":
+            return sphere_drag_loth_2008_array(mach_arr, np.maximum(v_rel * re_scale, 45.0))
         if d_law == "mach_only_smooth_sphere":
             return sphere_drag_mach_only_array(mach_arr, base_cd_ov)
         return sphere_drag_compressible_array(v_rel * re_scale, mach_arr)
@@ -1412,7 +1418,9 @@ def simulate_anti_drone_multishotgun_mc(
             "headwind_mps": round(float(headwind_mps), 1),
             "propellant_type": propellant_type,
             "drag_model": drag_model,
-            "air_density_kg_m3": temp_fx["air_density_kg_m3"],
+            "site_altitude_m": round(float(site_altitude_m), 1),
+            "station_pressure_pa": round(float(station_p_pa), 1),
+            "air_density_kg_m3": round(float(rho_air), 5),
             "nominal_gravity_drop_m": round(nominal_gravity_drop_m, 3),
             "temp_mv_delta_mps": temp_fx["mv_delta_mps"],
             "temp_spread_mult": temp_fx["temp_spread_mult"],
@@ -1726,6 +1734,7 @@ def evaluate_antidrone_effective_range_envelope(
     nb_clumping_kappa: float | None = None,
     penetration_model: str = "energy",
     use_markov_kill_tree: bool = False,
+    site_altitude_m: float = 0.0,
 ) -> dict[str, Any]:
     """Sweep slant range for an anti-drone array to derive P_kill(R), R80, and R50 thresholds."""
     stations = sorted(float(d) for d in (distance_stations_m or [15.0, 25.0, 35.0, 45.0, 55.0, 65.0, 75.0, 85.0]))
@@ -1785,6 +1794,7 @@ def evaluate_antidrone_effective_range_envelope(
                 nb_clumping_kappa=nb_clumping_kappa,
                 penetration_model=penetration_model,
                 use_markov_kill_tree=use_markov_kill_tree,
+                site_altitude_m=site_altitude_m,
             )
             sm = sim["summary"]
             records.append({
@@ -1894,6 +1904,7 @@ def evaluate_antidrone_range_speed_heatmap(
     nb_clumping_kappa: float | None = None,
     penetration_model: str = "energy",
     use_markov_kill_tree: bool = False,
+    site_altitude_m: float = 0.0,
 ) -> dict[str, Any]:
     """Compute a 2D Speed x Slant-Range P_kill engagement envelope heatmap."""
     d_stations = sorted(float(d) for d in (distance_stations_m or [15.0, 25.0, 35.0, 45.0, 60.0, 75.0]))
@@ -1962,6 +1973,7 @@ def evaluate_antidrone_range_speed_heatmap(
                 nb_clumping_kappa=nb_clumping_kappa,
                 penetration_model=penetration_model,
                 use_markov_kill_tree=use_markov_kill_tree,
+                site_altitude_m=site_altitude_m,
             )
             sm = sim["summary"]
             pk = float(sm["kill_probability_pct"])

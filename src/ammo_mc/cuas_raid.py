@@ -22,6 +22,7 @@ from ammo_mc.cuas_defense import (
     _trapezoidal_slew_time,
     evaluate_evasive_drone_state,
 )
+from ammo_mc.cuas_rigor import gittins_sls_index
 from ammo_mc.cuas_mission import (
     CUAS_AMMO_ECONOMICS_CATALOG,
     KILL_CHAIN_SENSOR_CATALOG,
@@ -73,6 +74,7 @@ def simulate_unified_tactical_raid_mc(
     outer_layer_type: str = "none",
     calibration_profile: dict[str, Any] | None = None,
     physics_fidelity: dict[str, Any] | None = None,
+    wta_policy: str = "nearest_tti",
 ) -> dict[str, Any]:
     """Run Monte Carlo time-stepped cooperative multi-turret 3D C-UAS raid defense."""
     cp = dict(calibration_profile or {})
@@ -248,6 +250,8 @@ def simulate_unified_tactical_raid_mc(
                             "status": "inbound",
                             "engaged_by": None,
                             "ever_assigned_by": set(),
+                            "p_alive": 1.0,
+                            "shots_taken": 0,
                         }
                     )
         else:
@@ -311,6 +315,8 @@ def simulate_unified_tactical_raid_mc(
                         "status": "inbound",
                         "engaged_by": None,
                         "ever_assigned_by": set(),
+                        "p_alive": 1.0,
+                        "shots_taken": 0,
                     }
                 )
 
@@ -527,8 +533,15 @@ def simulate_unified_tactical_raid_mc(
 
                     r_center = math.hypot(d["x_m"], d["y_m"])
                     dup_penalty = 250.0 if (d["engaged_by"] is not None and d["engaged_by"] != ts["id"]) else 0.0
-                    score = r_center + dup_penalty
                     ray_el = math.degrees(math.atan2(dz, hdist))
+                    if str(wta_policy).lower().strip() == "gittins_sls_index":
+                        role_val = 4.0 if str(d.get("role", "striker")).lower() == "striker" else 1.2
+                        urgency_fac = max(0.5, 45.0 / max(r_center, 8.0))
+                        pk_est = min(0.85, max(0.15, 0.65 * math.exp(-max(0.0, sdist - 35.0) / 35.0)))
+                        g_idx = gittins_sls_index(delta=0.90, q=1.0 - pk_est, v=role_val * urgency_fac, p=float(d.get("p_alive", 1.0)))
+                        score = -g_idx + dup_penalty
+                    else:
+                        score = r_center + dup_penalty
                     candidates.append((score, sdist, ray_az, ray_el, d))
 
                 if not candidates:
@@ -618,6 +631,8 @@ def simulate_unified_tactical_raid_mc(
                     )
                 )
                 hit = float(rng.random()) < pk_salvo
+                chosen_d["shots_taken"] = int(chosen_d.get("shots_taken", 0)) + 1
+                chosen_d["p_alive"] = float(chosen_d.get("p_alive", 1.0)) * (1.0 - min(0.95, pk_salvo * 0.5))
                 if is_rep:
                     frame_beams.append(
                         {
@@ -768,6 +783,7 @@ def simulate_unified_tactical_raid_mc(
             "reload_downtime_pct": round(float(np.mean(reload_fracs)), 1),
             "handoff_count_mean": round(float(np.mean(handoffs_list)), 2),
             "overheat_events_mean": round(float(np.mean(overheat_list)), 2),
+            "wta_policy": str(wta_policy),
             "n_mc_trials": n_trials,
         },
         "turrets": turrets_in,
