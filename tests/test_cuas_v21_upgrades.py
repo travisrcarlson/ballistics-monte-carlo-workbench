@@ -7,9 +7,11 @@ import math
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+import pytest
 from typer.testing import CliRunner
 
 import ammo_mc
+from ammo_mc import cuas_v21_science
 from ammo_mc.api import app as fastapi_app
 from ammo_mc.briefing_export import generate_executive_briefing_pdf, generate_executive_briefing_pptx
 from ammo_mc.cli import app as cli_app
@@ -246,8 +248,11 @@ def test_track4_loth_altitude_loglaw_3dof_lead_and_shotfall_uxo_gis() -> None:
     assert len(fig_map.data) >= 3
 
 
-def test_track5_scenario_manifest_sha256_yaml_json_and_briefing_stamp() -> None:
+def test_track5_scenario_manifest_sha256_yaml_json_and_briefing_stamp(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify JSON/YAML Scenario Manifest SHA-256 verification & PDF/PPTX cover stamps."""
+    req_txt = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text(encoding="utf-8").lower()
+    assert "pyyaml" in req_txt
+
     man = build_cuas_scenario_manifest(
         scenario_name="V2.1 Verification Scenario",
         seed=2105,
@@ -278,6 +283,14 @@ def test_track5_scenario_manifest_sha256_yaml_json_and_briefing_stamp() -> None:
     )
     assert pdf_bytes.startswith(b"%PDF")
     assert len(pptx_bytes) > 10_000
+
+    # Verify graceful fallback when optional PyYAML is unavailable
+    monkeypatch.setattr(cuas_v21_science, "yaml", None)
+    fallback_yaml = serialize_manifest_yaml(man)
+    ok_fb, parsed_fb, _ = load_cuas_scenario_manifest(fallback_yaml)
+    assert ok_fb and parsed_fb is not None and parsed_fb["manifest_sha256"] == man["manifest_sha256"]
+    ok_nonjson, _, msg_nonjson = load_cuas_scenario_manifest(yaml_text)
+    assert ok_nonjson is False and "PyYAML" in msg_nonjson
 
 
 def test_track6_matern52_gp_surrogate_pareto_cli_and_api(tmp_path: Path) -> None:

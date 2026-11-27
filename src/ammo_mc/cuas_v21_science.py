@@ -19,7 +19,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
-import yaml
+
+try:
+    import yaml  # type: ignore[import-untyped]
+except ImportError:  # pragma: no cover - fallback when PyYAML is not installed
+    yaml = None
+
 from pydantic import BaseModel, Field
 from scipy import integrate, linalg, optimize, stats as sp_stats
 
@@ -1021,8 +1026,10 @@ def serialize_manifest_json(manifest: dict[str, Any]) -> str:
 
 
 def serialize_manifest_yaml(manifest: dict[str, Any]) -> str:
-    """Serialize Scenario Manifest dictionary as YAML."""
-    return yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True)
+    """Serialize Scenario Manifest dictionary as YAML (falls back to YAML 1.2-valid JSON if PyYAML is absent)."""
+    if yaml is not None:
+        return yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True)
+    return json.dumps(manifest, indent=2, sort_keys=False)
 
 
 def load_cuas_scenario_manifest(raw_text: str) -> tuple[bool, dict[str, Any] | None, str]:
@@ -1031,8 +1038,15 @@ def load_cuas_scenario_manifest(raw_text: str) -> tuple[bool, dict[str, Any] | N
     if not text:
         return False, None, "Manifest content is empty."
     try:
-        parsed = json.loads(text) if text.startswith("{") else yaml.safe_load(text)
+        if text.startswith("{"):
+            parsed = json.loads(text)
+        elif yaml is not None:
+            parsed = yaml.safe_load(text)
+        else:
+            parsed = json.loads(text)
     except Exception as exc:
+        if yaml is None and not text.startswith("{"):
+            return False, None, "PyYAML is required to parse non-JSON YAML manifests (install pyyaml>=6.0)."
         return False, None, f"Parse error (JSON/YAML): {exc}"
     if not isinstance(parsed, dict):
         return False, None, "Manifest root must be a mapping/object."
